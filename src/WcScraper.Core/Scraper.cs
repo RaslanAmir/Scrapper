@@ -173,102 +173,102 @@ public sealed class WooScraper
         }
 
         return all;
+    }
 
-public async Task<List<TermItem>> FetchProductCategoriesAsync(string baseUrl, IProgress<string>? log = null)
-{
-    baseUrl = CleanBaseUrl(baseUrl);
-    var url = $"{baseUrl}/wp-json/wc/store/v1/products/categories";
-    try
+    public async Task<List<TermItem>> FetchProductCategoriesAsync(string baseUrl, IProgress<string>? log = null)
     {
-        log?.Report($"GET {url}");
-        using var resp = await _http.GetAsync(url);
-        if (!resp.IsSuccessStatusCode) return new();
-        var text = await resp.Content.ReadAsStringAsync();
-        var items = JsonSerializer.Deserialize<List<TermItem>>(text, _jsonOptions);
-        return items ?? new();
-    }
-    catch (HttpRequestException ex)
-    {
-        log?.Report($"Categories request failed: {ex.Message}");
-        return new();
-    }
-}
-
-public async Task<List<TermItem>> FetchProductTagsAsync(string baseUrl, IProgress<string>? log = null)
-{
-    baseUrl = CleanBaseUrl(baseUrl);
-    var url = $"{baseUrl}/wp-json/wc/store/v1/products/tags";
-    try
-    {
-        log?.Report($"GET {url}");
-        using var resp = await _http.GetAsync(url);
-        if (!resp.IsSuccessStatusCode) return new();
-        var text = await resp.Content.ReadAsStringAsync();
-        var items = JsonSerializer.Deserialize<List<TermItem>>(text, _jsonOptions);
-        return items ?? new();
-    }
-    catch (HttpRequestException ex)
-    {
-        log?.Report($"Tags request failed: {ex.Message}");
-        return new();
-    }
-}
-
-public async Task<List<TermItem>> FetchProductAttributesAsync(string baseUrl, IProgress<string>? log = null)
-{
-    baseUrl = CleanBaseUrl(baseUrl);
-    var url = $"{baseUrl}/wp-json/wc/store/v1/products/attributes";
-    try
-    {
-        log?.Report($"GET {url}");
-        using var resp = await _http.GetAsync(url);
-        if (!resp.IsSuccessStatusCode) return new();
-        var text = await resp.Content.ReadAsStringAsync();
-        var items = JsonSerializer.Deserialize<List<TermItem>>(text, _jsonOptions);
-        return items ?? new();
-    }
-    catch (HttpRequestException ex)
-    {
-        log?.Report($"Attributes request failed: {ex.Message}");
-        return new();
-    }
-}
-
-public async Task<List<StoreProduct>> FetchStoreVariationsAsync(string baseUrl, IEnumerable<int> parentIds, int perPage = 100, IProgress<string>? log = null)
-{
-    baseUrl = CleanBaseUrl(baseUrl);
-    var all = new List<StoreProduct>();
-    var parents = parentIds.Distinct().ToList();
-    const int chunk = 20;
-    for (int i = 0; i < parents.Count; i += chunk)
-    {
-        var slice = parents.Skip(i).Take(chunk);
-        var parentParam = string.Join(",", slice);
-        int page = 1;
-        while (true)
+        baseUrl = CleanBaseUrl(baseUrl);
+        var url = $"{baseUrl}/wp-json/wc/store/v1/products/categories";
+        try
         {
-            var url = $"{baseUrl}/wp-json/wc/store/v1/products?type=variation&parent={parentParam}&per_page={perPage}&page={page}";
-            try
-            {
-                log?.Report($"GET {url}");
-                using var resp = await _http.GetAsync(url);
-                if (!resp.IsSuccessStatusCode) break;
-                var text = await resp.Content.ReadAsStringAsync();
-                var items = JsonSerializer.Deserialize<List<StoreProduct>>(text, _jsonOptions);
-                if (items is null || items.Count == 0) break;
-                all.AddRange(items);
-                if (items.Count < perPage) break;
-                page++;
-            }
-            catch (HttpRequestException ex)
-            {
-                log?.Report($"Variations request failed: {ex.Message}");
-                break;
-            }
+            log?.Report($"GET {url}");
+            using var resp = await _http.GetAsync(url);
+            if (!resp.IsSuccessStatusCode) return new();
+            var text = await resp.Content.ReadAsStringAsync();
+            var items = JsonSerializer.Deserialize<List<TermItem>>(text, _jsonOptions);
+            return items ?? new();
+        }
+        catch (HttpRequestException ex)
+        {
+            log?.Report($"Categories request failed: {ex.Message}");
+            return new();
         }
     }
-    return all;
-}
+
+    public async Task<List<TermItem>> FetchProductTagsAsync(string baseUrl, IProgress<string>? log = null)
+    {
+        baseUrl = CleanBaseUrl(baseUrl);
+        var url = $"{baseUrl}/wp-json/wc/store/v1/products/tags";
+        try
+        {
+            log?.Report($"GET {url}");
+            using var resp = await _http.GetAsync(url);
+            if (!resp.IsSuccessStatusCode) return new();
+            var text = await resp.Content.ReadAsStringAsync();
+            var items = JsonSerializer.Deserialize<List<TermItem>>(text, _jsonOptions);
+            return items ?? new();
+        }
+        catch (HttpRequestException ex)
+        {
+            log?.Report($"Tags request failed: {ex.Message}");
+            return new();
+        }
+    }
+
+    public async Task<List<TermItem>> FetchProductAttributesAsync(string baseUrl, IProgress<string>? log = null)
+    {
+        baseUrl = CleanBaseUrl(baseUrl);
+        var url = $"{baseUrl}/wp-json/wc/store/v1/products/attributes";
+        try
+        {
+            log?.Report($"GET {url}");
+            using var resp = await _http.GetAsync(url);
+            if (!resp.IsSuccessStatusCode) return new();
+            var text = await resp.Content.ReadAsStringAsync();
+            var items = JsonSerializer.Deserialize<List<TermItem>>(text, _jsonOptions);
+            return items ?? new();
+        }
+        catch (HttpRequestException ex)
+        {
+            log?.Report($"Attributes request failed: {ex.Message}");
+            return new();
+        }
+    }
+
+    public async Task<List<StoreProduct>> FetchStoreVariationsAsync(string baseUrl, IEnumerable<int> parentIds, int perPage = 100, IProgress<string>? log = null)
+    {
+        baseUrl = CleanBaseUrl(baseUrl);
+        var all = new List<StoreProduct>();
+        var parents = parentIds.Distinct().ToList();
+        const int chunk = 20;
+        for (int i = 0; i < parents.Count; i += chunk)
+        {
+            var slice = parents.Skip(i).Take(chunk);
+            var parentParam = string.Join(",", slice);
+            int page = 1;
+            while (true)
+            {
+                var url = $"{baseUrl}/wp-json/wc/store/v1/products?type=variation&parent={parentParam}&per_page={perPage}&page={page}";
+                try
+                {
+                    log?.Report($"GET {url}");
+                    using var resp = await _http.GetAsync(url);
+                    if (!resp.IsSuccessStatusCode) break;
+                    var text = await resp.Content.ReadAsStringAsync();
+                    var items = JsonSerializer.Deserialize<List<StoreProduct>>(text, _jsonOptions);
+                    if (items is null || items.Count == 0) break;
+                    all.AddRange(items);
+                    if (items.Count < perPage) break;
+                    page++;
+                }
+                catch (HttpRequestException ex)
+                {
+                    log?.Report($"Variations request failed: {ex.Message}");
+                    break;
+                }
+            }
+        }
+        return all;
     }
 }
 
@@ -279,101 +279,5 @@ internal static class JsonExt
         if (element.ValueKind == JsonValueKind.Object && element.TryGetProperty(name, out var prop))
             return prop;
         return null;
-
-public async Task<List<TermItem>> FetchProductCategoriesAsync(string baseUrl, IProgress<string>? log = null)
-{
-    baseUrl = CleanBaseUrl(baseUrl);
-    var url = $"{baseUrl}/wp-json/wc/store/v1/products/categories";
-    try
-    {
-        log?.Report($"GET {url}");
-        using var resp = await _http.GetAsync(url);
-        if (!resp.IsSuccessStatusCode) return new();
-        var text = await resp.Content.ReadAsStringAsync();
-        var items = JsonSerializer.Deserialize<List<TermItem>>(text, _jsonOptions);
-        return items ?? new();
-    }
-    catch (HttpRequestException ex)
-    {
-        log?.Report($"Categories request failed: {ex.Message}");
-        return new();
-    }
-}
-
-public async Task<List<TermItem>> FetchProductTagsAsync(string baseUrl, IProgress<string>? log = null)
-{
-    baseUrl = CleanBaseUrl(baseUrl);
-    var url = $"{baseUrl}/wp-json/wc/store/v1/products/tags";
-    try
-    {
-        log?.Report($"GET {url}");
-        using var resp = await _http.GetAsync(url);
-        if (!resp.IsSuccessStatusCode) return new();
-        var text = await resp.Content.ReadAsStringAsync();
-        var items = JsonSerializer.Deserialize<List<TermItem>>(text, _jsonOptions);
-        return items ?? new();
-    }
-    catch (HttpRequestException ex)
-    {
-        log?.Report($"Tags request failed: {ex.Message}");
-        return new();
-    }
-}
-
-public async Task<List<TermItem>> FetchProductAttributesAsync(string baseUrl, IProgress<string>? log = null)
-{
-    baseUrl = CleanBaseUrl(baseUrl);
-    var url = $"{baseUrl}/wp-json/wc/store/v1/products/attributes";
-    try
-    {
-        log?.Report($"GET {url}");
-        using var resp = await _http.GetAsync(url);
-        if (!resp.IsSuccessStatusCode) return new();
-        var text = await resp.Content.ReadAsStringAsync();
-        var items = JsonSerializer.Deserialize<List<TermItem>>(text, _jsonOptions);
-        return items ?? new();
-    }
-    catch (HttpRequestException ex)
-    {
-        log?.Report($"Attributes request failed: {ex.Message}");
-        return new();
-    }
-}
-
-public async Task<List<StoreProduct>> FetchStoreVariationsAsync(string baseUrl, IEnumerable<int> parentIds, int perPage = 100, IProgress<string>? log = null)
-{
-    baseUrl = CleanBaseUrl(baseUrl);
-    var all = new List<StoreProduct>();
-    var parents = parentIds.Distinct().ToList();
-    const int chunk = 20;
-    for (int i = 0; i < parents.Count; i += chunk)
-    {
-        var slice = parents.Skip(i).Take(chunk);
-        var parentParam = string.Join(",", slice);
-        int page = 1;
-        while (true)
-        {
-            var url = $"{baseUrl}/wp-json/wc/store/v1/products?type=variation&parent={parentParam}&per_page={perPage}&page={page}";
-            try
-            {
-                log?.Report($"GET {url}");
-                using var resp = await _http.GetAsync(url);
-                if (!resp.IsSuccessStatusCode) break;
-                var text = await resp.Content.ReadAsStringAsync();
-                var items = JsonSerializer.Deserialize<List<StoreProduct>>(text, _jsonOptions);
-                if (items is null || items.Count == 0) break;
-                all.AddRange(items);
-                if (items.Count < perPage) break;
-                page++;
-            }
-            catch (HttpRequestException ex)
-            {
-                log?.Report($"Variations request failed: {ex.Message}");
-                break;
-            }
-        }
-    }
-    return all;
-}
     }
 }
