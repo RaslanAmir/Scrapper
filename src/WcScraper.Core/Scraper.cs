@@ -1,6 +1,5 @@
 using System.IO;
 using System.Net.Http;
-using System.Net.Http.Json;
 using System.Security.Authentication;
 using System.Text.Json;
 using System.Threading.Tasks;
@@ -27,6 +26,7 @@ public sealed class WooScraper : IDisposable
             {
                 handler.SslOptions.EnabledSslProtocols |= legacyProtocols;
             }
+
             _http = new HttpClient(handler, disposeHandler: true);
             _ownsClient = true;
         }
@@ -52,15 +52,27 @@ public sealed class WooScraper : IDisposable
 
     public static string CleanBaseUrl(string baseUrl)
     {
-@@ -58,51 +62,56 @@ public sealed class WooScraper : IDisposable
+        baseUrl = baseUrl.Trim();
+        if (baseUrl.EndsWith("/")) baseUrl = baseUrl[..^1];
+        return baseUrl;
+    }
+
+    public async Task<List<StoreProduct>> FetchStoreProductsAsync(
+        string baseUrl,
+        int perPage = 100,
+        int maxPages = 100,
+        IProgress<string>? log = null,
+        string? categoryFilter = null,
+        string? tagFilter = null)
+    {
         baseUrl = CleanBaseUrl(baseUrl);
         var all = new List<StoreProduct>();
 
         for (int page = 1; page <= maxPages; page++)
         {
             var url = $"{baseUrl}/wp-json/wc/store/v1/products?per_page={perPage}&page={page}" +
-            (string.IsNullOrWhiteSpace(categoryFilter) ? "" : $"&category={Uri.EscapeDataString(categoryFilter)}") +
-            (string.IsNullOrWhiteSpace(tagFilter) ? "" : $"&tag={Uri.EscapeDataString(tagFilter)}");
+                      (string.IsNullOrWhiteSpace(categoryFilter) ? "" : $"&category={Uri.EscapeDataString(categoryFilter)}") +
+                      (string.IsNullOrWhiteSpace(tagFilter) ? "" : $"&tag={Uri.EscapeDataString(tagFilter)}");
             try
             {
                 log?.Report($"GET {url}");
@@ -70,6 +82,7 @@ public sealed class WooScraper : IDisposable
                     if ((int)resp.StatusCode == 404) break;
                     resp.EnsureSuccessStatusCode();
                 }
+
                 var text = await resp.Content.ReadAsStringAsync();
                 if (string.IsNullOrWhiteSpace(text)) break;
 
@@ -88,13 +101,15 @@ public sealed class WooScraper : IDisposable
                     log?.Report($"Failed to parse store products: {ex.Message}");
                     break;
                 }
+
                 if (items is null || items.Count == 0) break;
 
-                // Normalize short description
                 foreach (var it in items)
                 {
                     if (string.IsNullOrWhiteSpace(it.ShortDescription) && !string.IsNullOrWhiteSpace(it.Summary))
+                    {
                         it.ShortDescription = it.Summary;
+                    }
                 }
 
                 all.AddRange(items);
@@ -109,26 +124,45 @@ public sealed class WooScraper : IDisposable
             {
                 log?.Report($"Store API TLS handshake failed: {ex.Message}");
                 break;
-@@ -122,105 +131,102 @@ public sealed class WooScraper : IDisposable
+            }
+            catch (IOException ex)
+            {
+                log?.Report($"Store API I/O failure: {ex.Message}");
+                break;
+            }
+            catch (HttpRequestException ex)
+            {
+                log?.Report($"Store API request failed: {ex.Message}");
+                break;
+            }
+        }
+
         return all;
     }
 
-    public async Task<List<StoreReview>> FetchStoreReviewsAsync(string baseUrl, IEnumerable<int> productIds, int perPage = 100, IProgress<string>? log = null)
+    public async Task<List<StoreReview>> FetchStoreReviewsAsync(
+        string baseUrl,
+        IEnumerable<int> productIds,
+        int perPage = 100,
+        IProgress<string>? log = null)
     {
         baseUrl = CleanBaseUrl(baseUrl);
         var all = new List<StoreReview>();
         var ids = productIds.Distinct().ToList();
         const int chunk = 20;
+
         for (int i = 0; i < ids.Count; i += chunk)
         {
             var slice = ids.Skip(i).Take(chunk);
             var pid = string.Join(",", slice);
-            var url = $"{baseUrl}/wp-json/wc/store/v1/products/reviews?product_id={HttpUtility.UrlEncode(pid)}&per_page={perPage}";
+            var url =
+                $"{baseUrl}/wp-json/wc/store/v1/products/reviews?product_id={HttpUtility.UrlEncode(pid)}&per_page={perPage}";
             try
             {
                 log?.Report($"GET {url}");
                 using var resp = await _http.GetAsync(url);
                 if (!resp.IsSuccessStatusCode) continue;
+
                 var text = await resp.Content.ReadAsStringAsync();
                 List<StoreReview>? items;
                 try
@@ -145,7 +179,11 @@ public sealed class WooScraper : IDisposable
                     log?.Report($"Failed to parse store reviews: {ex.Message}");
                     break;
                 }
-                if (items != null) all.AddRange(items);
+
+                if (items != null)
+                {
+                    all.AddRange(items);
+                }
             }
             catch (TaskCanceledException ex)
             {
@@ -164,10 +202,15 @@ public sealed class WooScraper : IDisposable
                 log?.Report($"Reviews request failed: {ex.Message}");
             }
         }
+
         return all;
     }
 
-    public async Task<List<StoreProduct>> FetchWpProductsBasicAsync(string baseUrl, int perPage = 100, int maxPages = 100, IProgress<string>? log = null)
+    public async Task<List<StoreProduct>> FetchWpProductsBasicAsync(
+        string baseUrl,
+        int perPage = 100,
+        int maxPages = 100,
+        IProgress<string>? log = null)
     {
         baseUrl = CleanBaseUrl(baseUrl);
         var all = new List<StoreProduct>();
@@ -188,6 +231,7 @@ public sealed class WooScraper : IDisposable
                 using JsonDocument? doc = await ParseDocumentAsync(resp, log, "Failed to parse WP product response");
                 if (doc is null) break;
                 if (doc.RootElement.ValueKind != JsonValueKind.Array) break;
+
                 var arr = doc.RootElement.EnumerateArray().ToList();
                 if (arr.Count == 0) break;
 
@@ -212,7 +256,42 @@ public sealed class WooScraper : IDisposable
                             images.Add(new ProductImage { Id = 0, Src = src, Alt = title });
                         }
                     }
-@@ -263,137 +269,152 @@ public sealed class WooScraper : IDisposable
+
+                    all.Add(new StoreProduct
+                    {
+                        Id = id,
+                        Name = title,
+                        Slug = slug,
+                        Permalink = link,
+                        Sku = "",
+                        Type = "simple",
+                        Description = content,
+                        ShortDescription = excerpt,
+                        Prices = null,
+                        IsInStock = null,
+                        AverageRating = null,
+                        ReviewCount = null,
+                        Images = images
+                    });
+                }
+
+                if (arr.Count < perPage) break;
+            }
+            catch (TaskCanceledException ex)
+            {
+                log?.Report($"WP REST request timed out: {ex.Message}");
+                break;
+            }
+            catch (AuthenticationException ex)
+            {
+                log?.Report($"WP REST request TLS handshake failed: {ex.Message}");
+                break;
+            }
+            catch (IOException ex)
+            {
+                log?.Report($"WP REST request I/O failure: {ex.Message}");
+                break;
+            }
             catch (HttpRequestException ex)
             {
                 log?.Report($"WP REST request failed: {ex.Message}");
@@ -232,6 +311,7 @@ public sealed class WooScraper : IDisposable
             log?.Report($"GET {url}");
             using var resp = await _http.GetAsync(url);
             if (!resp.IsSuccessStatusCode) return new();
+
             var text = await resp.Content.ReadAsStringAsync();
             try
             {
@@ -280,6 +360,7 @@ public sealed class WooScraper : IDisposable
             log?.Report($"GET {url}");
             using var resp = await _http.GetAsync(url);
             if (!resp.IsSuccessStatusCode) return new();
+
             var text = await resp.Content.ReadAsStringAsync();
             try
             {
@@ -328,6 +409,7 @@ public sealed class WooScraper : IDisposable
             log?.Report($"GET {url}");
             using var resp = await _http.GetAsync(url);
             if (!resp.IsSuccessStatusCode) return new();
+
             var text = await resp.Content.ReadAsStringAsync();
             try
             {
@@ -365,13 +447,19 @@ public sealed class WooScraper : IDisposable
             log?.Report($"Attributes request failed: {ex.Message}");
             return new();
         }
-@@ -402,70 +423,94 @@ public sealed class WooScraper : IDisposable
-    public async Task<List<StoreProduct>> FetchStoreVariationsAsync(string baseUrl, IEnumerable<int> parentIds, int perPage = 100, IProgress<string>? log = null)
+    }
+
+    public async Task<List<StoreProduct>> FetchStoreVariationsAsync(
+        string baseUrl,
+        IEnumerable<int> parentIds,
+        int perPage = 100,
+        IProgress<string>? log = null)
     {
         baseUrl = CleanBaseUrl(baseUrl);
         var all = new List<StoreProduct>();
         var parents = parentIds.Distinct().ToList();
         const int chunk = 20;
+
         for (int i = 0; i < parents.Count; i += chunk)
         {
             var slice = parents.Skip(i).Take(chunk);
@@ -379,12 +467,14 @@ public sealed class WooScraper : IDisposable
             int page = 1;
             while (true)
             {
-                var url = $"{baseUrl}/wp-json/wc/store/v1/products?type=variation&parent={parentParam}&per_page={perPage}&page={page}";
+                var url =
+                    $"{baseUrl}/wp-json/wc/store/v1/products?type=variation&parent={parentParam}&per_page={perPage}&page={page}";
                 try
                 {
                     log?.Report($"GET {url}");
                     using var resp = await _http.GetAsync(url);
                     if (!resp.IsSuccessStatusCode) break;
+
                     var text = await resp.Content.ReadAsStringAsync();
                     List<StoreProduct>? items;
                     try
@@ -401,7 +491,9 @@ public sealed class WooScraper : IDisposable
                         log?.Report($"Failed to parse product variations: {ex.Message}");
                         break;
                     }
+
                     if (items is null || items.Count == 0) break;
+
                     all.AddRange(items);
                     if (items.Count < perPage) break;
                     page++;
@@ -428,10 +520,14 @@ public sealed class WooScraper : IDisposable
                 }
             }
         }
+
         return all;
     }
 
-    private static async Task<JsonDocument?> ParseDocumentAsync(HttpResponseMessage response, IProgress<string>? log, string errorPrefix)
+    private static async Task<JsonDocument?> ParseDocumentAsync(
+        HttpResponseMessage response,
+        IProgress<string>? log,
+        string errorPrefix)
     {
         try
         {
@@ -456,7 +552,10 @@ internal static class JsonExt
     public static JsonElement? GetPropertyOrDefault(this JsonElement element, string name)
     {
         if (element.ValueKind == JsonValueKind.Object && element.TryGetProperty(name, out var prop))
+        {
             return prop;
+        }
+
         return null;
     }
 }
