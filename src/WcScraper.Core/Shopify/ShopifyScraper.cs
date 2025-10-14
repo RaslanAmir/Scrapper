@@ -63,19 +63,22 @@ public sealed class ShopifyScraper : IDisposable
         IProgress<string>? log = null,
         CancellationToken cancellationToken = default)
     {
-        if (!settings.HasAdminAccess && !settings.HasPrivateAppCredentials)
+        List<ShopifyProduct> products;
+        if (settings.HasAdminAccess || settings.HasPrivateAppCredentials)
         {
-            throw new InvalidOperationException("Admin access token or private app credentials are required to fetch products via REST API.");
+            products = await FetchProductsFromRestAsync(settings, log, cancellationToken).ConfigureAwait(false);
         }
-
-        var restProducts = await FetchProductsFromRestAsync(settings, log, cancellationToken).ConfigureAwait(false);
+        else
+        {
+            products = await FetchProductsFromPublicStorefrontAsync(settings, log, cancellationToken).ConfigureAwait(false);
+        }
 
         if (settings.HasStorefrontAccess)
         {
-            await EnrichCollectionsFromGraphAsync(restProducts, settings, log, cancellationToken).ConfigureAwait(false);
+            await EnrichCollectionsFromGraphAsync(products, settings, log, cancellationToken).ConfigureAwait(false);
         }
 
-        return restProducts;
+        return products;
     }
 
     private async Task<List<ShopifyProduct>> FetchProductsFromRestAsync(
@@ -114,6 +117,39 @@ public sealed class ShopifyScraper : IDisposable
 
             nextPageInfo = TryParseNextPageInfo(response.Headers);
             if (nextPageInfo is null) break;
+        }
+
+        return all;
+    }
+
+    private async Task<List<ShopifyProduct>> FetchProductsFromPublicStorefrontAsync(
+        ShopifySettings settings,
+        IProgress<string>? log,
+        CancellationToken cancellationToken)
+    {
+        var all = new List<ShopifyProduct>();
+
+        for (int page = 1; page <= settings.MaxPages; page++)
+        {
+            var uri = settings.BuildPublicProductsUri(settings.PageSize, page);
+            using var request = new HttpRequestMessage(HttpMethod.Get, uri);
+            request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+            log?.Report($"GET {uri}");
+
+            using var response = await _http.SendAsync(request, cancellationToken).ConfigureAwait(false);
+            response.EnsureSuccessStatusCode();
+            var payload = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+            if (string.IsNullOrWhiteSpace(payload)) break;
+
+            var data = JsonSerializer.Deserialize<ShopifyRestProductResponse>(payload, _jsonOptions);
+            if (data?.Products is { Count: > 0 })
+            {
+                all.AddRange(data.Products);
+            }
+            else
+            {
+                break;
+            }
         }
 
         return all;

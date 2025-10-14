@@ -61,6 +61,9 @@ public sealed class ShopifySettings
     internal Uri BuildRestUri(string path, string? query)
         => new($"{BaseUrl}/admin/api/{ApiVersion}/{path}{(string.IsNullOrWhiteSpace(query) ? string.Empty : $"?{query}")}", UriKind.Absolute);
 
+    internal Uri BuildPublicProductsUri(int pageSize, int page)
+        => new($"{BaseUrl}/products.json?limit={pageSize}&page={page}", UriKind.Absolute);
+
     internal Uri BuildGraphUri()
         => new($"{BaseUrl}/api/{ApiVersion}/graphql.json", UriKind.Absolute);
 }
