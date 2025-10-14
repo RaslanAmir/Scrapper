@@ -135,9 +135,9 @@ public sealed class WooScraper
                     var images = new List<ProductImage>();
                     var emb = it.GetPropertyOrDefault("_embedded");
                     var media = emb?.GetPropertyOrDefault("wp:featuredmedia");
-                    if (media is not null && media.ValueKind == JsonValueKind.Array && media.Value.GetArrayLength() > 0)
+                    if (media is JsonElement mediaElement && mediaElement.ValueKind == JsonValueKind.Array && mediaElement.GetArrayLength() > 0)
                     {
-                        var m0 = media.Value[0];
+                        var m0 = mediaElement[0];
                         var src = m0.GetPropertyOrDefault("source_url")?.GetString();
                         if (!string.IsNullOrWhiteSpace(src))
                         {
