@@ -45,8 +45,8 @@ public static class CsvExporter
 
     private static string Quote(string s)
     {
-        var needs = s.Contains(',') || s.Contains('"') || s.Contains('\') || s.Contains('
-') || s.Contains('');
+        var needs = s.Contains(',') || s.Contains('"') || s.Contains('\\') || s.Contains('\n') || s.Contains('\r');
+');
         if (!needs) return s;
         return $""{s.Replace(""", """")}"";
     }
