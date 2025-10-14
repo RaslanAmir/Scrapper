@@ -450,11 +450,13 @@ public sealed class WooScraper : IDisposable
         }
         catch (JsonException ex)
         {
+
             return RecoverList<T>(json, entityName, log, ex);
         }
         catch (InvalidOperationException ex)
         {
             return RecoverList<T>(json, entityName, log, ex);
+
         }
     }
 
