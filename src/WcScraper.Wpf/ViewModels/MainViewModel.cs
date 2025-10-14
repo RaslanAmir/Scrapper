@@ -146,6 +146,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 ["type"] = r.Type,
                 ["description_html"] = r.DescriptionHtml,
                 ["short_description_html"] = r.ShortDescriptionHtml,
+                ["summary_html"] = r.SummaryHtml,
                 ["regular_price"] = r.RegularPrice,
                 ["sale_price"] = r.SalePrice,
                 ["price"] = r.Price,
@@ -154,8 +155,14 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 ["stock_status"] = r.StockStatus,
                 ["average_rating"] = r.AverageRating,
                 ["review_count"] = r.ReviewCount,
+                ["has_options"] = r.HasOptions,
+                ["parent_id"] = r.ParentId,
                 ["categories"] = r.Categories,
+                ["category_slugs"] = r.CategorySlugs,
+                ["tags"] = r.Tags,
+                ["tag_slugs"] = r.TagSlugs,
                 ["images"] = r.Images,
+                ["image_alts"] = r.ImageAlts,
             }).ToList();
 
             if (ExportCsv)

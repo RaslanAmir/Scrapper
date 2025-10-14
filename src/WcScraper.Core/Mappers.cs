@@ -22,6 +22,11 @@ public static class Mappers
         {
             var prices = p.Prices;
             var priceVal = prices?.Price ?? prices?.RegularPrice;
+            var categoryNames = p.Categories.Select(c => c.Name).Where(s => !string.IsNullOrWhiteSpace(s)).ToList();
+            var categorySlugs = p.Categories.Select(c => c.Slug).Where(s => !string.IsNullOrWhiteSpace(s)).ToList();
+            var tagNames = p.Tags.Select(t => t.Name).Where(s => !string.IsNullOrWhiteSpace(s)).ToList();
+            var tagSlugs = p.Tags.Select(t => t.Slug).Where(s => !string.IsNullOrWhiteSpace(s)).ToList();
+            var images = p.Images ?? new List<ProductImage>();
             yield return new GenericRow
             {
                 Id = p.Id,
@@ -32,6 +37,7 @@ public static class Mappers
                 Type = p.Type ?? (p.Type is null ? "simple" : p.Type),
                 DescriptionHtml = p.Description,
                 ShortDescriptionHtml = !string.IsNullOrWhiteSpace(p.ShortDescription) ? p.ShortDescription : p.Summary,
+                SummaryHtml = p.Summary,
                 RegularPrice = AsFloatPrice(prices?.RegularPrice, prices?.CurrencyMinorUnit),
                 SalePrice = AsFloatPrice(prices?.SalePrice, prices?.CurrencyMinorUnit),
                 Price = AsFloatPrice(priceVal, prices?.CurrencyMinorUnit),
@@ -40,8 +46,14 @@ public static class Mappers
                 StockStatus = p.StockStatus,
                 AverageRating = p.AverageRating,
                 ReviewCount = p.ReviewCount,
-                Categories = JoinCsv(p.Categories.Select(c => c.Name)),
-                Images = JoinCsv(p.Images.Select(i => i.Src))
+                HasOptions = p.HasOptions,
+                ParentId = p.ParentId,
+                Categories = JoinCsv(categoryNames),
+                CategorySlugs = JoinCsv(categorySlugs),
+                Tags = JoinCsv(tagNames),
+                TagSlugs = JoinCsv(tagSlugs),
+                Images = JoinCsv(images.Select(i => i.Src)),
+                ImageAlts = JoinCsv(images.Select(i => i.Alt))
             };
         }
     }
@@ -67,8 +79,11 @@ public static class Mappers
             var prices = p.Prices;
             var priceVal = prices?.Price ?? prices?.RegularPrice;
             var price = AsFloatPrice(priceVal, prices?.CurrencyMinorUnit);
-
             var imageSrc = p.Images.FirstOrDefault()?.Src ?? "";
+            var categoryNames = p.Categories.Select(c => c.Name).Where(s => !string.IsNullOrWhiteSpace(s)).ToList();
+            var categories = JoinCsv(categoryNames);
+            var primaryCategory = categoryNames.FirstOrDefault() ?? "";
+            var tags = JoinCsv(p.Tags.Select(t => t.Name));
 
             yield return new Dictionary<string, object?>
             {
@@ -76,9 +91,9 @@ public static class Mappers
                 ["Title"] = p.Name,
                 ["Body (HTML)"] = p.Description ?? p.ShortDescription ?? p.Summary,
                 ["Vendor"] = vendor,
-                ["Product Category"] = "",
-                ["Type"] = "",
-                ["Tags"] = "",
+                ["Product Category"] = categories,
+                ["Type"] = primaryCategory,
+                ["Tags"] = tags,
                 ["Published"] = "TRUE",
                 ["Option1 Name"] = "Title",
                 ["Option1 Value"] = "Default Title",
@@ -98,6 +113,8 @@ public static class Mappers
         foreach (var p in products)
         {
             var images = string.Join(", ", p.Images.Select(i => i.Src).Where(s => !string.IsNullOrWhiteSpace(s))!);
+            var categories = JoinCsv(p.Categories.Select(c => c.Name));
+            var tags = JoinCsv(p.Tags.Select(t => t.Name));
             yield return new Dictionary<string, object?>
             {
                 ["ID"] = "",
@@ -111,7 +128,8 @@ public static class Mappers
                 ["Description"] = p.Description ?? "",
                 ["Tax status"] = "taxable",
                 ["In stock?"] = p.IsInStock == true ? "1" : "0",
-                ["Categories"] = "",
+                ["Categories"] = categories,
+                ["Tags"] = tags,
                 ["Images"] = images,
                 ["Position"] = 0
             };
@@ -147,6 +165,10 @@ public static class Mappers
 
         foreach (var p in parents)
         {
+            var categoryNames = p.Categories.Select(c => c.Name).Where(s => !string.IsNullOrWhiteSpace(s)).ToList();
+            var categories = JoinCsv(categoryNames);
+            var primaryCategory = categoryNames.FirstOrDefault() ?? "";
+            var tags = JoinCsv(p.Tags.Select(t => t.Name));
             if (!byParent.TryGetValue(p.Id, out var vars) || vars.Count == 0)
             {
                 // No variations -> fallback to single-row
@@ -190,9 +212,9 @@ public static class Mappers
                     ["Title"] = p.Name,
                     ["Body (HTML)"] = p.Description ?? p.ShortDescription ?? p.Summary,
                     ["Vendor"] = vendor,
-                    ["Product Category"] = "",
-                    ["Type"] = "",
-                    ["Tags"] = "",
+                    ["Product Category"] = categories,
+                    ["Type"] = primaryCategory,
+                    ["Tags"] = tags,
                     ["Published"] = "TRUE",
                     ["Option1 Name"] = optionNames[0] ?? "Option1",
                     ["Option1 Value"] = optionNames[0] is null ? "Default Title" : (GetOpt(optionNames[0]) ?? ""),
