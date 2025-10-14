@@ -1,34 +1,53 @@
+using System.IO;
 using System.Net.Http;
 using System.Net.Http.Json;
 using System.Security.Authentication;
 using System.Text.Json;
+using System.Threading.Tasks;
 using System.Web;
 
 namespace WcScraper.Core;
 
-public sealed class WooScraper
+public sealed class WooScraper : IDisposable
 {
     private readonly HttpClient _http;
+    private readonly bool _ownsClient;
     private readonly JsonSerializerOptions _jsonOptions = new()
     {
         PropertyNameCaseInsensitive = true
     };
 
-    public WooScraper(HttpClient? httpClient = null)
+    public WooScraper(HttpClient? httpClient = null, bool allowLegacyTls = true)
     {
         if (httpClient is null)
         {
             var handler = new SocketsHttpHandler();
-            handler.SslOptions.EnabledSslProtocols = SslProtocols.Tls | SslProtocols.Tls11 | SslProtocols.Tls12;
+            handler.SslOptions.EnabledSslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13;
+            if (allowLegacyTls && Enum.TryParse("Tls,Tls11", ignoreCase: true, out SslProtocols legacyProtocols))
+            {
+                handler.SslOptions.EnabledSslProtocols |= legacyProtocols;
+            }
             _http = new HttpClient(handler, disposeHandler: true);
+            _ownsClient = true;
         }
         else
         {
             _http = httpClient;
+            _ownsClient = false;
         }
 
         _http.DefaultRequestHeaders.UserAgent.ParseAdd("wc-local-scraper-wpf/0.1 (+https://localhost)");
         _http.Timeout = TimeSpan.FromSeconds(30);
+    }
+
+    public void Dispose()
+    {
+        if (_ownsClient)
+        {
+            _http.Dispose();
+        }
+
+        GC.SuppressFinalize(this);
     }
 
     public static string CleanBaseUrl(string baseUrl)
@@ -70,6 +89,11 @@ public sealed class WooScraper
                     log?.Report($"Failed to parse store products: {ex.Message}");
                     break;
                 }
+                catch (InvalidOperationException ex)
+                {
+                    log?.Report($"Failed to parse store products: {ex.Message}");
+                    break;
+                }
                 if (items is null || items.Count == 0) break;
 
                 // Normalize short description
@@ -81,6 +105,21 @@ public sealed class WooScraper
 
                 all.AddRange(items);
                 if (items.Count < perPage) break;
+            }
+            catch (TaskCanceledException ex)
+            {
+                log?.Report($"Store API request timed out: {ex.Message}");
+                break;
+            }
+            catch (AuthenticationException ex)
+            {
+                log?.Report($"Store API TLS handshake failed: {ex.Message}");
+                break;
+            }
+            catch (IOException ex)
+            {
+                log?.Report($"Store API I/O failure: {ex.Message}");
+                break;
             }
             catch (HttpRequestException ex)
             {
@@ -119,7 +158,24 @@ public sealed class WooScraper
                     log?.Report($"Failed to parse store reviews: {ex.Message}");
                     break;
                 }
+                catch (InvalidOperationException ex)
+                {
+                    log?.Report($"Failed to parse store reviews: {ex.Message}");
+                    break;
+                }
                 if (items != null) all.AddRange(items);
+            }
+            catch (TaskCanceledException ex)
+            {
+                log?.Report($"Reviews request timed out: {ex.Message}");
+            }
+            catch (AuthenticationException ex)
+            {
+                log?.Report($"Reviews request TLS handshake failed: {ex.Message}");
+            }
+            catch (IOException ex)
+            {
+                log?.Report($"Reviews request I/O failure: {ex.Message}");
             }
             catch (HttpRequestException ex)
             {
@@ -147,16 +203,8 @@ public sealed class WooScraper
                     resp.EnsureSuccessStatusCode();
                 }
 
-                JsonDocument doc;
-                try
-                {
-                    doc = JsonDocument.Parse(await resp.Content.ReadAsStreamAsync());
-                }
-                catch (JsonException ex)
-                {
-                    log?.Report($"Failed to parse WP product response: {ex.Message}");
-                    break;
-                }
+                using JsonDocument? doc = await ParseDocumentAsync(resp, log, "Failed to parse WP product response");
+                if (doc is null) break;
                 if (doc.RootElement.ValueKind != JsonValueKind.Array) break;
                 var arr = doc.RootElement.EnumerateArray().ToList();
                 if (arr.Count == 0) break;
@@ -203,6 +251,21 @@ public sealed class WooScraper
 
                 if (arr.Count < perPage) break;
             }
+            catch (TaskCanceledException ex)
+            {
+                log?.Report($"WP REST request timed out: {ex.Message}");
+                break;
+            }
+            catch (AuthenticationException ex)
+            {
+                log?.Report($"WP REST request TLS handshake failed: {ex.Message}");
+                break;
+            }
+            catch (IOException ex)
+            {
+                log?.Report($"WP REST request I/O failure: {ex.Message}");
+                break;
+            }
             catch (HttpRequestException ex)
             {
                 log?.Report($"WP REST request failed: {ex.Message}");
@@ -233,6 +296,26 @@ public sealed class WooScraper
                 log?.Report($"Failed to parse product categories: {ex.Message}");
                 return new();
             }
+            catch (InvalidOperationException ex)
+            {
+                log?.Report($"Failed to parse product categories: {ex.Message}");
+                return new();
+            }
+        }
+        catch (TaskCanceledException ex)
+        {
+            log?.Report($"Categories request timed out: {ex.Message}");
+            return new();
+        }
+        catch (AuthenticationException ex)
+        {
+            log?.Report($"Categories request TLS handshake failed: {ex.Message}");
+            return new();
+        }
+        catch (IOException ex)
+        {
+            log?.Report($"Categories request I/O failure: {ex.Message}");
+            return new();
         }
         catch (HttpRequestException ex)
         {
@@ -261,6 +344,26 @@ public sealed class WooScraper
                 log?.Report($"Failed to parse product tags: {ex.Message}");
                 return new();
             }
+            catch (InvalidOperationException ex)
+            {
+                log?.Report($"Failed to parse product tags: {ex.Message}");
+                return new();
+            }
+        }
+        catch (TaskCanceledException ex)
+        {
+            log?.Report($"Tags request timed out: {ex.Message}");
+            return new();
+        }
+        catch (AuthenticationException ex)
+        {
+            log?.Report($"Tags request TLS handshake failed: {ex.Message}");
+            return new();
+        }
+        catch (IOException ex)
+        {
+            log?.Report($"Tags request I/O failure: {ex.Message}");
+            return new();
         }
         catch (HttpRequestException ex)
         {
@@ -289,6 +392,26 @@ public sealed class WooScraper
                 log?.Report($"Failed to parse product attributes: {ex.Message}");
                 return new();
             }
+            catch (InvalidOperationException ex)
+            {
+                log?.Report($"Failed to parse product attributes: {ex.Message}");
+                return new();
+            }
+        }
+        catch (TaskCanceledException ex)
+        {
+            log?.Report($"Attributes request timed out: {ex.Message}");
+            return new();
+        }
+        catch (AuthenticationException ex)
+        {
+            log?.Report($"Attributes request TLS handshake failed: {ex.Message}");
+            return new();
+        }
+        catch (IOException ex)
+        {
+            log?.Report($"Attributes request I/O failure: {ex.Message}");
+            return new();
         }
         catch (HttpRequestException ex)
         {
@@ -327,10 +450,30 @@ public sealed class WooScraper
                         log?.Report($"Failed to parse product variations: {ex.Message}");
                         break;
                     }
+                    catch (InvalidOperationException ex)
+                    {
+                        log?.Report($"Failed to parse product variations: {ex.Message}");
+                        break;
+                    }
                     if (items is null || items.Count == 0) break;
                     all.AddRange(items);
                     if (items.Count < perPage) break;
                     page++;
+                }
+                catch (TaskCanceledException ex)
+                {
+                    log?.Report($"Variations request timed out: {ex.Message}");
+                    break;
+                }
+                catch (AuthenticationException ex)
+                {
+                    log?.Report($"Variations request TLS handshake failed: {ex.Message}");
+                    break;
+                }
+                catch (IOException ex)
+                {
+                    log?.Report($"Variations request I/O failure: {ex.Message}");
+                    break;
                 }
                 catch (HttpRequestException ex)
                 {
@@ -340,6 +483,25 @@ public sealed class WooScraper
             }
         }
         return all;
+    }
+
+    private static async Task<JsonDocument?> ParseDocumentAsync(HttpResponseMessage response, IProgress<string>? log, string errorPrefix)
+    {
+        try
+        {
+            await using var stream = await response.Content.ReadAsStreamAsync();
+            return await JsonDocument.ParseAsync(stream);
+        }
+        catch (JsonException ex)
+        {
+            log?.Report($"{errorPrefix}: {ex.Message}");
+        }
+        catch (InvalidOperationException ex)
+        {
+            log?.Report($"{errorPrefix}: {ex.Message}");
+        }
+
+        return null;
     }
 }
 
