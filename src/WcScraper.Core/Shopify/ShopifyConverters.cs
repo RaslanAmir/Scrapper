@@ -22,7 +22,7 @@ public static class ShopifyConverters
     private static int ParseCollectionId(string? gid)
     {
         if (string.IsNullOrWhiteSpace(gid)) return 0;
-        var idx = gid.LastIndexOf('/', StringComparison.Ordinal);
+        var idx = gid.LastIndexOf("/", StringComparison.Ordinal);
         if (idx >= 0 && idx < gid.Length - 1 && int.TryParse(gid[(idx + 1)..], NumberStyles.Integer, CultureInfo.InvariantCulture, out var numeric))
         {
             return numeric;
