@@ -1,5 +1,6 @@
 using System.Net.Http;
 using System.Net.Http.Json;
+using System.Security.Authentication;
 using System.Text.Json;
 using System.Web;
 
@@ -15,7 +16,17 @@ public sealed class WooScraper
 
     public WooScraper(HttpClient? httpClient = null)
     {
-        _http = httpClient ?? new HttpClient();
+        if (httpClient is null)
+        {
+            var handler = new SocketsHttpHandler();
+            handler.SslOptions.EnabledSslProtocols = SslProtocols.Tls | SslProtocols.Tls11 | SslProtocols.Tls12;
+            _http = new HttpClient(handler, disposeHandler: true);
+        }
+        else
+        {
+            _http = httpClient;
+        }
+
         _http.DefaultRequestHeaders.UserAgent.ParseAdd("wc-local-scraper-wpf/0.1 (+https://localhost)");
         _http.Timeout = TimeSpan.FromSeconds(30);
     }
