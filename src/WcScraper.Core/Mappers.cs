@@ -117,87 +117,100 @@ public static class Mappers
             };
         }
     }
-}
 
-private static string? FirstNonEmpty(params string?[] vals) => vals.FirstOrDefault(v => !string.IsNullOrWhiteSpace(v));
+    private static string? FirstNonEmpty(params string?[] vals)
+        => vals.FirstOrDefault(v => !string.IsNullOrWhiteSpace(v));
 
-private static (string? name, string? value) ExtractAttr(VariationAttribute a)
-{
-    var name = FirstNonEmpty(a.Name, a.Taxonomy, a.AttributeKey);
-    var val = FirstNonEmpty(a.Option, a.Value, a.Term, a.Slug);
-    if (!string.IsNullOrWhiteSpace(name))
+    private static (string? name, string? value) ExtractAttr(VariationAttribute a)
     {
-        // Clean "pa_color" -> "Color"
-        if (name.StartsWith("pa_", StringComparison.OrdinalIgnoreCase))
-            name = name[3..].Replace("_", " ").Trim();
-        name = System.Globalization.CultureInfo.InvariantCulture.TextInfo.ToTitleCase(name!);
+        var name = FirstNonEmpty(a.Name, a.Taxonomy, a.AttributeKey);
+        var val = FirstNonEmpty(a.Option, a.Value, a.Term, a.Slug);
+        if (!string.IsNullOrWhiteSpace(name))
+        {
+            // Clean "pa_color" -> "Color"
+            if (name.StartsWith("pa_", StringComparison.OrdinalIgnoreCase))
+                name = name[3..].Replace("_", " ").Trim();
+            name = System.Globalization.CultureInfo.InvariantCulture.TextInfo.ToTitleCase(name!);
+        }
+        return (name, val);
     }
-    return (name, val);
-}
 
-public static IEnumerable<Dictionary<string, object?>> ToShopifyCsvWithVariants(IEnumerable<StoreProduct> parents, IEnumerable<StoreProduct> variations, string baseUrl)
-{
-    var vendor = DomainAsVendor(baseUrl);
-    var byParent = variations.Where(v => v.ParentId is not null).GroupBy(v => v.ParentId!.Value).ToDictionary(g => g.Key, g => g.ToList());
-
-    foreach (var p in parents)
+    public static IEnumerable<Dictionary<string, object?>> ToShopifyCsvWithVariants(
+        IEnumerable<StoreProduct> parents,
+        IEnumerable<StoreProduct> variations,
+        string baseUrl)
     {
-        if (!byParent.TryGetValue(p.Id, out var vars) || vars.Count == 0)
-        {
-            // No variations -> fallback to single-row
-            foreach (var row in ToShopifyCsv(new []{ p }, baseUrl)) yield return row;
-            continue;
-        }
+        var vendor = DomainAsVendor(baseUrl);
+        var byParent = variations.Where(v => v.ParentId is not null)
+            .GroupBy(v => v.ParentId!.Value)
+            .ToDictionary(g => g.Key, g => g.ToList());
 
-        // Determine up to 3 option names (consistent across this parent)
-        var optionNames = new List<string?>();
-        foreach (var v in vars)
+        foreach (var p in parents)
         {
-            var pairs = v.Attributes.Select(ExtractAttr).Where(t => !string.IsNullOrWhiteSpace(t.name) && !string.IsNullOrWhiteSpace(t.value)).ToList();
-            foreach (var (n, _) in pairs)
+            if (!byParent.TryGetValue(p.Id, out var vars) || vars.Count == 0)
             {
-                if (string.IsNullOrWhiteSpace(n)) continue;
-                if (!optionNames.Contains(n) && optionNames.Count < 3) optionNames.Add(n);
+                // No variations -> fallback to single-row
+                foreach (var row in ToShopifyCsv(new[] { p }, baseUrl)) yield return row;
+                continue;
             }
-            if (optionNames.Count >= 3) break;
-        }
-        while (optionNames.Count < 3) optionNames.Add(null);
 
-        foreach (var v in vars)
-        {
-            var pairs = v.Attributes.Select(ExtractAttr).Where(t => !string.IsNullOrWhiteSpace(t.name)).ToList();
-            string? GetOpt(string? name) => pairs.FirstOrDefault(t => string.Equals(t.name, name, StringComparison.OrdinalIgnoreCase)).value;
-
-            var prices = v.Prices ?? p.Prices;
-            var priceVal = prices?.Price ?? prices?.RegularPrice;
-            var price = AsFloatPrice(priceVal, prices?.CurrencyMinorUnit);
-
-            var imageSrc = v.Images.FirstOrDefault()?.Src ?? p.Images.FirstOrDefault()?.Src ?? "";
-
-            yield return new Dictionary<string, object?>
+            // Determine up to 3 option names (consistent across this parent)
+            var optionNames = new List<string?>();
+            foreach (var v in vars)
             {
-                ["Handle"] = string.IsNullOrWhiteSpace(p.Slug) ? $"prod-{p.Id}" : p.Slug,
-                ["Title"] = p.Name,
-                ["Body (HTML)"] = p.Description ?? p.ShortDescription ?? p.Summary,
-                ["Vendor"] = vendor,
-                ["Product Category"] = "",
-                ["Type"] = "",
-                ["Tags"] = "",
-                ["Published"] = "TRUE",
-                ["Option1 Name"] = optionNames[0] ?? "Option1",
-                ["Option1 Value"] = optionNames[0] is null ? "Default Title" : (GetOpt(optionNames[0]) ?? ""),
-                ["Option2 Name"] = optionNames[1] ?? "",
-                ["Option2 Value"] = optionNames[1] is null ? "" : (GetOpt(optionNames[1]) ?? ""),
-                ["Option3 Name"] = optionNames[2] ?? "",
-                ["Option3 Value"] = optionNames[2] is null ? "" : (GetOpt(optionNames[2]) ?? ""),
-                ["Variant SKU"] = string.IsNullOrWhiteSpace(v.Sku) ? p.Sku ?? "" : v.Sku,
-                ["Variant Price"] = price is null ? "" : price.Value.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture),
-                ["Variant Inventory Qty"] = "",
-                ["Variant Requires Shipping"] = "TRUE",
-                ["Variant Taxable"] = "TRUE",
-                ["Variant Weight Unit"] = "kg",
-                ["Image Src"] = imageSrc
-            };
+                var pairs = v.Attributes
+                    .Select(ExtractAttr)
+                    .Where(t => !string.IsNullOrWhiteSpace(t.name) && !string.IsNullOrWhiteSpace(t.value))
+                    .ToList();
+                foreach (var (n, _) in pairs)
+                {
+                    if (string.IsNullOrWhiteSpace(n)) continue;
+                    if (!optionNames.Contains(n) && optionNames.Count < 3) optionNames.Add(n);
+                }
+                if (optionNames.Count >= 3) break;
+            }
+            while (optionNames.Count < 3) optionNames.Add(null);
+
+            foreach (var v in vars)
+            {
+                var pairs = v.Attributes.Select(ExtractAttr).Where(t => !string.IsNullOrWhiteSpace(t.name)).ToList();
+                string? GetOpt(string? name) => pairs
+                    .FirstOrDefault(t => string.Equals(t.name, name, StringComparison.OrdinalIgnoreCase))
+                    .value;
+
+                var prices = v.Prices ?? p.Prices;
+                var priceVal = prices?.Price ?? prices?.RegularPrice;
+                var price = AsFloatPrice(priceVal, prices?.CurrencyMinorUnit);
+
+                var imageSrc = v.Images.FirstOrDefault()?.Src ?? p.Images.FirstOrDefault()?.Src ?? "";
+
+                yield return new Dictionary<string, object?>
+                {
+                    ["Handle"] = string.IsNullOrWhiteSpace(p.Slug) ? $"prod-{p.Id}" : p.Slug,
+                    ["Title"] = p.Name,
+                    ["Body (HTML)"] = p.Description ?? p.ShortDescription ?? p.Summary,
+                    ["Vendor"] = vendor,
+                    ["Product Category"] = "",
+                    ["Type"] = "",
+                    ["Tags"] = "",
+                    ["Published"] = "TRUE",
+                    ["Option1 Name"] = optionNames[0] ?? "Option1",
+                    ["Option1 Value"] = optionNames[0] is null ? "Default Title" : (GetOpt(optionNames[0]) ?? ""),
+                    ["Option2 Name"] = optionNames[1] ?? "",
+                    ["Option2 Value"] = optionNames[1] is null ? "" : (GetOpt(optionNames[1]) ?? ""),
+                    ["Option3 Name"] = optionNames[2] ?? "",
+                    ["Option3 Value"] = optionNames[2] is null ? "" : (GetOpt(optionNames[2]) ?? ""),
+                    ["Variant SKU"] = string.IsNullOrWhiteSpace(v.Sku) ? p.Sku ?? "" : v.Sku,
+                    ["Variant Price"] = price is null
+                        ? ""
+                        : price.Value.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture),
+                    ["Variant Inventory Qty"] = "",
+                    ["Variant Requires Shipping"] = "TRUE",
+                    ["Variant Taxable"] = "TRUE",
+                    ["Variant Weight Unit"] = "kg",
+                    ["Image Src"] = imageSrc
+                };
+            }
         }
     }
 }
