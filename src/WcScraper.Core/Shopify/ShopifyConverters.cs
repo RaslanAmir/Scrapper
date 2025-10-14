@@ -116,6 +116,7 @@ public static class ShopifyConverters
                 : $"{settings.BaseUrl}/products/{product.Handle}",
             Sku = firstVariant?.Sku,
             Type = product.ProductType,
+            Vendor = product.Vendor,
             Slug = product.Handle,
             Prices = BuildPriceInfo(firstVariant),
             IsInStock = inStock,
