@@ -8,6 +8,9 @@
         xmlns:svc="clr-namespace:WcScraper.Wpf.Services"
         mc:Ignorable="d"
         Title="WC Local Scraper (WPF)" Height="580" Width="900">
+    <Window.Resources>
+        <BooleanToVisibilityConverter x:Key="BoolToVisibility" />
+    </Window.Resources>
     <Window.DataContext>
         <vm:MainViewModel>
             <vm:MainViewModel.Dialogs>
@@ -21,6 +24,8 @@
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
             <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
@@ -30,18 +35,54 @@
             <ColumnDefinition Width="Auto"/>
         </Grid.ColumnDefinitions>
 
+        <!-- Platform selection -->
+        <GroupBox Grid.Row="0" Grid.ColumnSpan="3" Header="Platform" Margin="0,0,0,8">
+            <StackPanel Orientation="Horizontal" Margin="8,4,0,4">
+                <RadioButton Content="WooCommerce" IsChecked="{Binding IsWooCommerce, Mode=TwoWay}" Margin="0,0,16,0"/>
+                <RadioButton Content="Shopify" IsChecked="{Binding IsShopify, Mode=TwoWay}"/>
+            </StackPanel>
+        </GroupBox>
+
         <!-- URL + Run -->
-        <TextBlock Text="Store URL:" VerticalAlignment="Center" Margin="0,0,8,0"/>
-        <TextBox Grid.Column="1" Text="{Binding StoreUrl, UpdateSourceTrigger=PropertyChanged}" MinWidth="520" />
-        <Button Grid.Column="2" Content="Run" Margin="8,0,0,0" Padding="16,6" Command="{Binding RunCommand}" />
+        <TextBlock Grid.Row="1" Text="{Binding StoreUrlLabel}" VerticalAlignment="Center" Margin="0,0,8,0"/>
+        <TextBox Grid.Row="1" Grid.Column="1" Text="{Binding StoreUrl, UpdateSourceTrigger=PropertyChanged}" MinWidth="520"
+                 Visibility="{Binding IsWooCommerce, Converter={StaticResource BoolToVisibility}}" />
+        <TextBox Grid.Row="1" Grid.Column="1" Text="{Binding ShopifyStoreUrl, UpdateSourceTrigger=PropertyChanged}" MinWidth="520"
+                 Visibility="{Binding IsShopify, Converter={StaticResource BoolToVisibility}}" />
+        <Button Grid.Row="1" Grid.Column="2" Content="Run" Margin="8,0,0,0" Padding="16,6" Command="{Binding RunCommand}" />
 
         <!-- Output -->
-        <TextBlock Grid.Row="1" Text="Output folder:" VerticalAlignment="Center" Margin="0,8,8,0"/>
-        <TextBox Grid.Row="1" Grid.Column="1" Text="{Binding OutputFolder, UpdateSourceTrigger=PropertyChanged}" />
-        <Button Grid.Row="1" Grid.Column="2" Content="Browse…" Margin="8,8,0,0" Padding="12,6" Command="{Binding BrowseCommand}" />
+        <TextBlock Grid.Row="2" Text="Output folder:" VerticalAlignment="Center" Margin="0,8,8,0"/>
+        <TextBox Grid.Row="2" Grid.Column="1" Text="{Binding OutputFolder, UpdateSourceTrigger=PropertyChanged}" />
+        <Button Grid.Row="2" Grid.Column="2" Content="Browse…" Margin="8,8,0,0" Padding="12,6" Command="{Binding BrowseCommand}" />
+
+        <!-- Shopify credentials -->
+        <GroupBox Grid.Row="3" Grid.ColumnSpan="3" Header="Shopify Credentials" Margin="0,12,0,0"
+                  Visibility="{Binding IsShopify, Converter={StaticResource BoolToVisibility}}">
+            <Grid Margin="8">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
+                <TextBlock Text="Admin access token:" Margin="0,0,8,4" VerticalAlignment="Center"/>
+                <TextBox Grid.Column="1" Text="{Binding ShopifyAdminAccessToken, UpdateSourceTrigger=PropertyChanged}"/>
+                <TextBlock Grid.Row="1" Text="Storefront access token:" Margin="0,8,8,4" VerticalAlignment="Center"/>
+                <TextBox Grid.Row="1" Grid.Column="1" Text="{Binding ShopifyStorefrontAccessToken, UpdateSourceTrigger=PropertyChanged}"/>
+                <TextBlock Grid.Row="2" Text="API key:" Margin="0,8,8,4" VerticalAlignment="Center"/>
+                <TextBox Grid.Row="2" Grid.Column="1" Text="{Binding ShopifyApiKey, UpdateSourceTrigger=PropertyChanged}"/>
+                <TextBlock Grid.Row="3" Text="API secret:" Margin="0,8,8,0" VerticalAlignment="Center"/>
+                <TextBox Grid.Row="3" Grid.Column="1" Text="{Binding ShopifyApiSecret, UpdateSourceTrigger=PropertyChanged}"/>
+            </Grid>
+        </GroupBox>
 
         <!-- Exports -->
-        <GroupBox Grid.Row="2" Grid.ColumnSpan="3" Header="Exports" Margin="0,12,0,8">
+        <GroupBox Grid.Row="4" Grid.ColumnSpan="3" Header="Exports" Margin="0,12,0,8">
             <StackPanel Orientation="Horizontal" Margin="8">
                 <CheckBox Content="Generic CSV" IsChecked="{Binding ExportCsv}" Margin="0,0,16,0"/>
                 <CheckBox Content="Shopify CSV (variants)" IsChecked="{Binding ExportShopify}" Margin="0,0,16,0"/>
@@ -53,7 +94,7 @@
         </GroupBox>
 
         <!-- Filters -->
-        <GroupBox Grid.Row="3" Grid.ColumnSpan="3" Header="Filters (optional)">
+        <GroupBox Grid.Row="5" Grid.ColumnSpan="3" Header="Filters (optional)">
             <Grid Margin="8">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*"/>
@@ -87,12 +128,12 @@
         </GroupBox>
 
         <!-- Log -->
-        <GroupBox Grid.Row="4" Grid.ColumnSpan="3" Header="Log">
+        <GroupBox Grid.Row="6" Grid.ColumnSpan="3" Header="Log">
             <ListBox ItemsSource="{Binding Logs}" />
         </GroupBox>
 
         <!-- Status -->
-        <StatusBar Grid.Row="5" Grid.ColumnSpan="3" Margin="0,8,0,0">
+        <StatusBar Grid.Row="7" Grid.ColumnSpan="3" Margin="0,8,0,0">
             <StatusBarItem Content="{Binding Path=Logs.Count, StringFormat=Messages: {0}}" />
             <StatusBarItem>
                 <TextBlock Text="{Binding IsRunning, StringFormat=Running: {0}}" />

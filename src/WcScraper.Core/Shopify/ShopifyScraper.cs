@@ -1,8 +1,15 @@
+using System;
+using System.Collections.Generic;
+using System.Globalization;
+using System.Linq;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
+using System.Threading;
+using System.Threading.Tasks;
 using System.Web;
+using WcScraper.Core;
 
 namespace WcScraper.Core.Shopify;
 
@@ -87,15 +94,7 @@ public sealed class ShopifyScraper : IDisposable
             var uri = settings.BuildRestUri("products.json", query);
             using var request = new HttpRequestMessage(HttpMethod.Get, uri);
             request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
-            if (settings.HasAdminAccess)
-            {
-                request.Headers.Add("X-Shopify-Access-Token", settings.AdminAccessToken);
-            }
-            else if (settings.HasPrivateAppCredentials)
-            {
-                var credentials = Convert.ToBase64String(Encoding.UTF8.GetBytes($"{settings.ApiKey}:{settings.ApiSecret}"));
-                request.Headers.Authorization = new AuthenticationHeaderValue("Basic", credentials);
-            }
+            ApplyAuthentication(request, settings);
             log?.Report($"GET {uri}");
 
             using var response = await _http.SendAsync(request, cancellationToken).ConfigureAwait(false);
@@ -148,6 +147,168 @@ public sealed class ShopifyScraper : IDisposable
         }
 
         return null;
+    }
+
+    public async Task<IReadOnlyList<TermItem>> FetchCollectionsAsync(
+        ShopifySettings settings,
+        IProgress<string>? log = null,
+        CancellationToken cancellationToken = default)
+    {
+        if (!settings.HasAdminAccess && !settings.HasPrivateAppCredentials)
+        {
+            throw new InvalidOperationException("Admin access token or private app credentials are required to fetch collections.");
+        }
+
+        var all = new List<TermItem>();
+        foreach (var resource in new[] { "custom_collections", "smart_collections" })
+        {
+            var collections = await FetchCollectionsAsync(resource, settings, log, cancellationToken).ConfigureAwait(false);
+            all.AddRange(collections);
+        }
+
+        return all
+            .GroupBy(c => string.IsNullOrWhiteSpace(c.Slug) ? c.Name ?? c.Id.ToString(CultureInfo.InvariantCulture) : c.Slug, StringComparer.OrdinalIgnoreCase)
+            .Select(g => g.First())
+            .OrderBy(c => c.Name)
+            .ToList();
+    }
+
+    public async Task<IReadOnlyList<TermItem>> FetchProductTagsAsync(
+        ShopifySettings settings,
+        IProgress<string>? log = null,
+        CancellationToken cancellationToken = default)
+    {
+        if (!settings.HasAdminAccess && !settings.HasPrivateAppCredentials)
+        {
+            throw new InvalidOperationException("Admin access token or private app credentials are required to fetch tags.");
+        }
+
+        var tags = new List<TermItem>();
+        string? nextPageInfo = null;
+        var index = 1;
+
+        do
+        {
+            var query = nextPageInfo is null
+                ? "limit=250&order=alpha"
+                : $"limit=250&order=alpha&page_info={HttpUtility.UrlEncode(nextPageInfo)}";
+            var uri = settings.BuildRestUri("products/tags.json", query);
+            using var request = new HttpRequestMessage(HttpMethod.Get, uri);
+            request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+            ApplyAuthentication(request, settings);
+            log?.Report($"GET {uri}");
+
+            using var response = await _http.SendAsync(request, cancellationToken).ConfigureAwait(false);
+            response.EnsureSuccessStatusCode();
+            var payload = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+            if (string.IsNullOrWhiteSpace(payload)) break;
+
+            using var document = JsonDocument.Parse(payload);
+            if (!document.RootElement.TryGetProperty("tags", out var array)) break;
+
+            foreach (var element in array.EnumerateArray())
+            {
+                if (element.ValueKind != JsonValueKind.String) continue;
+                var tagName = element.GetString();
+                if (string.IsNullOrWhiteSpace(tagName)) continue;
+
+                tags.Add(new TermItem
+                {
+                    Id = index++,
+                    Name = tagName,
+                    Slug = Slugify(tagName)
+                });
+            }
+
+            nextPageInfo = TryParseNextPageInfo(response.Headers);
+        } while (!string.IsNullOrEmpty(nextPageInfo));
+
+        return tags;
+    }
+
+    private async Task<List<TermItem>> FetchCollectionsAsync(
+        string resource,
+        ShopifySettings settings,
+        IProgress<string>? log,
+        CancellationToken cancellationToken)
+    {
+        var results = new List<TermItem>();
+        string? nextPageInfo = null;
+
+        do
+        {
+            var query = nextPageInfo is null
+                ? "limit=250"
+                : $"limit=250&page_info={HttpUtility.UrlEncode(nextPageInfo)}";
+            var uri = settings.BuildRestUri($"{resource}.json", query);
+            using var request = new HttpRequestMessage(HttpMethod.Get, uri);
+            request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+            ApplyAuthentication(request, settings);
+            log?.Report($"GET {uri}");
+
+            using var response = await _http.SendAsync(request, cancellationToken).ConfigureAwait(false);
+            response.EnsureSuccessStatusCode();
+            var payload = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+            if (string.IsNullOrWhiteSpace(payload)) break;
+
+            using var document = JsonDocument.Parse(payload);
+            if (!document.RootElement.TryGetProperty(resource, out var array)) break;
+
+            foreach (var element in array.EnumerateArray())
+            {
+                var id = element.TryGetProperty("id", out var idProp) && idProp.ValueKind == JsonValueKind.Number
+                    ? idProp.GetInt64()
+                    : 0L;
+                var title = element.TryGetProperty("title", out var titleProp) ? titleProp.GetString() : null;
+                var handle = element.TryGetProperty("handle", out var handleProp) ? handleProp.GetString() : null;
+
+                results.Add(new TermItem
+                {
+                    Id = id != 0 ? unchecked((int)(id % int.MaxValue)) : Math.Abs((handle ?? title ?? Guid.NewGuid().ToString()).GetHashCode()),
+                    Name = title,
+                    Slug = !string.IsNullOrWhiteSpace(handle) ? handle : Slugify(title)
+                });
+            }
+
+            nextPageInfo = TryParseNextPageInfo(response.Headers);
+        } while (!string.IsNullOrEmpty(nextPageInfo));
+
+        return results;
+    }
+
+    private static void ApplyAuthentication(HttpRequestMessage request, ShopifySettings settings)
+    {
+        if (settings.HasAdminAccess)
+        {
+            request.Headers.Remove("X-Shopify-Access-Token");
+            request.Headers.Add("X-Shopify-Access-Token", settings.AdminAccessToken);
+        }
+        else if (settings.HasPrivateAppCredentials)
+        {
+            var credentials = Convert.ToBase64String(Encoding.UTF8.GetBytes($"{settings.ApiKey}:{settings.ApiSecret}"));
+            request.Headers.Authorization = new AuthenticationHeaderValue("Basic", credentials);
+        }
+    }
+
+    private static string? Slugify(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return null;
+        var span = value.Trim().ToLowerInvariant().AsSpan();
+        var builder = new StringBuilder(span.Length);
+        foreach (var ch in span)
+        {
+            if (char.IsLetterOrDigit(ch))
+            {
+                builder.Append(ch);
+            }
+            else if (char.IsWhiteSpace(ch) || ch == '-' || ch == '_')
+            {
+                if (builder.Length > 0 && builder[^1] != '-') builder.Append('-');
+            }
+        }
+
+        var slug = builder.ToString().Trim('-');
+        return string.IsNullOrWhiteSpace(slug) ? null : slug;
     }
 
     private async Task EnrichCollectionsFromGraphAsync(

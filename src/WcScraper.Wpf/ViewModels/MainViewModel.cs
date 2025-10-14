@@ -1,10 +1,15 @@
 
+using System;
+using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.IO;
+using System.Linq;
 using System.Runtime.CompilerServices;
+using System.Threading.Tasks;
 using WcScraper.Core;
 using WcScraper.Core.Exporters;
+using WcScraper.Core.Shopify;
 using WcScraper.Wpf.Services;
 
 namespace WcScraper.Wpf.ViewModels;
@@ -12,7 +17,8 @@ namespace WcScraper.Wpf.ViewModels;
 public sealed class MainViewModel : INotifyPropertyChanged
 {
     private readonly IDialogService _dialogs;
-    private readonly WooScraper _scraper = new();
+    private readonly WooScraper _wooScraper = new();
+    private readonly ShopifyScraper _shopifyScraper = new();
     private bool _isRunning;
     private string _storeUrl = "";
     private string _outputFolder = Path.GetFullPath("output");
@@ -22,6 +28,12 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private bool _expReviews = true;
     private bool _expXlsx = false;
     private bool _expJsonl = false;
+    private PlatformMode _selectedPlatform = PlatformMode.WooCommerce;
+    private string _shopifyStoreUrl = "";
+    private string _shopifyAdminAccessToken = "";
+    private string _shopifyStorefrontAccessToken = "";
+    private string _shopifyApiKey = "";
+    private string _shopifyApiSecret = "";
 
     public MainViewModel(IDialogService dialogs)
     {
@@ -44,6 +56,55 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public bool ExportJsonl { get => _expJsonl; set { _expJsonl = value; OnPropertyChanged(); } }
     public bool IsRunning { get => _isRunning; private set { _isRunning = value; OnPropertyChanged(); (RunCommand as RelayCommand)?.RaiseCanExecuteChanged(); } }
 
+    public PlatformMode SelectedPlatform
+    {
+        get => _selectedPlatform;
+        set
+        {
+            if (_selectedPlatform == value) return;
+            _selectedPlatform = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(IsWooCommerce));
+            OnPropertyChanged(nameof(IsShopify));
+            OnPropertyChanged(nameof(StoreUrlLabel));
+            ClearFilters();
+        }
+    }
+
+    public bool IsWooCommerce
+    {
+        get => SelectedPlatform == PlatformMode.WooCommerce;
+        set
+        {
+            if (value)
+            {
+                SelectedPlatform = PlatformMode.WooCommerce;
+            }
+        }
+    }
+
+    public bool IsShopify
+    {
+        get => SelectedPlatform == PlatformMode.Shopify;
+        set
+        {
+            if (value)
+            {
+                SelectedPlatform = PlatformMode.Shopify;
+            }
+        }
+    }
+
+    public string StoreUrlLabel => SelectedPlatform == PlatformMode.WooCommerce
+        ? "Store URL:"
+        : "Shopify Storefront URL:";
+
+    public string ShopifyStoreUrl { get => _shopifyStoreUrl; set { _shopifyStoreUrl = value; OnPropertyChanged(); } }
+    public string ShopifyAdminAccessToken { get => _shopifyAdminAccessToken; set { _shopifyAdminAccessToken = value; OnPropertyChanged(); } }
+    public string ShopifyStorefrontAccessToken { get => _shopifyStorefrontAccessToken; set { _shopifyStorefrontAccessToken = value; OnPropertyChanged(); } }
+    public string ShopifyApiKey { get => _shopifyApiKey; set { _shopifyApiKey = value; OnPropertyChanged(); } }
+    public string ShopifyApiSecret { get => _shopifyApiSecret; set { _shopifyApiSecret = value; OnPropertyChanged(); } }
+
     // Selectable terms for filters
     public ObservableCollection<SelectableTerm> CategoryChoices { get; } = new();
     public ObservableCollection<SelectableTerm> TagChoices { get; } = new();
@@ -64,15 +125,33 @@ public sealed class MainViewModel : INotifyPropertyChanged
     {
         try
         {
-            var cats = await _scraper.FetchProductCategoriesAsync(baseUrl, logger);
-            var tags = await _scraper.FetchProductTagsAsync(baseUrl, logger);
-            App.Current?.Dispatcher.Invoke(() =>
+            if (SelectedPlatform == PlatformMode.WooCommerce)
             {
-                CategoryChoices.Clear();
-                foreach (var c in cats) CategoryChoices.Add(new SelectableTerm(c));
-                TagChoices.Clear();
-                foreach (var t in tags) TagChoices.Add(new SelectableTerm(t));
-            });
+                var cats = await _wooScraper.FetchProductCategoriesAsync(baseUrl, logger);
+                var tags = await _wooScraper.FetchProductTagsAsync(baseUrl, logger);
+                App.Current?.Dispatcher.Invoke(() =>
+                {
+                    CategoryChoices.Clear();
+                    foreach (var c in cats) CategoryChoices.Add(new SelectableTerm(c));
+                    TagChoices.Clear();
+                    foreach (var t in tags) TagChoices.Add(new SelectableTerm(t));
+                });
+            }
+            else
+            {
+                var settings = BuildShopifySettings(baseUrl);
+                var collections = await _shopifyScraper.FetchCollectionsAsync(settings, logger);
+                var tags = await _shopifyScraper.FetchProductTagsAsync(settings, logger);
+                App.Current?.Dispatcher.Invoke(() =>
+                {
+                    CategoryChoices.Clear();
+                    foreach (var collection in collections)
+                        CategoryChoices.Add(new SelectableTerm(collection));
+                    TagChoices.Clear();
+                    foreach (var tag in tags)
+                        TagChoices.Add(new SelectableTerm(tag));
+                });
+            }
         }
         catch (Exception ex)
         {
@@ -82,7 +161,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
     private async Task OnRunAsync()
     {
-        if (string.IsNullOrWhiteSpace(StoreUrl))
+        var targetUrl = SelectedPlatform == PlatformMode.WooCommerce ? StoreUrl : ShopifyStoreUrl;
+        if (string.IsNullOrWhiteSpace(targetUrl))
         {
             Append("Please enter a store URL (e.g., https://example.com).");
             return;
@@ -95,43 +175,93 @@ public sealed class MainViewModel : INotifyPropertyChanged
             var logger = new Progress<string>(Append);
 
             // Refresh filters for this store
-            await LoadFiltersForStoreAsync(StoreUrl, logger);
+            await LoadFiltersForStoreAsync(targetUrl, logger);
 
             // Build filters
             string? categoryFilter = null;
-            var selectedCats = CategoryChoices.Where(x => x.IsSelected).Select(x => x.Term.Id.ToString()).ToList();
-            if (selectedCats.Count > 0) categoryFilter = string.Join(",", selectedCats);
+            var selectedCategories = CategoryChoices.Where(x => x.IsSelected).Select(x => x.Term).ToList();
+            if (SelectedPlatform == PlatformMode.WooCommerce)
+            {
+                var selectedCats = selectedCategories.Select(x => x.Id.ToString()).ToList();
+                if (selectedCats.Count > 0) categoryFilter = string.Join(",", selectedCats);
+            }
 
             string? tagFilter = null;
-            var selectedTags = TagChoices.Where(x => x.IsSelected).Select(x => x.Term.Id.ToString()).ToList();
-            if (selectedTags.Count > 0) tagFilter = string.Join(",", selectedTags);
-
-            Append($"Fetching products via Store API… {StoreUrl}");
-            var prods = await _scraper.FetchStoreProductsAsync(StoreUrl, log: logger, categoryFilter: categoryFilter, tagFilter: tagFilter);
-
-            if (prods.Count == 0)
+            var selectedTags = TagChoices.Where(x => x.IsSelected).Select(x => x.Term).ToList();
+            if (SelectedPlatform == PlatformMode.WooCommerce)
             {
-                Append("Store API empty. Trying WordPress REST fallback (basic fields)…");
-                prods = await _scraper.FetchWpProductsBasicAsync(StoreUrl, log: logger);
+                var tagIds = selectedTags.Select(x => x.Id.ToString()).ToList();
+                if (tagIds.Count > 0) tagFilter = string.Join(",", tagIds);
             }
 
-            if (prods.Count == 0)
+            List<StoreProduct> prods;
+            List<StoreProduct> variations = new();
+
+            if (SelectedPlatform == PlatformMode.WooCommerce)
             {
-                Append("No products found via public APIs.");
-                return;
+                Append($"Fetching products via Store API… {targetUrl}");
+                prods = await _wooScraper.FetchStoreProductsAsync(targetUrl, log: logger, categoryFilter: categoryFilter, tagFilter: tagFilter);
+
+                if (prods.Count == 0)
+                {
+                    Append("Store API empty. Trying WordPress REST fallback (basic fields)…");
+                    prods = await _wooScraper.FetchWpProductsBasicAsync(targetUrl, log: logger);
+                }
+
+                if (prods.Count == 0)
+                {
+                    Append("No products found via public APIs.");
+                    return;
+                }
+
+                Append($"Found {prods.Count} products.");
+
+                // Variations for variable products
+                var parentIds = prods.Where(p => string.Equals(p.Type, "variable", StringComparison.OrdinalIgnoreCase) || p.HasOptions == true)
+                                     .Select(p => p.Id).Where(id => id > 0).Distinct().ToList();
+                if (parentIds.Count > 0)
+                {
+                    Append($"Fetching variations for {parentIds.Count} variable products…");
+                    variations = await _wooScraper.FetchStoreVariationsAsync(targetUrl, parentIds, log: logger);
+                    Append($"Found {variations.Count} variations.");
+                }
             }
-
-            Append($"Found {prods.Count} products.");
-
-            // Variations for variable products
-            var parentIds = prods.Where(p => string.Equals(p.Type, "variable", StringComparison.OrdinalIgnoreCase) || p.HasOptions == true)
-                                 .Select(p => p.Id).Where(id => id > 0).Distinct().ToList();
-            var variations = new List<StoreProduct>();
-            if (parentIds.Count > 0)
+            else
             {
-                Append($"Fetching variations for {parentIds.Count} variable products…");
-                variations = await _scraper.FetchStoreVariationsAsync(StoreUrl, parentIds, log: logger);
-                Append($"Found {variations.Count} variations.");
+                var settings = BuildShopifySettings(targetUrl);
+                Append($"Fetching products via Shopify API… {settings.BaseUrl}");
+                var shopifyProducts = await _shopifyScraper.FetchStoreProductsAsync(settings, log: logger);
+
+                var filtered = shopifyProducts.AsEnumerable();
+                if (selectedCategories.Count > 0)
+                {
+                    var handles = new HashSet<string>(selectedCategories
+                        .Select(c => c.Slug ?? c.Name ?? string.Empty)
+                        .Where(s => !string.IsNullOrWhiteSpace(s)), StringComparer.OrdinalIgnoreCase);
+                    filtered = filtered.Where(p => p.Categories.Any(c =>
+                        !string.IsNullOrWhiteSpace(c.Slug) && handles.Contains(c.Slug!) ||
+                        !string.IsNullOrWhiteSpace(c.Name) && handles.Contains(c.Name!)));
+                }
+
+                if (selectedTags.Count > 0)
+                {
+                    var tagNames = new HashSet<string>(selectedTags
+                        .Select(t => t.Name ?? t.Slug ?? string.Empty)
+                        .Where(s => !string.IsNullOrWhiteSpace(s)), StringComparer.OrdinalIgnoreCase);
+                    filtered = filtered.Where(p => p.Tags.Any(t =>
+                        !string.IsNullOrWhiteSpace(t.Name) && tagNames.Contains(t.Name!) ||
+                        !string.IsNullOrWhiteSpace(t.Slug) && tagNames.Contains(t.Slug!)));
+                }
+
+                prods = filtered.ToList();
+
+                if (prods.Count == 0)
+                {
+                    Append("No products found for the selected Shopify filters.");
+                    return;
+                }
+
+                Append($"Found {prods.Count} products.");
             }
 
             // Generic rows projection
@@ -204,10 +334,10 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
             if (ExportReviews)
             {
-                if (prods.Count > 0 && prods[0].Prices is not null)
+                if (SelectedPlatform == PlatformMode.WooCommerce && prods.Count > 0 && prods[0].Prices is not null)
                 {
                     var ids = prods.Select(p => p.Id).Where(id => id > 0);
-                    var revs = await _scraper.FetchStoreReviewsAsync(StoreUrl, ids, log: logger);
+                    var revs = await _wooScraper.FetchStoreReviewsAsync(targetUrl, ids, log: logger);
                     if (revs.Count > 0)
                     {
                         var path = Path.Combine(OutputFolder, "reviews.csv");
@@ -229,7 +359,9 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 }
                 else
                 {
-                    Append("Reviews skipped (Store API product meta not present).");
+                    Append(SelectedPlatform == PlatformMode.Shopify
+                        ? "Reviews export not available for Shopify mode."
+                        : "Reviews skipped (Store API product meta not present).");
                 }
             }
 
@@ -250,6 +382,25 @@ public sealed class MainViewModel : INotifyPropertyChanged
         App.Current?.Dispatcher.Invoke(() => Logs.Add(message));
     }
 
+    private void ClearFilters()
+    {
+        App.Current?.Dispatcher.Invoke(() =>
+        {
+            CategoryChoices.Clear();
+            TagChoices.Clear();
+        });
+    }
+
+    private ShopifySettings BuildShopifySettings(string baseUrl)
+    {
+        return new ShopifySettings(
+            baseUrl,
+            string.IsNullOrWhiteSpace(ShopifyAdminAccessToken) ? null : ShopifyAdminAccessToken,
+            string.IsNullOrWhiteSpace(ShopifyStorefrontAccessToken) ? null : ShopifyStorefrontAccessToken,
+            string.IsNullOrWhiteSpace(ShopifyApiKey) ? null : ShopifyApiKey,
+            string.IsNullOrWhiteSpace(ShopifyApiSecret) ? null : ShopifyApiSecret);
+    }
+
     public event PropertyChangedEventHandler? PropertyChanged;
     private void OnPropertyChanged([CallerMemberName] string? name = null)
         => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
@@ -266,4 +417,10 @@ public sealed class SelectableTerm : INotifyPropertyChanged
     public bool IsSelected { get => _isSelected; set { _isSelected = value; PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsSelected))); } }
 
     public event PropertyChangedEventHandler? PropertyChanged;
+}
+
+public enum PlatformMode
+{
+    WooCommerce,
+    Shopify
 }
