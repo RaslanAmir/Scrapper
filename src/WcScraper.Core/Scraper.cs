@@ -2,6 +2,7 @@ using System.Net.Http;
 using System.Net.Http.Json;
 using System.Security.Authentication;
 using System.Text.Json;
+using System.Threading.Tasks;
 using System.Web;
 
 namespace WcScraper.Core;
@@ -19,7 +20,7 @@ public sealed class WooScraper
         if (httpClient is null)
         {
             var handler = new SocketsHttpHandler();
-            handler.SslOptions.EnabledSslProtocols = SslProtocols.Tls | SslProtocols.Tls11 | SslProtocols.Tls12;
+            handler.SslOptions.EnabledSslProtocols = SslProtocols.Tls | SslProtocols.Tls11 | SslProtocols.Tls12 | SslProtocols.Tls13;
             _http = new HttpClient(handler, disposeHandler: true);
         }
         else
@@ -87,6 +88,16 @@ public sealed class WooScraper
                 log?.Report($"Store API request failed: {ex.Message}");
                 break;
             }
+            catch (TaskCanceledException ex)
+            {
+                log?.Report($"Store API request timed out: {ex.Message}");
+                break;
+            }
+            catch (AuthenticationException ex)
+            {
+                log?.Report($"Store API TLS handshake failed: {ex.Message}");
+                break;
+            }
         }
 
         return all;
@@ -124,6 +135,14 @@ public sealed class WooScraper
             catch (HttpRequestException ex)
             {
                 log?.Report($"Reviews request failed: {ex.Message}");
+            }
+            catch (TaskCanceledException ex)
+            {
+                log?.Report($"Reviews request timed out: {ex.Message}");
+            }
+            catch (AuthenticationException ex)
+            {
+                log?.Report($"Reviews request TLS handshake failed: {ex.Message}");
             }
         }
         return all;
@@ -208,6 +227,16 @@ public sealed class WooScraper
                 log?.Report($"WP REST request failed: {ex.Message}");
                 break;
             }
+            catch (TaskCanceledException ex)
+            {
+                log?.Report($"WP REST request timed out: {ex.Message}");
+                break;
+            }
+            catch (AuthenticationException ex)
+            {
+                log?.Report($"WP REST request TLS handshake failed: {ex.Message}");
+                break;
+            }
         }
 
         return all;
@@ -239,6 +268,16 @@ public sealed class WooScraper
             log?.Report($"Categories request failed: {ex.Message}");
             return new();
         }
+        catch (TaskCanceledException ex)
+        {
+            log?.Report($"Categories request timed out: {ex.Message}");
+            return new();
+        }
+        catch (AuthenticationException ex)
+        {
+            log?.Report($"Categories request TLS handshake failed: {ex.Message}");
+            return new();
+        }
     }
 
     public async Task<List<TermItem>> FetchProductTagsAsync(string baseUrl, IProgress<string>? log = null)
@@ -267,6 +306,16 @@ public sealed class WooScraper
             log?.Report($"Tags request failed: {ex.Message}");
             return new();
         }
+        catch (TaskCanceledException ex)
+        {
+            log?.Report($"Tags request timed out: {ex.Message}");
+            return new();
+        }
+        catch (AuthenticationException ex)
+        {
+            log?.Report($"Tags request TLS handshake failed: {ex.Message}");
+            return new();
+        }
     }
 
     public async Task<List<TermItem>> FetchProductAttributesAsync(string baseUrl, IProgress<string>? log = null)
@@ -293,6 +342,16 @@ public sealed class WooScraper
         catch (HttpRequestException ex)
         {
             log?.Report($"Attributes request failed: {ex.Message}");
+            return new();
+        }
+        catch (TaskCanceledException ex)
+        {
+            log?.Report($"Attributes request timed out: {ex.Message}");
+            return new();
+        }
+        catch (AuthenticationException ex)
+        {
+            log?.Report($"Attributes request TLS handshake failed: {ex.Message}");
             return new();
         }
     }
@@ -335,6 +394,16 @@ public sealed class WooScraper
                 catch (HttpRequestException ex)
                 {
                     log?.Report($"Variations request failed: {ex.Message}");
+                    break;
+                }
+                catch (TaskCanceledException ex)
+                {
+                    log?.Report($"Variations request timed out: {ex.Message}");
+                    break;
+                }
+                catch (AuthenticationException ex)
+                {
+                    log?.Report($"Variations request TLS handshake failed: {ex.Message}");
                     break;
                 }
             }
