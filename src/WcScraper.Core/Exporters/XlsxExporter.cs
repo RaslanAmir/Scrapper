@@ -43,6 +43,7 @@ public static class XlsxExporter
         wb.SaveAs(path);
     }
 
+
     private static void SetCellValue(IXLCell cell, object? value)
     {
         switch (value)
@@ -105,11 +106,14 @@ public static class XlsxExporter
                 cell.SetValue(Truncate(value.ToString() ?? string.Empty));
                 break;
         }
+
     }
 
     private static string Truncate(string text)
     {
+
         const int maxLength = 32767;
+
         if (text.Length <= maxLength)
             return text;
 
@@ -117,6 +121,7 @@ public static class XlsxExporter
         var truncated = text[..Math.Max(0, maxLength - ellipsis.Length)] + ellipsis;
         return truncated;
     }
+
 
     private static string JoinEnumerable(IEnumerable enumerable)
     {
@@ -131,4 +136,5 @@ public static class XlsxExporter
 
         return string.Join(", ", parts);
     }
+
 }
