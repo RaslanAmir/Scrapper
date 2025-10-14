@@ -1,0 +1,144 @@
+using System.Text.Json.Serialization;
+
+namespace WcScraper.Core;
+
+public sealed class StoreProduct
+{
+    [JsonPropertyName("id")] public int Id { get; set; }
+    [JsonPropertyName("name")] public string? Name { get; set; }
+    [JsonPropertyName("slug")] public string? Slug { get; set; }
+    [JsonPropertyName("permalink")] public string? Permalink { get; set; }
+    [JsonPropertyName("sku")] public string? Sku { get; set; }
+    [JsonPropertyName("type")] public string? Type { get; set; }
+    [JsonPropertyName("description")] public string? Description { get; set; }
+    [JsonPropertyName("short_description")] public string? ShortDescription { get; set; }
+    // Some stores use "summary" in Store API; we will copy it into ShortDescription if present.
+    [JsonPropertyName("summary")] public string? Summary { get; set; }
+
+    [JsonPropertyName("prices")] public PriceInfo? Prices { get; set; }
+
+    [JsonPropertyName("is_in_stock")] public bool? IsInStock { get; set; }
+    [JsonPropertyName("stock_status")] public string? StockStatus { get; set; }
+    [JsonPropertyName("average_rating")] public double? AverageRating { get; set; }
+    [JsonPropertyName("review_count")] public int? ReviewCount { get; set; }
+    [JsonPropertyName("has_options")] public bool? HasOptions { get; set; }
+[JsonPropertyName("parent")] public int? ParentId { get; set; }
+[JsonPropertyName("attributes")] public List<VariationAttribute> Attributes { get; set; } = new();
+
+
+    [JsonPropertyName("categories")] public List<Category> Categories { get; set; } = new();
+    [JsonPropertyName("images")] public List<ProductImage> Images { get; set; } = new();
+}
+
+public sealed class PriceInfo
+{
+    [JsonPropertyName("currency_code")] public string? CurrencyCode { get; set; }
+    [JsonPropertyName("currency_minor_unit")] public int? CurrencyMinorUnit { get; set; }
+    [JsonPropertyName("price")] public string? Price { get; set; }
+    [JsonPropertyName("regular_price")] public string? RegularPrice { get; set; }
+    [JsonPropertyName("sale_price")] public string? SalePrice { get; set; }
+}
+
+public sealed class Category
+{
+    [JsonPropertyName("id")] public int Id { get; set; }
+    [JsonPropertyName("name")] public string? Name { get; set; }
+}
+
+public sealed class ProductImage
+{
+    [JsonPropertyName("id")] public int Id { get; set; }
+    [JsonPropertyName("src")] public string? Src { get; set; }
+    [JsonPropertyName("alt")] public string? Alt { get; set; }
+}
+
+public sealed class StoreReview
+{
+    [JsonPropertyName("id")] public int Id { get; set; }
+    [JsonPropertyName("reviewer")] public string? Reviewer { get; set; }
+    [JsonPropertyName("review")] public string? Review { get; set; }
+    [JsonPropertyName("rating")] public int? Rating { get; set; }
+    [JsonPropertyName("product_id")] public int? ProductId { get; set; }
+    [JsonPropertyName("date_created")] public string? DateCreated { get; set; }
+}
+
+
+public sealed class VariationAttribute
+{
+    [JsonPropertyName("name")] public string? Name { get; set; }
+    [JsonPropertyName("taxonomy")] public string? Taxonomy { get; set; }
+    [JsonPropertyName("attribute")] public string? AttributeKey { get; set; } // e.g., pa_color
+    [JsonPropertyName("term")] public string? Term { get; set; } // e.g., "red"
+    [JsonPropertyName("slug")] public string? Slug { get; set; }
+    [JsonPropertyName("option")] public string? Option { get; set; } // REST style
+    [JsonPropertyName("value")] public string? Value { get; set; }   // fallback
+}
+
+public sealed class TermItem
+{
+    [JsonPropertyName("id")] public int Id { get; set; }
+    [JsonPropertyName("name")] public string? Name { get; set; }
+    [JsonPropertyName("slug")] public string? Slug { get; set; }
+}
+
+// Export rows
+public sealed class GenericRow
+{
+    public int Id { get; set; }
+    public string? Name { get; set; }
+    public string? Slug { get; set; }
+    public string? Permalink { get; set; }
+    public string? Sku { get; set; }
+    public string? Type { get; set; }
+    public string? DescriptionHtml { get; set; }
+    public string? ShortDescriptionHtml { get; set; }
+    public double? RegularPrice { get; set; }
+    public double? SalePrice { get; set; }
+    public double? Price { get; set; }
+    public string? Currency { get; set; }
+    public bool? InStock { get; set; }
+    public string? StockStatus { get; set; }
+    public double? AverageRating { get; set; }
+    public int? ReviewCount { get; set; }
+    public string? Categories { get; set; }
+    public string? Images { get; set; }
+}
+
+public sealed class ShopifyRow
+{
+    public string? Handle { get; set; }
+    public string? Title { get; set; }
+    public string? BodyHtml { get; set; }
+    public string? Vendor { get; set; }
+    public string? ProductCategory { get; set; }
+    public string? Type { get; set; }
+    public string? Tags { get; set; }
+    public string Published { get; set; } = "TRUE";
+    public string? Option1Name { get; set; } = "Title";
+    public string? Option1Value { get; set; } = "Default Title";
+    public string? VariantSku { get; set; }
+    public string? VariantPrice { get; set; }
+    public string? VariantInventoryQty { get; set; }
+    public string VariantRequiresShipping { get; set; } = "TRUE";
+    public string VariantTaxable { get; set; } = "TRUE";
+    public string VariantWeightUnit { get; set; } = "kg";
+    public string? ImageSrc { get; set; }
+}
+
+public sealed class WooRow
+{
+    public string? ID { get; set; } = "";
+    public string? Type { get; set; } = "simple";
+    public string? SKU { get; set; }
+    public string? Name { get; set; }
+    public int Published { get; set; } = 1;
+    public int IsFeatured { get; set; } = 0;
+    public string VisibilityInCatalog { get; set; } = "visible";
+    public string? ShortDescription { get; set; }
+    public string? Description { get; set; }
+    public string? TaxStatus { get; set; } = "taxable";
+    public string? InStock { get; set; } = "1";
+    public string? Categories { get; set; }
+    public string? Images { get; set; }
+    public int Position { get; set; } = 0;
+}
