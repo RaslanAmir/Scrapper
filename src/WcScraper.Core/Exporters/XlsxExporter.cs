@@ -27,7 +27,7 @@ public static class XlsxExporter
             for (int c = 0; c < headers.Count; c++)
             {
                 var v = row.TryGetValue(headers[c], out var val) ? val : null;
-                ws.Cell(r, c + 1).Value = v is null ? XLCellValue.Empty : XLCellValue.FromObject(v);
+                ws.Cell(r, c + 1).Value = XLCellValue.FromObject(v ?? string.Empty);
             }
             r++;
         }
