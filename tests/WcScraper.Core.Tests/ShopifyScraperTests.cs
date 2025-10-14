@@ -222,6 +222,64 @@ public class ShopifyScraperTests
         Assert.Empty(products);
     }
 
+    [Fact]
+    public async Task FetchShopifyProductsAsync_FallsBackToPublicStorefrontWhenNoCredentialsProvided()
+    {
+        const string restPayload = """
+        {
+          "products": [
+            {
+              "id": 123,
+              "title": "Anonymous Product",
+              "handle": "anonymous-product",
+              "tags": "tag-a"
+            }
+          ]
+        }
+        """;
+
+        var requestCount = 0;
+
+        using var handler = new StubHttpMessageHandler(request =>
+        {
+            requestCount++;
+            Assert.Equal(HttpMethod.Get, request.Method);
+            Assert.Equal("/products.json", request.RequestUri!.AbsolutePath);
+            Assert.Null(request.Headers.Authorization);
+            Assert.False(request.Headers.Contains("X-Shopify-Access-Token"));
+            Assert.Contains("limit=50", request.RequestUri.Query, StringComparison.Ordinal);
+
+            if (requestCount == 1)
+            {
+                Assert.Contains("page=1", request.RequestUri.Query, StringComparison.Ordinal);
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(restPayload, Encoding.UTF8, "application/json")
+                };
+            }
+
+            Assert.Contains("page=2", request.RequestUri.Query, StringComparison.Ordinal);
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("{\"products\":[]}", Encoding.UTF8, "application/json")
+            };
+        });
+
+        using var httpClient = new HttpClient(handler);
+        var settings = new ShopifySettings("https://example.myshopify.com")
+        {
+            PageSize = 50,
+            MaxPages = 2
+        };
+        var scraper = new ShopifyScraper(httpClient);
+
+        var products = await scraper.FetchShopifyProductsAsync(settings);
+
+        var product = Assert.Single(products);
+        Assert.Equal("anonymous-product", product.Handle);
+        Assert.Equal(2, requestCount);
+    }
+
     private sealed class StubHttpMessageHandler : HttpMessageHandler
     {
         private readonly Func<HttpRequestMessage, HttpResponseMessage> _responder;
