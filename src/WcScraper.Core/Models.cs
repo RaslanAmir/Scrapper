@@ -22,11 +22,12 @@ public sealed class StoreProduct
     [JsonPropertyName("average_rating")] public double? AverageRating { get; set; }
     [JsonPropertyName("review_count")] public int? ReviewCount { get; set; }
     [JsonPropertyName("has_options")] public bool? HasOptions { get; set; }
-[JsonPropertyName("parent")] public int? ParentId { get; set; }
-[JsonPropertyName("attributes")] public List<VariationAttribute> Attributes { get; set; } = new();
+    [JsonPropertyName("parent")] public int? ParentId { get; set; }
+    [JsonPropertyName("attributes")] public List<VariationAttribute> Attributes { get; set; } = new();
 
 
     [JsonPropertyName("categories")] public List<Category> Categories { get; set; } = new();
+    [JsonPropertyName("tags")] public List<ProductTag> Tags { get; set; } = new();
     [JsonPropertyName("images")] public List<ProductImage> Images { get; set; } = new();
 }
 
@@ -43,6 +44,14 @@ public sealed class Category
 {
     [JsonPropertyName("id")] public int Id { get; set; }
     [JsonPropertyName("name")] public string? Name { get; set; }
+    [JsonPropertyName("slug")] public string? Slug { get; set; }
+}
+
+public sealed class ProductTag
+{
+    [JsonPropertyName("id")] public int Id { get; set; }
+    [JsonPropertyName("name")] public string? Name { get; set; }
+    [JsonPropertyName("slug")] public string? Slug { get; set; }
 }
 
 public sealed class ProductImage
@@ -92,6 +101,7 @@ public sealed class GenericRow
     public string? Type { get; set; }
     public string? DescriptionHtml { get; set; }
     public string? ShortDescriptionHtml { get; set; }
+    public string? SummaryHtml { get; set; }
     public double? RegularPrice { get; set; }
     public double? SalePrice { get; set; }
     public double? Price { get; set; }
@@ -100,8 +110,14 @@ public sealed class GenericRow
     public string? StockStatus { get; set; }
     public double? AverageRating { get; set; }
     public int? ReviewCount { get; set; }
+    public bool? HasOptions { get; set; }
+    public int? ParentId { get; set; }
     public string? Categories { get; set; }
+    public string? CategorySlugs { get; set; }
+    public string? Tags { get; set; }
+    public string? TagSlugs { get; set; }
     public string? Images { get; set; }
+    public string? ImageAlts { get; set; }
 }
 
 public sealed class ShopifyRow
