@@ -1,7 +1,10 @@
+using System.Globalization;
 using System.IO;
+using System.Linq;
 using System.Net.Http;
 using System.Security.Authentication;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Threading.Tasks;
 using System.Web;
 
@@ -13,7 +16,8 @@ public sealed class WooScraper : IDisposable
     private readonly bool _ownsClient;
     private readonly JsonSerializerOptions _jsonOptions = new()
     {
-        PropertyNameCaseInsensitive = true
+        PropertyNameCaseInsensitive = true,
+        NumberHandling = JsonNumberHandling.AllowReadingFromString
     };
 
     public WooScraper(HttpClient? httpClient = null, bool allowLegacyTls = true)
@@ -86,23 +90,8 @@ public sealed class WooScraper : IDisposable
                 var text = await resp.Content.ReadAsStringAsync();
                 if (string.IsNullOrWhiteSpace(text)) break;
 
-                List<StoreProduct>? items;
-                try
-                {
-                    items = JsonSerializer.Deserialize<List<StoreProduct>>(text, _jsonOptions);
-                }
-                catch (JsonException ex)
-                {
-                    log?.Report($"Failed to parse store products: {ex.Message}");
-                    break;
-                }
-                catch (InvalidOperationException ex)
-                {
-                    log?.Report($"Failed to parse store products: {ex.Message}");
-                    break;
-                }
-
-                if (items is null || items.Count == 0) break;
+                var items = DeserializeListWithRecovery<StoreProduct>(text, "store products", log);
+                if (items.Count == 0) break;
 
                 foreach (var it in items)
                 {
@@ -164,23 +153,8 @@ public sealed class WooScraper : IDisposable
                 if (!resp.IsSuccessStatusCode) continue;
 
                 var text = await resp.Content.ReadAsStringAsync();
-                List<StoreReview>? items;
-                try
-                {
-                    items = JsonSerializer.Deserialize<List<StoreReview>>(text, _jsonOptions);
-                }
-                catch (JsonException ex)
-                {
-                    log?.Report($"Failed to parse store reviews: {ex.Message}");
-                    break;
-                }
-                catch (InvalidOperationException ex)
-                {
-                    log?.Report($"Failed to parse store reviews: {ex.Message}");
-                    break;
-                }
-
-                if (items != null)
+                var items = DeserializeListWithRecovery<StoreReview>(text, "store reviews", log);
+                if (items.Count > 0)
                 {
                     all.AddRange(items);
                 }
@@ -313,21 +287,7 @@ public sealed class WooScraper : IDisposable
             if (!resp.IsSuccessStatusCode) return new();
 
             var text = await resp.Content.ReadAsStringAsync();
-            try
-            {
-                var items = JsonSerializer.Deserialize<List<TermItem>>(text, _jsonOptions);
-                return items ?? new();
-            }
-            catch (JsonException ex)
-            {
-                log?.Report($"Failed to parse product categories: {ex.Message}");
-                return new();
-            }
-            catch (InvalidOperationException ex)
-            {
-                log?.Report($"Failed to parse product categories: {ex.Message}");
-                return new();
-            }
+            return DeserializeListWithRecovery<TermItem>(text, "product categories", log);
         }
         catch (TaskCanceledException ex)
         {
@@ -362,21 +322,7 @@ public sealed class WooScraper : IDisposable
             if (!resp.IsSuccessStatusCode) return new();
 
             var text = await resp.Content.ReadAsStringAsync();
-            try
-            {
-                var items = JsonSerializer.Deserialize<List<TermItem>>(text, _jsonOptions);
-                return items ?? new();
-            }
-            catch (JsonException ex)
-            {
-                log?.Report($"Failed to parse product tags: {ex.Message}");
-                return new();
-            }
-            catch (InvalidOperationException ex)
-            {
-                log?.Report($"Failed to parse product tags: {ex.Message}");
-                return new();
-            }
+            return DeserializeListWithRecovery<TermItem>(text, "product tags", log);
         }
         catch (TaskCanceledException ex)
         {
@@ -411,21 +357,7 @@ public sealed class WooScraper : IDisposable
             if (!resp.IsSuccessStatusCode) return new();
 
             var text = await resp.Content.ReadAsStringAsync();
-            try
-            {
-                var items = JsonSerializer.Deserialize<List<TermItem>>(text, _jsonOptions);
-                return items ?? new();
-            }
-            catch (JsonException ex)
-            {
-                log?.Report($"Failed to parse product attributes: {ex.Message}");
-                return new();
-            }
-            catch (InvalidOperationException ex)
-            {
-                log?.Report($"Failed to parse product attributes: {ex.Message}");
-                return new();
-            }
+            return DeserializeListWithRecovery<TermItem>(text, "product attributes", log);
         }
         catch (TaskCanceledException ex)
         {
@@ -476,23 +408,8 @@ public sealed class WooScraper : IDisposable
                     if (!resp.IsSuccessStatusCode) break;
 
                     var text = await resp.Content.ReadAsStringAsync();
-                    List<StoreProduct>? items;
-                    try
-                    {
-                        items = JsonSerializer.Deserialize<List<StoreProduct>>(text, _jsonOptions);
-                    }
-                    catch (JsonException ex)
-                    {
-                        log?.Report($"Failed to parse product variations: {ex.Message}");
-                        break;
-                    }
-                    catch (InvalidOperationException ex)
-                    {
-                        log?.Report($"Failed to parse product variations: {ex.Message}");
-                        break;
-                    }
-
-                    if (items is null || items.Count == 0) break;
+                    var items = DeserializeListWithRecovery<StoreProduct>(text, "product variations", log);
+                    if (items.Count == 0) break;
 
                     all.AddRange(items);
                     if (items.Count < perPage) break;
@@ -522,6 +439,99 @@ public sealed class WooScraper : IDisposable
         }
 
         return all;
+    }
+
+    private List<T> DeserializeListWithRecovery<T>(string json, string entityName, IProgress<string>? log)
+    {
+        try
+        {
+            var items = JsonSerializer.Deserialize<List<T>>(json, _jsonOptions);
+            return items ?? new();
+        }
+        catch (JsonException ex)
+        {
+            return RecoverList<T>(json, entityName, log, ex);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return RecoverList<T>(json, entityName, log, ex);
+        }
+    }
+
+    private List<T> RecoverList<T>(string json, string entityName, IProgress<string>? log, Exception ex)
+    {
+        log?.Report($"Failed to parse {entityName}: {ex.Message}. Attempting to recover remaining entries.");
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            if (doc.RootElement.ValueKind != JsonValueKind.Array)
+            {
+                return new();
+            }
+
+            var recovered = new List<T>();
+            var failedIds = new List<string>();
+
+            foreach (var element in doc.RootElement.EnumerateArray())
+            {
+                try
+                {
+                    var item = element.Deserialize<T>(_jsonOptions);
+                    if (item is not null)
+                    {
+                        recovered.Add(item);
+                    }
+                }
+                catch (JsonException)
+                {
+                    failedIds.Add(ExtractElementId(element));
+                }
+                catch (InvalidOperationException)
+                {
+                    failedIds.Add(ExtractElementId(element));
+                }
+            }
+
+            if (failedIds.Count > 0)
+            {
+                var preview = string.Join(", ", failedIds.Where(id => !string.IsNullOrWhiteSpace(id)).DefaultIfEmpty("?").Take(10));
+                if (failedIds.Count > 10)
+                {
+                    preview += ", …";
+                }
+
+                log?.Report($"Skipped {failedIds.Count} {entityName} due to parse errors (IDs: {preview}).");
+            }
+
+            return recovered;
+        }
+        catch (JsonException recoveryEx)
+        {
+            log?.Report($"Failed to recover {entityName}: {recoveryEx.Message}");
+            return new();
+        }
+        catch (InvalidOperationException recoveryEx)
+        {
+            log?.Report($"Failed to recover {entityName}: {recoveryEx.Message}");
+            return new();
+        }
+    }
+
+    private static string ExtractElementId(JsonElement element)
+    {
+        var idProp = element.GetPropertyOrDefault("id");
+        if (idProp is JsonElement idElement)
+        {
+            return idElement.ValueKind switch
+            {
+                JsonValueKind.String => idElement.GetString() ?? string.Empty,
+                JsonValueKind.Number when idElement.TryGetInt64(out var id) => id.ToString(CultureInfo.InvariantCulture),
+                JsonValueKind.Number => idElement.GetRawText(),
+                _ => string.Empty
+            };
+        }
+
+        return string.Empty;
     }
 
     private static async Task<JsonDocument?> ParseDocumentAsync(
