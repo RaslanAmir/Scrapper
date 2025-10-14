@@ -1,6 +1,7 @@
 
 using System.Collections.ObjectModel;
 using System.ComponentModel;
+using System.IO;
 using System.Runtime.CompilerServices;
 using WcScraper.Core;
 using WcScraper.Core.Exporters;
