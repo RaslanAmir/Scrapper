@@ -60,7 +60,16 @@ public sealed class WooScraper
                 var text = await resp.Content.ReadAsStringAsync();
                 if (string.IsNullOrWhiteSpace(text)) break;
 
-                var items = JsonSerializer.Deserialize<List<StoreProduct>>(text, _jsonOptions);
+                List<StoreProduct>? items;
+                try
+                {
+                    items = JsonSerializer.Deserialize<List<StoreProduct>>(text, _jsonOptions);
+                }
+                catch (JsonException ex)
+                {
+                    log?.Report($"Failed to parse store products: {ex.Message}");
+                    break;
+                }
                 if (items is null || items.Count == 0) break;
 
                 // Normalize short description
@@ -100,7 +109,16 @@ public sealed class WooScraper
                 using var resp = await _http.GetAsync(url);
                 if (!resp.IsSuccessStatusCode) continue;
                 var text = await resp.Content.ReadAsStringAsync();
-                var items = JsonSerializer.Deserialize<List<StoreReview>>(text, _jsonOptions);
+                List<StoreReview>? items;
+                try
+                {
+                    items = JsonSerializer.Deserialize<List<StoreReview>>(text, _jsonOptions);
+                }
+                catch (JsonException ex)
+                {
+                    log?.Report($"Failed to parse store reviews: {ex.Message}");
+                    break;
+                }
                 if (items != null) all.AddRange(items);
             }
             catch (HttpRequestException ex)
@@ -129,7 +147,16 @@ public sealed class WooScraper
                     resp.EnsureSuccessStatusCode();
                 }
 
-                var doc = JsonDocument.Parse(await resp.Content.ReadAsStreamAsync());
+                JsonDocument doc;
+                try
+                {
+                    doc = JsonDocument.Parse(await resp.Content.ReadAsStreamAsync());
+                }
+                catch (JsonException ex)
+                {
+                    log?.Report($"Failed to parse WP product response: {ex.Message}");
+                    break;
+                }
                 if (doc.RootElement.ValueKind != JsonValueKind.Array) break;
                 var arr = doc.RootElement.EnumerateArray().ToList();
                 if (arr.Count == 0) break;
@@ -196,8 +223,16 @@ public sealed class WooScraper
             using var resp = await _http.GetAsync(url);
             if (!resp.IsSuccessStatusCode) return new();
             var text = await resp.Content.ReadAsStringAsync();
-            var items = JsonSerializer.Deserialize<List<TermItem>>(text, _jsonOptions);
-            return items ?? new();
+            try
+            {
+                var items = JsonSerializer.Deserialize<List<TermItem>>(text, _jsonOptions);
+                return items ?? new();
+            }
+            catch (JsonException ex)
+            {
+                log?.Report($"Failed to parse product categories: {ex.Message}");
+                return new();
+            }
         }
         catch (HttpRequestException ex)
         {
@@ -216,8 +251,16 @@ public sealed class WooScraper
             using var resp = await _http.GetAsync(url);
             if (!resp.IsSuccessStatusCode) return new();
             var text = await resp.Content.ReadAsStringAsync();
-            var items = JsonSerializer.Deserialize<List<TermItem>>(text, _jsonOptions);
-            return items ?? new();
+            try
+            {
+                var items = JsonSerializer.Deserialize<List<TermItem>>(text, _jsonOptions);
+                return items ?? new();
+            }
+            catch (JsonException ex)
+            {
+                log?.Report($"Failed to parse product tags: {ex.Message}");
+                return new();
+            }
         }
         catch (HttpRequestException ex)
         {
@@ -236,8 +279,16 @@ public sealed class WooScraper
             using var resp = await _http.GetAsync(url);
             if (!resp.IsSuccessStatusCode) return new();
             var text = await resp.Content.ReadAsStringAsync();
-            var items = JsonSerializer.Deserialize<List<TermItem>>(text, _jsonOptions);
-            return items ?? new();
+            try
+            {
+                var items = JsonSerializer.Deserialize<List<TermItem>>(text, _jsonOptions);
+                return items ?? new();
+            }
+            catch (JsonException ex)
+            {
+                log?.Report($"Failed to parse product attributes: {ex.Message}");
+                return new();
+            }
         }
         catch (HttpRequestException ex)
         {
@@ -266,7 +317,16 @@ public sealed class WooScraper
                     using var resp = await _http.GetAsync(url);
                     if (!resp.IsSuccessStatusCode) break;
                     var text = await resp.Content.ReadAsStringAsync();
-                    var items = JsonSerializer.Deserialize<List<StoreProduct>>(text, _jsonOptions);
+                    List<StoreProduct>? items;
+                    try
+                    {
+                        items = JsonSerializer.Deserialize<List<StoreProduct>>(text, _jsonOptions);
+                    }
+                    catch (JsonException ex)
+                    {
+                        log?.Report($"Failed to parse product variations: {ex.Message}");
+                        break;
+                    }
                     if (items is null || items.Count == 0) break;
                     all.AddRange(items);
                     if (items.Count < perPage) break;
