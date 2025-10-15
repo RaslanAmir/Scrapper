@@ -125,6 +125,74 @@ public class ShopifyScraperTests
     }
 
     [Fact]
+    public async Task FetchCollectionsAsync_PublicStorefrontLoadsCollections()
+    {
+        const string pageOne = """
+        {
+          "collections": [
+            {
+              "id": 123456,
+              "handle": "frontpage",
+              "title": "Frontpage"
+            },
+            {
+              "id": 234567,
+              "title": "Second Collection"
+            }
+          ]
+        }
+        """;
+
+        const string emptyPage = """
+        {
+          "collections": []
+        }
+        """;
+
+        var calls = 0;
+        using var handler = new StubHttpMessageHandler(request =>
+        {
+            Assert.Equal(HttpMethod.Get, request.Method);
+            Assert.EndsWith("/collections.json", request.RequestUri!.AbsolutePath, StringComparison.Ordinal);
+            calls++;
+
+            if (request.RequestUri!.Query.Contains("page=1", StringComparison.Ordinal))
+            {
+                Assert.Contains("limit=250", request.RequestUri.Query, StringComparison.Ordinal);
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(pageOne, Encoding.UTF8, "application/json")
+                };
+            }
+
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(emptyPage, Encoding.UTF8, "application/json")
+            };
+        });
+
+        using var httpClient = new HttpClient(handler);
+        var scraper = new ShopifyScraper(httpClient);
+        var settings = new ShopifySettings("https://example.myshopify.com");
+
+        var collections = await scraper.FetchCollectionsAsync(settings);
+
+        Assert.Equal(2, collections.Count);
+        Assert.Collection(collections,
+            first =>
+            {
+                Assert.Equal("Frontpage", first.Name);
+                Assert.Equal("frontpage", first.Slug);
+            },
+            second =>
+            {
+                Assert.Equal("Second Collection", second.Name);
+                Assert.Equal("second-collection", second.Slug);
+            });
+        Assert.Equal(2, calls);
+    }
+
+    [Fact]
     public async Task FetchStoreProductsAsync_ConvertsToStoreProduct()
     {
         const string restPayload = """
