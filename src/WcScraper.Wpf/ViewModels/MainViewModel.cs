@@ -284,6 +284,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
             List<StoreProduct> prods;
             List<StoreProduct> variations = new();
+            List<Dictionary<string, object?>>? shopifyDetailDicts = null;
 
             if (SelectedPlatform == PlatformMode.WooCommerce)
             {
@@ -318,17 +319,20 @@ public sealed class MainViewModel : INotifyPropertyChanged
             {
                 var settings = BuildShopifySettings(targetUrl);
                 Append($"Fetching products via Shopify API… {settings.BaseUrl}");
-                var shopifyProducts = await _shopifyScraper.FetchStoreProductsAsync(settings, log: logger);
+                var rawProducts = await _shopifyScraper.FetchShopifyProductsAsync(settings, log: logger);
+                var pairs = rawProducts
+                    .Select(p => (Product: p, Store: ShopifyConverters.ToStoreProduct(p, settings)))
+                    .ToList();
 
-                var filtered = shopifyProducts.AsEnumerable();
+                IEnumerable<(ShopifyProduct Product, StoreProduct Store)> filtered = pairs;
                 if (selectedCategories.Count > 0)
                 {
                     var handles = new HashSet<string>(selectedCategories
                         .Select(c => c.Slug ?? c.Name ?? string.Empty)
                         .Where(s => !string.IsNullOrWhiteSpace(s)), StringComparer.OrdinalIgnoreCase);
-                    filtered = filtered.Where(p => p.Categories.Any(c =>
-                        !string.IsNullOrWhiteSpace(c.Slug) && handles.Contains(c.Slug!) ||
-                        !string.IsNullOrWhiteSpace(c.Name) && handles.Contains(c.Name!)));
+                    filtered = filtered.Where(pair => pair.Store.Categories.Any(c =>
+                        (!string.IsNullOrWhiteSpace(c.Slug) && handles.Contains(c.Slug!)) ||
+                        (!string.IsNullOrWhiteSpace(c.Name) && handles.Contains(c.Name!))));
                 }
 
                 if (selectedTags.Count > 0)
@@ -336,18 +340,23 @@ public sealed class MainViewModel : INotifyPropertyChanged
                     var tagNames = new HashSet<string>(selectedTags
                         .Select(t => t.Name ?? t.Slug ?? string.Empty)
                         .Where(s => !string.IsNullOrWhiteSpace(s)), StringComparer.OrdinalIgnoreCase);
-                    filtered = filtered.Where(p => p.Tags.Any(t =>
-                        !string.IsNullOrWhiteSpace(t.Name) && tagNames.Contains(t.Name!) ||
-                        !string.IsNullOrWhiteSpace(t.Slug) && tagNames.Contains(t.Slug!)));
+                    filtered = filtered.Where(pair => pair.Store.Tags.Any(t =>
+                        (!string.IsNullOrWhiteSpace(t.Name) && tagNames.Contains(t.Name!)) ||
+                        (!string.IsNullOrWhiteSpace(t.Slug) && tagNames.Contains(t.Slug!))));
                 }
 
-                prods = filtered.ToList();
+                var filteredList = filtered.ToList();
 
-                if (prods.Count == 0)
+                if (filteredList.Count == 0)
                 {
                     Append("No products found for the selected Shopify filters.");
                     return;
                 }
+
+                prods = filteredList.Select(pair => pair.Store).ToList();
+                shopifyDetailDicts = filteredList
+                    .Select(pair => ShopifyConverters.ToShopifyDetailDictionary(pair.Product))
+                    .ToList();
 
                 Append($"Found {prods.Count} products.");
             }
@@ -392,7 +401,10 @@ public sealed class MainViewModel : INotifyPropertyChanged
             if (ExportXlsx)
             {
                 var path = Path.Combine(OutputFolder, "products.xlsx");
-                XlsxExporter.Write(path, genericDicts);
+                var excelRows = SelectedPlatform == PlatformMode.Shopify && shopifyDetailDicts is { Count: > 0 }
+                    ? shopifyDetailDicts
+                    : genericDicts;
+                XlsxExporter.Write(path, excelRows);
                 Append($"Wrote {path}");
             }
             if (ExportJsonl)

@@ -1,9 +1,20 @@
+using System.Collections.Generic;
 using System.Globalization;
+using System.Linq;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace WcScraper.Core.Shopify;
 
 public static class ShopifyConverters
 {
+    private static readonly JsonSerializerOptions DetailSerializerOptions = new()
+    {
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+        PropertyNamingPolicy = null,
+        WriteIndented = false
+    };
+
     private static int ToIntId(long id) => unchecked((int)(id % int.MaxValue));
 
     private static string? ToMinorUnitString(string? price)
@@ -167,5 +178,59 @@ public static class ShopifyConverters
             Images = ConvertImages(product.Images).ToList(),
             Attributes = ConvertOptions(product.Options).ToList()
         };
+    }
+
+    private static string? SerializeIfAny<T>(IEnumerable<T>? values)
+    {
+        if (values is null)
+        {
+            return null;
+        }
+
+        var materialized = values.ToList();
+        return materialized.Count == 0 ? null : JsonSerializer.Serialize(materialized, DetailSerializerOptions);
+    }
+
+    public static Dictionary<string, object?> ToShopifyDetailDictionary(ShopifyProduct product)
+    {
+        var tagList = product.Tags ?? new List<string>();
+        var collections = product.Collections ?? new List<ShopifyCollection>();
+        var collectionHandles = collections
+            .Select(c => c.Handle)
+            .Where(handle => !string.IsNullOrWhiteSpace(handle))
+            .Select(handle => handle!.Trim())
+            .Where(handle => handle.Length > 0)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        var dict = new Dictionary<string, object?>
+        {
+            ["id"] = product.Id,
+            ["title"] = product.Title,
+            ["body_html"] = product.BodyHtml,
+            ["vendor"] = product.Vendor,
+            ["product_type"] = product.ProductType,
+            ["handle"] = product.Handle,
+            ["status"] = product.Status,
+            ["created_at"] = product.CreatedAt,
+            ["updated_at"] = product.UpdatedAt,
+            ["published_at"] = product.PublishedAt,
+            ["template_suffix"] = product.TemplateSuffix,
+            ["published_scope"] = product.PublishedScope,
+            ["tags"] = tagList.Count == 0 ? null : string.Join(", ", tagList),
+            ["tags_json"] = tagList.Count == 0 ? null : JsonSerializer.Serialize(tagList, DetailSerializerOptions),
+            ["admin_graphql_api_id"] = product.AdminGraphqlApiId,
+            ["metafields_global_title_tag"] = product.MetafieldsGlobalTitleTag,
+            ["metafields_global_description_tag"] = product.MetafieldsGlobalDescriptionTag,
+            ["options_json"] = SerializeIfAny(product.Options),
+            ["variants_json"] = SerializeIfAny(product.Variants),
+            ["images_json"] = SerializeIfAny(product.Images),
+            ["image_json"] = product.Image is null ? null : JsonSerializer.Serialize(product.Image, DetailSerializerOptions),
+            ["collection_handles"] = collectionHandles.Count == 0 ? null : string.Join(", ", collectionHandles),
+            ["collection_handles_json"] = collectionHandles.Count == 0 ? null : JsonSerializer.Serialize(collectionHandles, DetailSerializerOptions),
+            ["collections_json"] = SerializeIfAny(collections)
+        };
+
+        return dict;
     }
 }
