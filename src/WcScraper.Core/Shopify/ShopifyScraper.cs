@@ -192,7 +192,7 @@ public sealed class ShopifyScraper : IDisposable
     {
         if (!settings.HasAdminAccess && !settings.HasPrivateAppCredentials)
         {
-            throw new InvalidOperationException("Admin access token or private app credentials are required to fetch collections.");
+            return Array.Empty<TermItem>();
         }
 
         var all = new List<TermItem>();
@@ -216,7 +216,7 @@ public sealed class ShopifyScraper : IDisposable
     {
         if (!settings.HasAdminAccess && !settings.HasPrivateAppCredentials)
         {
-            throw new InvalidOperationException("Admin access token or private app credentials are required to fetch tags.");
+            return Array.Empty<TermItem>();
         }
 
         var tags = new List<TermItem>();
