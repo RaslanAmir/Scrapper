@@ -6,6 +6,7 @@ using System.Net;
 using System.Net.Http;
 using System.Reflection;
 using System.Text;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
@@ -29,11 +30,19 @@ public class MainViewModelTests
             {
               "id": 1001,
               "handle": "frontpage",
-              "title": "Frontpage"
+              "title": "Frontpage",
+              "body_html": "<p>Front page</p>",
+              "products_count": "4",
+              "image": {
+                "id": "9001",
+                "src": "https://cdn.example.com/frontpage.png",
+                "alt": "Frontpage hero"
+              }
             },
             {
               "id": 1002,
-              "title": "Second Collection"
+              "title": "Second Collection",
+              "handle": "second-collection"
             }
           ]
         }
@@ -119,7 +128,11 @@ public class MainViewModelTests
                 {
                     Assert.Equal(2, viewModel.CategoryChoices.Count);
                     Assert.Equal("Frontpage", viewModel.CategoryChoices[0].Name);
+                    Assert.NotNull(viewModel.CategoryChoices[0].ShopifyCollection);
+                    Assert.Equal(4, viewModel.CategoryChoices[0].ShopifyCollection!.ProductsCount);
+                    Assert.Equal("https://cdn.example.com/frontpage.png", viewModel.CategoryChoices[0].ShopifyCollection!.Image?.Src);
                     Assert.Equal("Second Collection", viewModel.CategoryChoices[1].Name);
+                    Assert.Equal("second-collection", viewModel.CategoryChoices[1].Term.Slug);
                     Assert.Empty(viewModel.TagChoices);
                 });
 
@@ -230,7 +243,42 @@ public class MainViewModelTests
         try
         {
             viewModel.OutputFolder = tempDir;
-            viewModel.CategoryChoices.Add(new SelectableTerm(new TermItem { Id = 1, Name = "Frontpage", Slug = "frontpage" }));
+            const string collectionJson = """
+            {
+              "id": 1001,
+              "handle": "frontpage",
+              "title": "Frontpage",
+              "body_html": "<p>Hero</p>",
+              "published_at": "2023-05-01T00:00:00Z",
+              "updated_at": "2023-05-02T00:00:00Z",
+              "sort_order": "manual",
+              "template_suffix": "custom",
+              "published_scope": "web",
+              "products_count": 5,
+              "admin_graphql_api_id": "gid://shopify/Collection/1001",
+              "published": true,
+              "disjunctive": false,
+              "rules": [
+                { "column": "tag", "relation": "equals", "condition": "featured" }
+              ],
+              "image": {
+                "id": 4321,
+                "src": "https://cdn.example.com/frontpage.png",
+                "alt": "Hero image",
+                "width": 1024,
+                "height": 512,
+                "created_at": "2023-04-30T00:00:00Z"
+              }
+            }
+            """;
+
+            var detail = JsonSerializer.Deserialize<ShopifyCollectionDetails>(collectionJson, new JsonSerializerOptions
+            {
+                PropertyNameCaseInsensitive = true
+            });
+            Assert.NotNull(detail);
+
+            viewModel.CategoryChoices.Add(new SelectableTerm(detail!.ToTermItem(), detail));
             viewModel.CategoryChoices.Add(new SelectableTerm(new TermItem { Id = 2, Name = "Blog", Slug = "blog" }));
             viewModel.TagChoices.Add(new SelectableTerm(new TermItem { Id = 3, Name = "Featured", Slug = "featured" }));
 
@@ -242,17 +290,68 @@ public class MainViewModelTests
             using (var workbook = new XLWorkbook(collectionsPath))
             {
                 var worksheet = workbook.Worksheet(1);
-                Assert.Equal("id", worksheet.Cell(1, 1).GetString());
-                Assert.Equal("name", worksheet.Cell(1, 2).GetString());
-                Assert.Equal("slug", worksheet.Cell(1, 3).GetString());
+                var expectedHeaders = new[]
+                {
+                    "term_id",
+                    "term_name",
+                    "term_slug",
+                    "collection_id",
+                    "handle",
+                    "title",
+                    "body_html",
+                    "published_at",
+                    "updated_at",
+                    "sort_order",
+                    "template_suffix",
+                    "published_scope",
+                    "products_count",
+                    "admin_graphql_api_id",
+                    "published",
+                    "disjunctive",
+                    "rules",
+                    "image_id",
+                    "image_src",
+                    "image_alt",
+                    "image_width",
+                    "image_height",
+                    "image_created_at"
+                };
 
-                Assert.Equal(1, worksheet.Cell(2, 1).GetValue<int>());
+                for (var i = 0; i < expectedHeaders.Length; i++)
+                {
+                    Assert.Equal(expectedHeaders[i], worksheet.Cell(1, i + 1).GetString());
+                }
+
+                Assert.Equal(1001, worksheet.Cell(2, 1).GetValue<int>());
                 Assert.Equal("Frontpage", worksheet.Cell(2, 2).GetString());
                 Assert.Equal("frontpage", worksheet.Cell(2, 3).GetString());
+                Assert.Equal(1001L, worksheet.Cell(2, 4).GetValue<long>());
+                Assert.Equal("frontpage", worksheet.Cell(2, 5).GetString());
+                Assert.Equal("Frontpage", worksheet.Cell(2, 6).GetString());
+                Assert.Equal("<p>Hero</p>", worksheet.Cell(2, 7).GetString());
+                Assert.Equal("2023-05-01T00:00:00Z", worksheet.Cell(2, 8).GetString());
+                Assert.Equal("2023-05-02T00:00:00Z", worksheet.Cell(2, 9).GetString());
+                Assert.Equal("manual", worksheet.Cell(2, 10).GetString());
+                Assert.Equal("custom", worksheet.Cell(2, 11).GetString());
+                Assert.Equal("web", worksheet.Cell(2, 12).GetString());
+                Assert.Equal(5, worksheet.Cell(2, 13).GetValue<int>());
+                Assert.Equal("gid://shopify/Collection/1001", worksheet.Cell(2, 14).GetString());
+                Assert.True(worksheet.Cell(2, 15).GetBoolean());
+                Assert.False(worksheet.Cell(2, 16).GetBoolean());
+                Assert.Equal("tag:equals:featured", worksheet.Cell(2, 17).GetString());
+                Assert.Equal(4321L, worksheet.Cell(2, 18).GetValue<long>());
+                Assert.Equal("https://cdn.example.com/frontpage.png", worksheet.Cell(2, 19).GetString());
+                Assert.Equal("Hero image", worksheet.Cell(2, 20).GetString());
+                Assert.Equal(1024, worksheet.Cell(2, 21).GetValue<int>());
+                Assert.Equal(512, worksheet.Cell(2, 22).GetValue<int>());
+                Assert.Equal("2023-04-30T00:00:00Z", worksheet.Cell(2, 23).GetString());
 
                 Assert.Equal(2, worksheet.Cell(3, 1).GetValue<int>());
                 Assert.Equal("Blog", worksheet.Cell(3, 2).GetString());
                 Assert.Equal("blog", worksheet.Cell(3, 3).GetString());
+                Assert.True(string.IsNullOrEmpty(worksheet.Cell(3, 4).GetString()));
+                Assert.Equal("blog", worksheet.Cell(3, 5).GetString());
+                Assert.Equal("Blog", worksheet.Cell(3, 6).GetString());
             }
 
             var tagsPath = Path.Combine(tempDir, "tags.xlsx");

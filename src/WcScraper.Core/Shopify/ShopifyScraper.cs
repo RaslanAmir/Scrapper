@@ -6,6 +6,7 @@ using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Web;
@@ -185,33 +186,81 @@ public sealed class ShopifyScraper : IDisposable
         return null;
     }
 
-    public async Task<IReadOnlyList<TermItem>> FetchCollectionsAsync(
+    public async Task<ShopifyCollectionsResult> FetchCollectionsAsync(
         ShopifySettings settings,
         IProgress<string>? log = null,
         CancellationToken cancellationToken = default)
     {
-        var all = new List<TermItem>();
+        if (string.IsNullOrWhiteSpace(settings.BaseUrl))
+        {
+            return ShopifyCollectionsResult.Empty;
+        }
+
+        var byId = new Dictionary<long, ShopifyCollectionDetails>();
+        var byHandle = new Dictionary<string, ShopifyCollectionDetails>(StringComparer.OrdinalIgnoreCase);
+        var byTermId = new Dictionary<int, ShopifyCollectionDetails>();
+        var candidates = new List<TermItem>();
+
+        void AddDetail(ShopifyCollectionDetails? detail)
+        {
+            if (detail is null)
+            {
+                return;
+            }
+
+            var term = detail.ToTermItem();
+            candidates.Add(term);
+
+            if (detail.Id.HasValue && detail.Id.Value != 0 && !byId.ContainsKey(detail.Id.Value))
+            {
+                byId[detail.Id.Value] = detail;
+            }
+
+            if (!string.IsNullOrWhiteSpace(detail.Handle) && !byHandle.ContainsKey(detail.Handle!))
+            {
+                byHandle[detail.Handle!] = detail;
+            }
+
+            if (!byTermId.ContainsKey(term.Id))
+            {
+                byTermId[term.Id] = detail;
+            }
+        }
+
         if (settings.HasAdminAccess || settings.HasPrivateAppCredentials)
         {
             foreach (var resource in new[] { "custom_collections", "smart_collections" })
             {
                 var collections = await FetchCollectionsFromRestAsync(resource, settings, log, cancellationToken)
                     .ConfigureAwait(false);
-                all.AddRange(collections);
+                foreach (var collection in collections)
+                {
+                    AddDetail(collection);
+                }
             }
         }
         else
         {
             var collections = await FetchCollectionsFromPublicStorefrontAsync(settings, log, cancellationToken)
                 .ConfigureAwait(false);
-            all.AddRange(collections);
+            foreach (var collection in collections)
+            {
+                AddDetail(collection);
+            }
         }
 
-        return all
+        if (candidates.Count == 0)
+        {
+            return ShopifyCollectionsResult.Empty;
+        }
+
+        var deduped = candidates
             .GroupBy(c => string.IsNullOrWhiteSpace(c.Slug) ? c.Name ?? c.Id.ToString(CultureInfo.InvariantCulture) : c.Slug, StringComparer.OrdinalIgnoreCase)
             .Select(g => g.First())
             .OrderBy(c => c.Name)
             .ToList();
+
+        return new ShopifyCollectionsResult(deduped, byId, byHandle, byTermId);
     }
 
     public async Task<IReadOnlyList<TermItem>> FetchProductTagsAsync(
@@ -267,13 +316,13 @@ public sealed class ShopifyScraper : IDisposable
         return tags;
     }
 
-    private async Task<List<TermItem>> FetchCollectionsFromRestAsync(
+    private async Task<List<ShopifyCollectionDetails>> FetchCollectionsFromRestAsync(
         string resource,
         ShopifySettings settings,
         IProgress<string>? log,
         CancellationToken cancellationToken)
     {
-        var results = new List<TermItem>();
+        var results = new List<ShopifyCollectionDetails>();
         string? nextPageInfo = null;
 
         do
@@ -292,37 +341,40 @@ public sealed class ShopifyScraper : IDisposable
             var payload = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
             if (string.IsNullOrWhiteSpace(payload)) break;
 
-            using var document = JsonDocument.Parse(payload);
-            if (!document.RootElement.TryGetProperty(resource, out var array)) break;
-
-            foreach (var element in array.EnumerateArray())
+            var data = JsonSerializer.Deserialize<ShopifyRestCollectionsResponse>(payload, _jsonOptions);
+            List<ShopifyCollectionDetails>? collections = resource switch
             {
-                var id = element.TryGetProperty("id", out var idProp) && idProp.ValueKind == JsonValueKind.Number
-                    ? idProp.GetInt64()
-                    : 0L;
-                var title = element.TryGetProperty("title", out var titleProp) ? titleProp.GetString() : null;
-                var handle = element.TryGetProperty("handle", out var handleProp) ? handleProp.GetString() : null;
+                "custom_collections" => data?.CustomCollections,
+                "smart_collections" => data?.SmartCollections,
+                _ => null
+            };
 
-                results.Add(new TermItem
-                {
-                    Id = id != 0 ? unchecked((int)(id % int.MaxValue)) : Math.Abs((handle ?? title ?? Guid.NewGuid().ToString()).GetHashCode()),
-                    Name = title,
-                    Slug = !string.IsNullOrWhiteSpace(handle) ? handle : ShopifySlugHelper.Slugify(title)
-                });
+            if (collections is null)
+            {
+                break;
+            }
+
+            var count = 0;
+            foreach (var collection in collections)
+            {
+                if (collection is null) continue;
+                results.Add(collection);
+                count++;
             }
 
             nextPageInfo = TryParseNextPageInfo(response.Headers);
+            if (count == 0) break;
         } while (!string.IsNullOrEmpty(nextPageInfo));
 
         return results;
     }
 
-    private async Task<List<TermItem>> FetchCollectionsFromPublicStorefrontAsync(
+    private async Task<List<ShopifyCollectionDetails>> FetchCollectionsFromPublicStorefrontAsync(
         ShopifySettings settings,
         IProgress<string>? log,
         CancellationToken cancellationToken)
     {
-        var results = new List<TermItem>();
+        var results = new List<ShopifyCollectionDetails>();
 
         for (var page = 1; page <= settings.MaxPages; page++)
         {
@@ -336,39 +388,40 @@ public sealed class ShopifyScraper : IDisposable
             var payload = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
             if (string.IsNullOrWhiteSpace(payload)) break;
 
-            using var document = JsonDocument.Parse(payload);
-            if (!document.RootElement.TryGetProperty("collections", out var array) || array.ValueKind != JsonValueKind.Array)
+            var data = JsonSerializer.Deserialize<ShopifyPublicCollectionsResponse>(payload, _jsonOptions);
+            var collections = data?.Collections;
+            if (collections is null)
             {
                 break;
             }
 
             var count = 0;
-            foreach (var element in array.EnumerateArray())
+            foreach (var collection in collections)
             {
+                if (collection is null) continue;
+                results.Add(collection);
                 count++;
-                var id = element.TryGetProperty("id", out var idProp)
-                    ? idProp.ValueKind switch
-                    {
-                        JsonValueKind.Number => idProp.GetInt64(),
-                        JsonValueKind.String when long.TryParse(idProp.GetString(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed) => parsed,
-                        _ => 0L
-                    }
-                    : 0L;
-                var title = element.TryGetProperty("title", out var titleProp) ? titleProp.GetString() : null;
-                var handle = element.TryGetProperty("handle", out var handleProp) ? handleProp.GetString() : null;
-
-                results.Add(new TermItem
-                {
-                    Id = id != 0 ? unchecked((int)(id % int.MaxValue)) : Math.Abs((handle ?? title ?? Guid.NewGuid().ToString()).GetHashCode()),
-                    Name = title,
-                    Slug = !string.IsNullOrWhiteSpace(handle) ? handle : ShopifySlugHelper.Slugify(title)
-                });
             }
 
             if (count == 0) break;
         }
 
         return results;
+    }
+
+    private sealed class ShopifyRestCollectionsResponse
+    {
+        [JsonPropertyName("custom_collections")]
+        public List<ShopifyCollectionDetails> CustomCollections { get; set; } = new();
+
+        [JsonPropertyName("smart_collections")]
+        public List<ShopifyCollectionDetails> SmartCollections { get; set; } = new();
+    }
+
+    private sealed class ShopifyPublicCollectionsResponse
+    {
+        [JsonPropertyName("collections")]
+        public List<ShopifyCollectionDetails> Collections { get; set; } = new();
     }
 
     private static void ApplyAuthentication(HttpRequestMessage request, ShopifySettings settings)
