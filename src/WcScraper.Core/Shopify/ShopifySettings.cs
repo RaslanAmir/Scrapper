@@ -64,6 +64,9 @@ public sealed class ShopifySettings
     internal Uri BuildPublicProductsUri(int pageSize, int page)
         => new($"{BaseUrl}/products.json?limit={pageSize}&page={page}", UriKind.Absolute);
 
+    internal Uri BuildPublicCollectionsUri(int pageSize, int page)
+        => new($"{BaseUrl}/collections.json?limit={pageSize}&page={page}", UriKind.Absolute);
+
     internal Uri BuildGraphUri()
         => new($"{BaseUrl}/api/{ApiVersion}/graphql.json", UriKind.Absolute);
 }

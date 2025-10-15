@@ -190,15 +190,20 @@ public sealed class ShopifyScraper : IDisposable
         IProgress<string>? log = null,
         CancellationToken cancellationToken = default)
     {
-        if (!settings.HasAdminAccess && !settings.HasPrivateAppCredentials)
-        {
-            return Array.Empty<TermItem>();
-        }
-
         var all = new List<TermItem>();
-        foreach (var resource in new[] { "custom_collections", "smart_collections" })
+        if (settings.HasAdminAccess || settings.HasPrivateAppCredentials)
         {
-            var collections = await FetchCollectionsAsync(resource, settings, log, cancellationToken).ConfigureAwait(false);
+            foreach (var resource in new[] { "custom_collections", "smart_collections" })
+            {
+                var collections = await FetchCollectionsFromRestAsync(resource, settings, log, cancellationToken)
+                    .ConfigureAwait(false);
+                all.AddRange(collections);
+            }
+        }
+        else
+        {
+            var collections = await FetchCollectionsFromPublicStorefrontAsync(settings, log, cancellationToken)
+                .ConfigureAwait(false);
             all.AddRange(collections);
         }
 
@@ -262,7 +267,7 @@ public sealed class ShopifyScraper : IDisposable
         return tags;
     }
 
-    private async Task<List<TermItem>> FetchCollectionsAsync(
+    private async Task<List<TermItem>> FetchCollectionsFromRestAsync(
         string resource,
         ShopifySettings settings,
         IProgress<string>? log,
@@ -308,6 +313,60 @@ public sealed class ShopifyScraper : IDisposable
 
             nextPageInfo = TryParseNextPageInfo(response.Headers);
         } while (!string.IsNullOrEmpty(nextPageInfo));
+
+        return results;
+    }
+
+    private async Task<List<TermItem>> FetchCollectionsFromPublicStorefrontAsync(
+        ShopifySettings settings,
+        IProgress<string>? log,
+        CancellationToken cancellationToken)
+    {
+        var results = new List<TermItem>();
+
+        for (var page = 1; page <= settings.MaxPages; page++)
+        {
+            var uri = settings.BuildPublicCollectionsUri(settings.PageSize, page);
+            using var request = new HttpRequestMessage(HttpMethod.Get, uri);
+            request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+            log?.Report($"GET {uri}");
+
+            using var response = await _http.SendAsync(request, cancellationToken).ConfigureAwait(false);
+            response.EnsureSuccessStatusCode();
+            var payload = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+            if (string.IsNullOrWhiteSpace(payload)) break;
+
+            using var document = JsonDocument.Parse(payload);
+            if (!document.RootElement.TryGetProperty("collections", out var array) || array.ValueKind != JsonValueKind.Array)
+            {
+                break;
+            }
+
+            var count = 0;
+            foreach (var element in array.EnumerateArray())
+            {
+                count++;
+                var id = element.TryGetProperty("id", out var idProp)
+                    ? idProp.ValueKind switch
+                    {
+                        JsonValueKind.Number => idProp.GetInt64(),
+                        JsonValueKind.String when long.TryParse(idProp.GetString(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed) => parsed,
+                        _ => 0L
+                    }
+                    : 0L;
+                var title = element.TryGetProperty("title", out var titleProp) ? titleProp.GetString() : null;
+                var handle = element.TryGetProperty("handle", out var handleProp) ? handleProp.GetString() : null;
+
+                results.Add(new TermItem
+                {
+                    Id = id != 0 ? unchecked((int)(id % int.MaxValue)) : Math.Abs((handle ?? title ?? Guid.NewGuid().ToString()).GetHashCode()),
+                    Name = title,
+                    Slug = !string.IsNullOrWhiteSpace(handle) ? handle : ShopifySlugHelper.Slugify(title)
+                });
+            }
+
+            if (count == 0) break;
+        }
 
         return results;
     }
