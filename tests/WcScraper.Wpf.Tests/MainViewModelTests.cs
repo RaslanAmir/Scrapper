@@ -141,6 +141,67 @@ public class MainViewModelTests
         await completion.Task;
     }
 
+    [Fact]
+    public void SelectAllAndClearCategories_TogglesEveryEntry()
+    {
+        using var wooScraper = new WooScraper();
+        using var shopifyScraper = new ShopifyScraper();
+
+        var ctor = typeof(MainViewModel).GetConstructor(
+            BindingFlags.NonPublic | BindingFlags.Instance,
+            binder: null,
+            new[] { typeof(IDialogService), typeof(WooScraper), typeof(ShopifyScraper) },
+            modifiers: null);
+        Assert.NotNull(ctor);
+
+        var viewModel = (MainViewModel)ctor!.Invoke(new object[]
+        {
+            new StubDialogService(),
+            wooScraper,
+            shopifyScraper
+        });
+
+        viewModel.CategoryChoices.Add(new SelectableTerm(new TermItem { Id = 1, Name = "One" }));
+        viewModel.CategoryChoices.Add(new SelectableTerm(new TermItem { Id = 2, Name = "Two" }));
+        viewModel.CategoryChoices.Add(new SelectableTerm(new TermItem { Id = 3, Name = "Three" }));
+
+        viewModel.SelectAllCategoriesCommand.Execute(null);
+        Assert.All(viewModel.CategoryChoices, term => Assert.True(term.IsSelected));
+
+        viewModel.ClearCategoriesCommand.Execute(null);
+        Assert.All(viewModel.CategoryChoices, term => Assert.False(term.IsSelected));
+    }
+
+    [Fact]
+    public void SelectAllAndClearTags_TogglesEveryEntry()
+    {
+        using var wooScraper = new WooScraper();
+        using var shopifyScraper = new ShopifyScraper();
+
+        var ctor = typeof(MainViewModel).GetConstructor(
+            BindingFlags.NonPublic | BindingFlags.Instance,
+            binder: null,
+            new[] { typeof(IDialogService), typeof(WooScraper), typeof(ShopifyScraper) },
+            modifiers: null);
+        Assert.NotNull(ctor);
+
+        var viewModel = (MainViewModel)ctor!.Invoke(new object[]
+        {
+            new StubDialogService(),
+            wooScraper,
+            shopifyScraper
+        });
+
+        viewModel.TagChoices.Add(new SelectableTerm(new TermItem { Id = 1, Name = "Alpha" }) { IsSelected = true });
+        viewModel.TagChoices.Add(new SelectableTerm(new TermItem { Id = 2, Name = "Beta" }) { IsSelected = false });
+
+        viewModel.SelectAllTagsCommand.Execute(null);
+        Assert.All(viewModel.TagChoices, term => Assert.True(term.IsSelected));
+
+        viewModel.ClearTagsCommand.Execute(null);
+        Assert.All(viewModel.TagChoices, term => Assert.False(term.IsSelected));
+    }
+
     private sealed class StubDialogService : IDialogService
     {
         public string? BrowseForFolder(string? initial = null) => null;

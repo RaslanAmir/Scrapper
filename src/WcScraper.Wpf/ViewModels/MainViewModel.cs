@@ -47,6 +47,10 @@ public sealed class MainViewModel : INotifyPropertyChanged
         _shopifyScraper = shopifyScraper;
         BrowseCommand = new RelayCommand(OnBrowse);
         RunCommand = new RelayCommand(async () => await OnRunAsync(), () => !IsRunning);
+        SelectAllCategoriesCommand = new RelayCommand(() => SetSelection(CategoryChoices, true));
+        ClearCategoriesCommand = new RelayCommand(() => SetSelection(CategoryChoices, false));
+        SelectAllTagsCommand = new RelayCommand(() => SetSelection(TagChoices, true));
+        ClearTagsCommand = new RelayCommand(() => SetSelection(TagChoices, false));
     }
 
     // XAML-friendly default constructor + Dialogs setter
@@ -120,6 +124,10 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
     public RelayCommand BrowseCommand { get; }
     public RelayCommand RunCommand { get; }
+    public RelayCommand SelectAllCategoriesCommand { get; }
+    public RelayCommand ClearCategoriesCommand { get; }
+    public RelayCommand SelectAllTagsCommand { get; }
+    public RelayCommand ClearTagsCommand { get; }
 
     private void OnBrowse()
     {
@@ -396,6 +404,14 @@ public sealed class MainViewModel : INotifyPropertyChanged
             CategoryChoices.Clear();
             TagChoices.Clear();
         });
+    }
+
+    private static void SetSelection(ObservableCollection<SelectableTerm> terms, bool isSelected)
+    {
+        foreach (var term in terms)
+        {
+            term.IsSelected = isSelected;
+        }
     }
 
     private ShopifySettings BuildShopifySettings(string baseUrl)

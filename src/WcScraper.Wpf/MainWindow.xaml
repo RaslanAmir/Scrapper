@@ -102,6 +102,10 @@
                 </Grid.ColumnDefinitions>
                 <StackPanel Grid.Column="0">
                     <TextBlock Text="Categories" FontWeight="Bold" />
+                    <StackPanel Orientation="Horizontal" Margin="0,4,0,4">
+                        <Button Content="Select all" Command="{Binding SelectAllCategoriesCommand}" Margin="0,0,8,0" />
+                        <Button Content="Clear" Command="{Binding ClearCategoriesCommand}" />
+                    </StackPanel>
                     <ScrollViewer Height="140" VerticalScrollBarVisibility="Auto">
                         <ItemsControl ItemsSource="{Binding CategoryChoices}">
                             <ItemsControl.ItemTemplate>
@@ -114,6 +118,10 @@
                 </StackPanel>
                 <StackPanel Grid.Column="1">
                     <TextBlock Text="Tags" FontWeight="Bold" />
+                    <StackPanel Orientation="Horizontal" Margin="0,4,0,4">
+                        <Button Content="Select all" Command="{Binding SelectAllTagsCommand}" Margin="0,0,8,0" />
+                        <Button Content="Clear" Command="{Binding ClearTagsCommand}" />
+                    </StackPanel>
                     <ScrollViewer Height="140" VerticalScrollBarVisibility="Auto">
                         <ItemsControl ItemsSource="{Binding TagChoices}">
                             <ItemsControl.ItemTemplate>
