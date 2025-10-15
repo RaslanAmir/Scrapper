@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.Json.Serialization;
 
 namespace WcScraper.Core.Shopify;
@@ -16,7 +17,9 @@ public sealed class ShopifyProduct
     [JsonPropertyName("vendor")] public string? Vendor { get; set; }
     [JsonPropertyName("product_type")] public string? ProductType { get; set; }
     [JsonPropertyName("handle")] public string? Handle { get; set; }
-    [JsonPropertyName("tags")] public string? Tags { get; set; }
+    [JsonPropertyName("tags")]
+    [JsonConverter(typeof(ShopifyTagsJsonConverter))]
+    public List<string> Tags { get; set; } = new();
     [JsonPropertyName("status")] public string? Status { get; set; }
     [JsonPropertyName("variants")] public List<ShopifyVariant> Variants { get; set; } = new();
     [JsonPropertyName("options")] public List<ShopifyOption> Options { get; set; } = new();
@@ -108,4 +111,70 @@ public sealed class ShopifyCollectionNode
     [JsonPropertyName("id")] public string? Id { get; set; }
     [JsonPropertyName("handle")] public string? Handle { get; set; }
     [JsonPropertyName("title")] public string? Title { get; set; }
+}
+
+internal sealed class ShopifyTagsJsonConverter : JsonConverter<List<string>>
+{
+    public override List<string> Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    {
+        if (reader.TokenType == JsonTokenType.Null)
+        {
+            return new List<string>();
+        }
+
+        if (reader.TokenType == JsonTokenType.StartArray)
+        {
+            var tags = new List<string>();
+            while (reader.Read())
+            {
+                if (reader.TokenType == JsonTokenType.EndArray)
+                {
+                    break;
+                }
+
+                if (reader.TokenType == JsonTokenType.String)
+                {
+                    var value = reader.GetString();
+                    if (!string.IsNullOrWhiteSpace(value))
+                    {
+                        tags.Add(value);
+                    }
+                }
+                else
+                {
+                    using var _ = JsonDocument.ParseValue(ref reader);
+                }
+            }
+
+            return tags;
+        }
+
+        if (reader.TokenType == JsonTokenType.String)
+        {
+            var value = reader.GetString();
+            return string.IsNullOrWhiteSpace(value)
+                ? new List<string>()
+                : new List<string> { value };
+        }
+
+        using var skipped = JsonDocument.ParseValue(ref reader);
+        return new List<string>();
+    }
+
+    public override void Write(Utf8JsonWriter writer, List<string> value, JsonSerializerOptions options)
+    {
+        writer.WriteStartArray();
+        if (value is not null)
+        {
+            foreach (var tag in value)
+            {
+                if (!string.IsNullOrWhiteSpace(tag))
+                {
+                    writer.WriteStringValue(tag);
+                }
+            }
+        }
+
+        writer.WriteEndArray();
+    }
 }

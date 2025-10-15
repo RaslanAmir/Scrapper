@@ -16,7 +16,7 @@ public sealed class ShopifyMapperTests
             ProductType = "Accessories",
             Vendor = "Example Vendor",
             Handle = "sample-product",
-            Tags = "Tag One, Tag Two",
+            Tags = { "Tag One, Tag Two" },
             Variants =
             {
                 new ShopifyVariant

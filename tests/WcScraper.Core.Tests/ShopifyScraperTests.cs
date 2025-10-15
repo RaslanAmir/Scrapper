@@ -197,6 +197,71 @@ public class ShopifyScraperTests
     }
 
     [Fact]
+    public async Task FetchStoreProductsAsync_HandlesArrayTags()
+    {
+        const string restPayload = """
+        {
+          "products": [
+            {
+              "id": 987654321,
+              "title": "Array Product",
+              "body_html": "<p>Array Example</p>",
+              "product_type": "Accessories",
+              "handle": "array-product",
+              "tags": ["tag-a", "tag-b"],
+              "variants": [
+                {
+                  "id": 2222,
+                  "title": "Default Title",
+                  "sku": "SKU-ARRAY",
+                  "price": "29.99",
+                  "inventory_quantity": 2,
+                  "requires_shipping": true,
+                  "option1": "Default Title"
+                }
+              ],
+              "options": [
+                {
+                  "name": "Title",
+                  "values": ["Default Title"]
+                }
+              ],
+              "images": [
+                {
+                  "id": 888,
+                  "src": "https://cdn.example/array.jpg",
+                  "alt": "Array"
+                }
+              ]
+            }
+          ]
+        }
+        """;
+
+        using var handler = new StubHttpMessageHandler(request =>
+        {
+            Assert.Equal(HttpMethod.Get, request.Method);
+            Assert.EndsWith("/products.json", request.RequestUri!.AbsolutePath, StringComparison.Ordinal);
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(restPayload, Encoding.UTF8, "application/json")
+            };
+        });
+
+        using var httpClient = new HttpClient(handler);
+        var scraper = new ShopifyScraper(httpClient);
+        var settings = new ShopifySettings("https://example.myshopify.com", "admin-token");
+
+        var storeProducts = await scraper.FetchStoreProductsAsync(settings);
+
+        var storeProduct = Assert.Single(storeProducts);
+        Assert.Equal("Array Product", storeProduct.Name);
+        Assert.Collection(storeProduct.Tags,
+            t => Assert.Equal("tag-a", t.Name),
+            t => Assert.Equal("tag-b", t.Name));
+    }
+
+    [Fact]
     public async Task FetchShopifyProductsAsync_UsesBasicAuthenticationWhenApiKeyProvided()
     {
         const string restPayload = """{"products":[]}""";

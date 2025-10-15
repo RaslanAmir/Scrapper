@@ -14,10 +14,32 @@ public static class ShopifyConverters
         return minor.ToString(CultureInfo.InvariantCulture);
     }
 
-    private static IEnumerable<string> SplitTags(string? tags)
-        => string.IsNullOrWhiteSpace(tags)
-            ? Enumerable.Empty<string>()
-            : tags.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+    private static IEnumerable<string> SplitTags(IEnumerable<string>? tags)
+    {
+        if (tags is null)
+        {
+            yield break;
+        }
+
+        foreach (var tag in tags)
+        {
+            if (string.IsNullOrWhiteSpace(tag)) continue;
+
+            var parts = tag.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            if (parts.Length == 0)
+            {
+                continue;
+            }
+
+            foreach (var part in parts)
+            {
+                if (!string.IsNullOrWhiteSpace(part))
+                {
+                    yield return part;
+                }
+            }
+        }
+    }
 
     private static int ParseCollectionId(string? gid)
     {
@@ -31,13 +53,19 @@ public static class ShopifyConverters
         return Math.Abs(gid.GetHashCode());
     }
 
-    private static IEnumerable<ProductTag> ConvertTags(string? tags)
-        => SplitTags(tags).Select((t, i) => new ProductTag
+    private static IEnumerable<ProductTag> ConvertTags(IEnumerable<string>? tags)
+    {
+        var index = 1;
+        foreach (var tag in SplitTags(tags))
         {
-            Id = i + 1,
-            Name = t,
-            Slug = t.Replace(' ', '-').ToLowerInvariant()
-        });
+            yield return new ProductTag
+            {
+                Id = index++,
+                Name = tag,
+                Slug = tag.Replace(' ', '-').ToLowerInvariant()
+            };
+        }
+    }
 
     private static IEnumerable<Category> ConvertCollections(IEnumerable<ShopifyCollection> collections)
     {
