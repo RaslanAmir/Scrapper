@@ -147,13 +147,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         Directory.CreateDirectory(folder);
 
         var categories = CategoryChoices
-            .Select(choice => choice.Term)
-            .Select(term => new Dictionary<string, object?>
-            {
-                ["id"] = term.Id,
-                ["name"] = term.Name,
-                ["slug"] = term.Slug
-            })
+            .Select(BuildCollectionExportRow)
             .ToList();
 
         var collectionsPath = Path.Combine(folder, "collections.xlsx");
@@ -176,6 +170,43 @@ public sealed class MainViewModel : INotifyPropertyChanged
             XlsxExporter.Write(tagsPath, tagDicts);
             Append($"Wrote {tagsPath}");
         }
+    }
+
+    private static Dictionary<string, object?> BuildCollectionExportRow(SelectableTerm choice)
+    {
+        var detail = choice.ShopifyCollection;
+        var rules = detail?.Rules?
+            .Select(rule => string.Join(':', new[] { rule.Column, rule.Relation, rule.Condition }
+                .Where(part => !string.IsNullOrWhiteSpace(part))))
+            .Where(segment => !string.IsNullOrWhiteSpace(segment))
+            .ToList();
+
+        return new Dictionary<string, object?>
+        {
+            ["term_id"] = choice.Term.Id,
+            ["term_name"] = choice.Term.Name,
+            ["term_slug"] = choice.Term.Slug,
+            ["collection_id"] = detail?.Id,
+            ["handle"] = detail?.Handle ?? choice.Term.Slug ?? choice.Term.Name,
+            ["title"] = detail?.Title ?? choice.Term.Name,
+            ["body_html"] = detail?.BodyHtml,
+            ["published_at"] = detail?.PublishedAt,
+            ["updated_at"] = detail?.UpdatedAt,
+            ["sort_order"] = detail?.SortOrder,
+            ["template_suffix"] = detail?.TemplateSuffix,
+            ["published_scope"] = detail?.PublishedScope,
+            ["products_count"] = detail?.ProductsCount,
+            ["admin_graphql_api_id"] = detail?.AdminGraphqlApiId,
+            ["published"] = detail?.Published,
+            ["disjunctive"] = detail?.Disjunctive,
+            ["rules"] = rules is { Count: > 0 } ? rules : null,
+            ["image_id"] = detail?.Image?.Id,
+            ["image_src"] = detail?.Image?.Src,
+            ["image_alt"] = detail?.Image?.Alt,
+            ["image_width"] = detail?.Image?.Width,
+            ["image_height"] = detail?.Image?.Height,
+            ["image_created_at"] = detail?.Image?.CreatedAt,
+        };
     }
 
     private async Task LoadFiltersForStoreAsync(string baseUrl, IProgress<string> logger)
@@ -202,8 +233,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 App.Current?.Dispatcher.Invoke(() =>
                 {
                     CategoryChoices.Clear();
-                    foreach (var collection in collections)
-                        CategoryChoices.Add(new SelectableTerm(collection));
+                    foreach (var collection in collections.Terms)
+                        CategoryChoices.Add(new SelectableTerm(collection, collections.FindByTerm(collection)));
                     TagChoices.Clear();
                     foreach (var tag in tags)
                         TagChoices.Add(new SelectableTerm(tag));
@@ -475,9 +506,14 @@ public sealed class MainViewModel : INotifyPropertyChanged
 public sealed class SelectableTerm : INotifyPropertyChanged
 {
     public TermItem Term { get; }
+    public ShopifyCollectionDetails? ShopifyCollection { get; }
     private bool _isSelected;
 
-    public SelectableTerm(TermItem term) { Term = term; }
+    public SelectableTerm(TermItem term, ShopifyCollectionDetails? shopifyCollection = null)
+    {
+        Term = term;
+        ShopifyCollection = shopifyCollection;
+    }
     public string? Name => Term.Name;
     public bool IsSelected { get => _isSelected; set { _isSelected = value; PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsSelected))); } }
 

@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Text;
@@ -133,11 +134,27 @@ public class ShopifyScraperTests
             {
               "id": 123456,
               "handle": "frontpage",
-              "title": "Frontpage"
+              "title": "Frontpage",
+              "body_html": "<p>Frontpage collection</p>",
+              "published_at": "2023-05-01T00:00:00-04:00",
+              "updated_at": "2023-05-02T01:00:00-04:00",
+              "sort_order": "manual",
+              "template_suffix": "custom",
+              "published_scope": "web",
+              "products_count": "5",
+              "image": {
+                "id": "987",
+                "src": "https://cdn.example.com/frontpage.png",
+                "alt": "Frontpage hero",
+                "width": "800",
+                "height": 600,
+                "created_at": "2023-04-30T12:00:00-04:00"
+              }
             },
             {
               "id": 234567,
-              "title": "Second Collection"
+              "title": "Second Collection",
+              "handle": "second-collection"
             }
           ]
         }
@@ -177,19 +194,137 @@ public class ShopifyScraperTests
 
         var collections = await scraper.FetchCollectionsAsync(settings);
 
-        Assert.Equal(2, collections.Count);
-        Assert.Collection(collections,
-            first =>
-            {
-                Assert.Equal("Frontpage", first.Name);
-                Assert.Equal("frontpage", first.Slug);
-            },
-            second =>
-            {
-                Assert.Equal("Second Collection", second.Name);
-                Assert.Equal("second-collection", second.Slug);
-            });
+        Assert.Equal(2, collections.Terms.Count);
+        var first = collections.Terms[0];
+        Assert.Equal("Frontpage", first.Name);
+        Assert.Equal("frontpage", first.Slug);
+
+        var frontpage = Assert.Contains("frontpage", collections.ByHandle);
+        Assert.Equal("<p>Frontpage collection</p>", frontpage.BodyHtml);
+        Assert.Equal(5, frontpage.ProductsCount);
+        Assert.Equal("custom", frontpage.TemplateSuffix);
+        Assert.NotNull(frontpage.Image);
+        Assert.Equal(987, frontpage.Image!.Id);
+        Assert.Equal("Frontpage hero", frontpage.Image.Alt);
+        Assert.Equal(800, frontpage.Image.Width);
+        Assert.Equal(600, frontpage.Image.Height);
+
+        var second = collections.Terms[1];
+        Assert.Equal("Second Collection", second.Name);
+        Assert.Equal("second-collection", second.Slug);
+        Assert.Null(collections.FindByTerm(second)?.Image?.Src);
         Assert.Equal(2, calls);
+    }
+
+    [Fact]
+    public async Task FetchCollectionsAsync_RestCollectionsIncludeDetails()
+    {
+        const string customCollections = """
+        {
+          "custom_collections": [
+            {
+              "id": 101,
+              "handle": "frontpage",
+              "title": "Frontpage",
+              "body_html": "<p>Main page</p>",
+              "published_at": "2023-05-01T10:00:00-04:00",
+              "updated_at": "2023-05-02T11:00:00-04:00",
+              "sort_order": "alpha-asc",
+              "template_suffix": "custom-template",
+              "published_scope": "global",
+              "products_count": 7,
+              "admin_graphql_api_id": "gid://shopify/Collection/101",
+              "published": true,
+              "image": {
+                "id": 501,
+                "src": "https://cdn.example.com/frontpage.jpg",
+                "alt": "Frontpage image",
+                "width": 1280,
+                "height": "720",
+                "created_at": "2023-04-30T12:00:00-04:00"
+              }
+            }
+          ]
+        }
+        """;
+
+        const string smartCollections = """
+        {
+          "smart_collections": [
+            {
+              "id": 202,
+              "handle": "automatic",
+              "title": "Automatic Picks",
+              "body_html": "<p>Smart rules</p>",
+              "published_at": "2023-05-03T08:00:00-04:00",
+              "updated_at": "2023-05-04T09:00:00-04:00",
+              "sort_order": "best-selling",
+              "published_scope": "web",
+              "products_count": "3",
+              "admin_graphql_api_id": "gid://shopify/Collection/202",
+              "published": false,
+              "disjunctive": true,
+              "rules": [
+                { "column": "tag", "relation": "equals", "condition": "Featured" },
+                { "column": "title", "relation": "starts_with", "condition": "Sale" }
+              ],
+              "image": {
+                "src": "https://cdn.example.com/automatic.png",
+                "alt": "Automatic hero"
+              }
+            }
+          ]
+        }
+        """;
+
+        using var handler = new StubHttpMessageHandler(request =>
+        {
+            Assert.Equal(HttpMethod.Get, request.Method);
+            Assert.Contains("limit=250", request.RequestUri!.Query, StringComparison.Ordinal);
+
+            if (request.RequestUri!.AbsolutePath.EndsWith("/custom_collections.json", StringComparison.Ordinal))
+            {
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(customCollections, Encoding.UTF8, "application/json")
+                };
+            }
+
+            if (request.RequestUri.AbsolutePath.EndsWith("/smart_collections.json", StringComparison.Ordinal))
+            {
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(smartCollections, Encoding.UTF8, "application/json")
+                };
+            }
+
+            throw new InvalidOperationException($"Unexpected URI: {request.RequestUri}");
+        });
+
+        using var httpClient = new HttpClient(handler);
+        var scraper = new ShopifyScraper(httpClient);
+        var settings = new ShopifySettings("https://example.myshopify.com", "admin-token");
+
+        var collections = await scraper.FetchCollectionsAsync(settings);
+
+        Assert.Equal(2, collections.Terms.Count);
+        var frontpage = Assert.Contains(101, collections.ById);
+        Assert.Equal("custom-template", frontpage.TemplateSuffix);
+        Assert.True(frontpage.Published);
+        Assert.Equal("gid://shopify/Collection/101", frontpage.AdminGraphqlApiId);
+        Assert.NotNull(frontpage.Image);
+        Assert.Equal(1280, frontpage.Image!.Width);
+        Assert.Equal(720, frontpage.Image.Height);
+        Assert.Equal("2023-04-30T12:00:00-04:00", frontpage.Image.CreatedAt);
+
+        var automatic = Assert.Contains("automatic", collections.ByHandle);
+        Assert.False(automatic.Published);
+        Assert.True(automatic.Disjunctive);
+        Assert.Equal(2, automatic.Rules.Count);
+        Assert.Contains(automatic.Rules, r => r.Column == "tag" && r.Relation == "equals" && r.Condition == "Featured");
+
+        var automaticTerm = collections.Terms.Single(t => string.Equals(t.Slug, "automatic", StringComparison.OrdinalIgnoreCase));
+        Assert.Same(automatic, collections.FindByTerm(automaticTerm));
     }
 
     [Fact]
@@ -481,11 +616,11 @@ public class ShopifyScraperTests
 
         using var httpClient = new HttpClient(handler);
         var scraper = new ShopifyScraper(httpClient);
-        var settings = new ShopifySettings("https://example.myshopify.com");
+        var settings = new ShopifySettings();
 
         var collections = await scraper.FetchCollectionsAsync(settings);
 
-        Assert.Empty(collections);
+        Assert.Empty(collections.Terms);
         Assert.False(invoked);
     }
 
