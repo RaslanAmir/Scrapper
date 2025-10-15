@@ -95,44 +95,51 @@
 
         <!-- Filters -->
         <GroupBox Grid.Row="5" Grid.ColumnSpan="3" Header="Filters (optional)">
-            <Grid Margin="8">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*"/>
-                    <ColumnDefinition Width="*"/>
-                </Grid.ColumnDefinitions>
-                <StackPanel Grid.Column="0">
-                    <TextBlock Text="Categories" FontWeight="Bold" />
-                    <StackPanel Orientation="Horizontal" Margin="0,4,0,4">
-                        <Button Content="Select all" Command="{Binding SelectAllCategoriesCommand}" Margin="0,0,8,0" />
-                        <Button Content="Clear" Command="{Binding ClearCategoriesCommand}" />
+            <StackPanel Margin="8">
+                <Button Content="Export collections/categories"
+                        Command="{Binding ExportCollectionsCommand}"
+                        HorizontalAlignment="Right"
+                        Margin="0,0,0,8"
+                        Padding="12,4" />
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <StackPanel Grid.Column="0">
+                        <TextBlock Text="Categories" FontWeight="Bold" />
+                        <StackPanel Orientation="Horizontal" Margin="0,4,0,4">
+                            <Button Content="Select all" Command="{Binding SelectAllCategoriesCommand}" Margin="0,0,8,0" />
+                            <Button Content="Clear" Command="{Binding ClearCategoriesCommand}" />
+                        </StackPanel>
+                        <ScrollViewer Height="140" VerticalScrollBarVisibility="Auto">
+                            <ItemsControl ItemsSource="{Binding CategoryChoices}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <CheckBox Content="{Binding Name}" IsChecked="{Binding IsSelected, Mode=TwoWay}" Margin="0,2"/>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </ScrollViewer>
                     </StackPanel>
-                    <ScrollViewer Height="140" VerticalScrollBarVisibility="Auto">
-                        <ItemsControl ItemsSource="{Binding CategoryChoices}">
-                            <ItemsControl.ItemTemplate>
-                                <DataTemplate>
-                                    <CheckBox Content="{Binding Name}" IsChecked="{Binding IsSelected, Mode=TwoWay}" Margin="0,2"/>
-                                </DataTemplate>
-                            </ItemsControl.ItemTemplate>
-                        </ItemsControl>
-                    </ScrollViewer>
-                </StackPanel>
-                <StackPanel Grid.Column="1">
-                    <TextBlock Text="Tags" FontWeight="Bold" />
-                    <StackPanel Orientation="Horizontal" Margin="0,4,0,4">
-                        <Button Content="Select all" Command="{Binding SelectAllTagsCommand}" Margin="0,0,8,0" />
-                        <Button Content="Clear" Command="{Binding ClearTagsCommand}" />
+                    <StackPanel Grid.Column="1">
+                        <TextBlock Text="Tags" FontWeight="Bold" />
+                        <StackPanel Orientation="Horizontal" Margin="0,4,0,4">
+                            <Button Content="Select all" Command="{Binding SelectAllTagsCommand}" Margin="0,0,8,0" />
+                            <Button Content="Clear" Command="{Binding ClearTagsCommand}" />
+                        </StackPanel>
+                        <ScrollViewer Height="140" VerticalScrollBarVisibility="Auto">
+                            <ItemsControl ItemsSource="{Binding TagChoices}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <CheckBox Content="{Binding Name}" IsChecked="{Binding IsSelected, Mode=TwoWay}" Margin="0,2"/>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </ScrollViewer>
                     </StackPanel>
-                    <ScrollViewer Height="140" VerticalScrollBarVisibility="Auto">
-                        <ItemsControl ItemsSource="{Binding TagChoices}">
-                            <ItemsControl.ItemTemplate>
-                                <DataTemplate>
-                                    <CheckBox Content="{Binding Name}" IsChecked="{Binding IsSelected, Mode=TwoWay}" Margin="0,2"/>
-                                </DataTemplate>
-                            </ItemsControl.ItemTemplate>
-                        </ItemsControl>
-                    </ScrollViewer>
-                </StackPanel>
-            </Grid>
+                </Grid>
+            </StackPanel>
         </GroupBox>
 
         <!-- Log -->

@@ -51,6 +51,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         ClearCategoriesCommand = new RelayCommand(() => SetSelection(CategoryChoices, false));
         SelectAllTagsCommand = new RelayCommand(() => SetSelection(TagChoices, true));
         ClearTagsCommand = new RelayCommand(() => SetSelection(TagChoices, false));
+        ExportCollectionsCommand = new RelayCommand(OnExportCollections);
     }
 
     // XAML-friendly default constructor + Dialogs setter
@@ -128,12 +129,53 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public RelayCommand ClearCategoriesCommand { get; }
     public RelayCommand SelectAllTagsCommand { get; }
     public RelayCommand ClearTagsCommand { get; }
+    public RelayCommand ExportCollectionsCommand { get; }
 
     private void OnBrowse()
     {
         var chosen = _dialogs.BrowseForFolder(OutputFolder);
         if (!string.IsNullOrWhiteSpace(chosen))
             OutputFolder = chosen;
+    }
+
+    private void OnExportCollections()
+    {
+        var folder = string.IsNullOrWhiteSpace(OutputFolder)
+            ? Path.GetFullPath("output")
+            : OutputFolder;
+
+        Directory.CreateDirectory(folder);
+
+        var categories = CategoryChoices
+            .Select(choice => choice.Term)
+            .Select(term => new Dictionary<string, object?>
+            {
+                ["id"] = term.Id,
+                ["name"] = term.Name,
+                ["slug"] = term.Slug
+            })
+            .ToList();
+
+        var collectionsPath = Path.Combine(folder, "collections.xlsx");
+        XlsxExporter.Write(collectionsPath, categories);
+        Append($"Wrote {collectionsPath}");
+
+        if (TagChoices.Count > 0)
+        {
+            var tagDicts = TagChoices
+                .Select(choice => choice.Term)
+                .Select(term => new Dictionary<string, object?>
+                {
+                    ["id"] = term.Id,
+                    ["name"] = term.Name,
+                    ["slug"] = term.Slug
+                })
+                .ToList();
+
+            var tagsPath = Path.Combine(folder, "tags.xlsx");
+            XlsxExporter.Write(tagsPath, tagDicts);
+            Append($"Wrote {tagsPath}");
+        }
     }
 
     private async Task LoadFiltersForStoreAsync(string baseUrl, IProgress<string> logger)

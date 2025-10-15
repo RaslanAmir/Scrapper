@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
@@ -8,6 +9,7 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
+using ClosedXML.Excel;
 using WcScraper.Core;
 using WcScraper.Core.Shopify;
 using WcScraper.Wpf.Services;
@@ -200,6 +202,72 @@ public class MainViewModelTests
 
         viewModel.ClearTagsCommand.Execute(null);
         Assert.All(viewModel.TagChoices, term => Assert.False(term.IsSelected));
+    }
+
+    [Fact]
+    public void ExportCollectionsCommand_WritesCollectionsWorkbook()
+    {
+        using var wooScraper = new WooScraper();
+        using var shopifyScraper = new ShopifyScraper();
+
+        var ctor = typeof(MainViewModel).GetConstructor(
+            BindingFlags.NonPublic | BindingFlags.Instance,
+            binder: null,
+            new[] { typeof(IDialogService), typeof(WooScraper), typeof(ShopifyScraper) },
+            modifiers: null);
+        Assert.NotNull(ctor);
+
+        var viewModel = (MainViewModel)ctor!.Invoke(new object[]
+        {
+            new StubDialogService(),
+            wooScraper,
+            shopifyScraper
+        });
+
+        var tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+
+        try
+        {
+            viewModel.OutputFolder = tempDir;
+            viewModel.CategoryChoices.Add(new SelectableTerm(new TermItem { Id = 1, Name = "Frontpage", Slug = "frontpage" }));
+            viewModel.CategoryChoices.Add(new SelectableTerm(new TermItem { Id = 2, Name = "Blog", Slug = "blog" }));
+            viewModel.TagChoices.Add(new SelectableTerm(new TermItem { Id = 3, Name = "Featured", Slug = "featured" }));
+
+            viewModel.ExportCollectionsCommand.Execute(null);
+
+            var collectionsPath = Path.Combine(tempDir, "collections.xlsx");
+            Assert.True(File.Exists(collectionsPath));
+
+            using (var workbook = new XLWorkbook(collectionsPath))
+            {
+                var worksheet = workbook.Worksheet(1);
+                Assert.Equal("id", worksheet.Cell(1, 1).GetString());
+                Assert.Equal("name", worksheet.Cell(1, 2).GetString());
+                Assert.Equal("slug", worksheet.Cell(1, 3).GetString());
+
+                Assert.Equal(1, worksheet.Cell(2, 1).GetValue<int>());
+                Assert.Equal("Frontpage", worksheet.Cell(2, 2).GetString());
+                Assert.Equal("frontpage", worksheet.Cell(2, 3).GetString());
+
+                Assert.Equal(2, worksheet.Cell(3, 1).GetValue<int>());
+                Assert.Equal("Blog", worksheet.Cell(3, 2).GetString());
+                Assert.Equal("blog", worksheet.Cell(3, 3).GetString());
+            }
+
+            var tagsPath = Path.Combine(tempDir, "tags.xlsx");
+            Assert.True(File.Exists(tagsPath));
+
+            using var tagsWorkbook = new XLWorkbook(tagsPath);
+            var tagsWorksheet = tagsWorkbook.Worksheet(1);
+            Assert.Equal(2, tagsWorksheet.LastRowUsed().RowNumber());
+            Assert.Equal("Featured", tagsWorksheet.Cell(2, 2).GetString());
+            Assert.Equal("featured", tagsWorksheet.Cell(2, 3).GetString());
+        }
+        finally
+        {
+            Directory.Delete(tempDir, recursive: true);
+        }
     }
 
     private sealed class StubDialogService : IDialogService
