@@ -1,8 +1,10 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Text;
+using System.Text.Json;
 using WcScraper.Core.Shopify;
 using Xunit;
 
@@ -23,19 +25,60 @@ public class ShopifyScraperTests
               "vendor": "Example Vendor",
               "product_type": "Accessories",
               "handle": "sample-product",
+              "created_at": "2024-01-02T03:04:05-05:00",
+              "updated_at": "2024-01-03T03:04:05-05:00",
+              "published_at": "2024-01-04T03:04:05-05:00",
+              "template_suffix": "custom",
+              "published_scope": "web",
+              "admin_graphql_api_id": "gid://shopify/Product/123456789",
               "tags": "tag-a, tag-b",
               "variants": [
                 {
                   "id": 1111,
+                  "product_id": 123456789,
                   "title": "Default Title",
                   "sku": "SKU-1",
                   "price": "19.99",
                   "compare_at_price": "24.99",
+                  "position": 1,
+                  "fulfillment_service": "manual",
+                  "inventory_management": "shopify",
+                  "inventory_policy": "deny",
+                  "inventory_item_id": 987654,
                   "inventory_quantity": 5,
+                  "old_inventory_quantity": 3,
                   "requires_shipping": true,
+                  "taxable": true,
+                  "tax_code": "P0000000",
+                  "barcode": "123456789012",
+                  "grams": 500,
                   "weight": 0.5,
                   "weight_unit": "kg",
-                  "option1": "Default Title"
+                  "created_at": "2024-01-02T03:04:05-05:00",
+                  "updated_at": "2024-01-03T03:04:05-05:00",
+                  "admin_graphql_api_id": "gid://shopify/ProductVariant/1111",
+                  "image_id": 777,
+                  "option1": "Default Title",
+                  "presentment_prices": [
+                    {
+                      "price": {
+                        "amount": "19.99",
+                        "currency_code": "USD"
+                      },
+                      "compare_at_price": {
+                        "amount": "24.99",
+                        "currency_code": "USD"
+                      }
+                    }
+                  ],
+                  "tax_lines": [
+                    {
+                      "title": "State Tax",
+                      "price": "1.50",
+                      "rate": 0.075,
+                      "channel_liable": false
+                    }
+                  ]
                 }
               ],
               "options": [
@@ -47,10 +90,31 @@ public class ShopifyScraperTests
               "images": [
                 {
                   "id": 777,
+                  "product_id": 123456789,
                   "src": "https://cdn.example/image.jpg",
-                  "alt": "Front"
+                  "alt": "Front",
+                  "position": 1,
+                  "created_at": "2024-01-02T03:04:05-05:00",
+                  "updated_at": "2024-01-03T03:04:05-05:00",
+                  "width": 1024,
+                  "height": 768,
+                  "variant_ids": [1111],
+                  "admin_graphql_api_id": "gid://shopify/ProductImage/777"
                 }
-              ]
+              ],
+              "image": {
+                "id": 777,
+                "product_id": 123456789,
+                "src": "https://cdn.example/image.jpg",
+                "alt": "Front",
+                "position": 1,
+                "created_at": "2024-01-02T03:04:05-05:00",
+                "updated_at": "2024-01-03T03:04:05-05:00",
+                "width": 1024,
+                "height": 768,
+                "variant_ids": [1111],
+                "admin_graphql_api_id": "gid://shopify/ProductImage/777"
+              }
             }
           ]
         }
@@ -123,6 +187,133 @@ public class ShopifyScraperTests
         Assert.Equal("sample-product", product.Handle);
         var collection = Assert.Single(product.Collections);
         Assert.Equal("frontpage", collection.Handle);
+    }
+
+    [Fact]
+    public void ShopifyProduct_DeserializesFullRestPayload()
+    {
+        const string payload = """
+        {
+          "products": [
+            {
+              "id": 321,
+              "title": "Full",
+              "body_html": "<p>Details</p>",
+              "vendor": "Vendor",
+              "product_type": "Type",
+              "handle": "full",
+              "created_at": "2024-02-01T10:00:00-05:00",
+              "updated_at": "2024-02-02T10:00:00-05:00",
+              "published_at": "2024-02-03T10:00:00-05:00",
+              "template_suffix": "template",
+              "published_scope": "global",
+              "status": "active",
+              "admin_graphql_api_id": "gid://shopify/Product/321",
+              "metafields_global_title_tag": "Meta Title",
+              "metafields_global_description_tag": "Meta Description",
+              "tags": ["one", "two"],
+              "variants": [
+                {
+                  "id": 654,
+                  "product_id": 321,
+                  "title": "Variant",
+                  "sku": "SKU",
+                  "price": "9.99",
+                  "compare_at_price": "14.99",
+                  "position": "1",
+                  "fulfillment_service": "manual",
+                  "inventory_management": "shopify",
+                  "inventory_policy": "deny",
+                  "inventory_item_id": "7001",
+                  "inventory_quantity": 7,
+                  "old_inventory_quantity": 5,
+                  "requires_shipping": true,
+                  "taxable": true,
+                  "tax_code": "P0000000",
+                  "barcode": "999",
+                  "grams": 200,
+                  "weight": 0.2,
+                  "weight_unit": "kg",
+                  "created_at": "2024-02-01T10:00:00-05:00",
+                  "updated_at": "2024-02-02T10:00:00-05:00",
+                  "admin_graphql_api_id": "gid://shopify/ProductVariant/654",
+                  "image_id": "91011",
+                  "option1": "Default",
+                  "presentment_prices": [
+                    {
+                      "price": { "amount": "9.99", "currency_code": "USD" },
+                      "compare_at_price": { "amount": "14.99", "currency_code": "USD" }
+                    }
+                  ],
+                  "tax_lines": [
+                    { "title": "State", "price": "0.70", "rate": 0.07, "channel_liable": true }
+                  ]
+                }
+              ],
+              "options": [ { "name": "Title", "values": ["Default"] } ],
+              "images": [
+                {
+                  "id": 91011,
+                  "product_id": "321",
+                  "src": "https://cdn/image.png",
+                  "alt": "Alt",
+                  "position": "1",
+                  "created_at": "2024-02-01T10:00:00-05:00",
+                  "updated_at": "2024-02-02T10:00:00-05:00",
+                  "width": "1000",
+                  "height": "800",
+                  "variant_ids": [654],
+                  "admin_graphql_api_id": "gid://shopify/ProductImage/91011"
+                }
+              ],
+              "image": {
+                "id": 91011,
+                "product_id": 321,
+                "src": "https://cdn/image.png",
+                "alt": "Alt",
+                "position": 1,
+                "created_at": "2024-02-01T10:00:00-05:00",
+                "updated_at": "2024-02-02T10:00:00-05:00",
+                "width": 1000,
+                "height": 800,
+                "variant_ids": [654],
+                "admin_graphql_api_id": "gid://shopify/ProductImage/91011"
+              }
+            }
+          ]
+        }
+        """;
+
+        var response = JsonSerializer.Deserialize<ShopifyRestProductResponse>(payload);
+        Assert.NotNull(response);
+        var product = Assert.Single(response!.Products);
+        Assert.Equal("2024-02-01T10:00:00-05:00", product.CreatedAt);
+        Assert.Equal("2024-02-02T10:00:00-05:00", product.UpdatedAt);
+        Assert.Equal("global", product.PublishedScope);
+        Assert.Equal("gid://shopify/Product/321", product.AdminGraphqlApiId);
+        Assert.Equal("Meta Title", product.MetafieldsGlobalTitleTag);
+        Assert.Equal("Meta Description", product.MetafieldsGlobalDescriptionTag);
+        var variant = Assert.Single(product.Variants);
+        Assert.Equal(321, variant.ProductId);
+        Assert.Equal("manual", variant.FulfillmentService);
+        Assert.Equal("shopify", variant.InventoryManagement);
+        Assert.Equal("deny", variant.InventoryPolicy);
+        Assert.Equal(7001, variant.InventoryItemId);
+        Assert.Equal(5, variant.OldInventoryQuantity);
+        Assert.True(variant.Taxable);
+        Assert.Equal("P0000000", variant.TaxCode);
+        Assert.Equal("999", variant.Barcode);
+        Assert.Equal("2024-02-01T10:00:00-05:00", variant.CreatedAt);
+        Assert.Equal(91011, variant.ImageId);
+        Assert.Single(variant.PresentmentPrices);
+        Assert.Single(variant.TaxLines);
+        var image = Assert.Single(product.Images);
+        Assert.Equal(321, image.ProductId);
+        Assert.Equal(1000, image.Width);
+        Assert.Equal(800, image.Height);
+        Assert.Equal("gid://shopify/ProductImage/91011", image.AdminGraphqlApiId);
+        Assert.NotNull(product.Image);
+        Assert.Equal(91011, product.Image!.Id);
     }
 
     [Fact]
@@ -642,6 +833,82 @@ public class ShopifyScraperTests
 
         Assert.Empty(tags);
         Assert.False(invoked);
+    }
+
+    [Fact]
+    public void ToShopifyDetailDictionary_ProducesFlattenedPayload()
+    {
+        var product = new ShopifyProduct
+        {
+            Id = 1,
+            Title = "Product",
+            BodyHtml = "<p>Body</p>",
+            Vendor = "Vendor",
+            ProductType = "Type",
+            Handle = "product",
+            Status = "active",
+            CreatedAt = "2024-01-01T00:00:00-05:00",
+            UpdatedAt = "2024-01-02T00:00:00-05:00",
+            PublishedAt = "2024-01-03T00:00:00-05:00",
+            TemplateSuffix = "suffix",
+            PublishedScope = "web",
+            AdminGraphqlApiId = "gid://shopify/Product/1",
+            Tags = new List<string> { "one", "two" },
+            Variants =
+            {
+                new ShopifyVariant
+                {
+                    Id = 11,
+                    ProductId = 1,
+                    Title = "Default",
+                    Price = "9.99",
+                    InventoryQuantity = 5
+                }
+            },
+            Options =
+            {
+                new ShopifyOption { Name = "Size", Values = { "S", "M" } }
+            },
+            Images =
+            {
+                new ShopifyImage { Id = 21, ProductId = 1, Src = "https://cdn/img.png", Width = 100, Height = 200 }
+            },
+            Image = new ShopifyImage { Id = 21, ProductId = 1, Src = "https://cdn/img.png" },
+            Collections =
+            {
+                new ShopifyCollection { Handle = "frontpage", Title = "Frontpage" },
+                new ShopifyCollection { Handle = "FrontPage", Title = "Duplicate case" },
+                new ShopifyCollection { Title = "No Handle" }
+            }
+        };
+
+        var detail = ShopifyConverters.ToShopifyDetailDictionary(product);
+
+        Assert.Equal("Product", detail["title"]);
+        Assert.Equal("2024-01-01T00:00:00-05:00", detail["created_at"]);
+        Assert.Equal("web", detail["published_scope"]);
+        Assert.Equal("one, two", detail["tags"]);
+
+        var variantsJson = Assert.IsType<string>(detail["variants_json"]);
+        using var variantsDoc = JsonDocument.Parse(variantsJson);
+        Assert.Equal(11, variantsDoc.RootElement[0].GetProperty("id").GetInt64());
+
+        var optionsJson = Assert.IsType<string>(detail["options_json"]);
+        using var optionsDoc = JsonDocument.Parse(optionsJson);
+        Assert.Equal("Size", optionsDoc.RootElement[0].GetProperty("name").GetString());
+
+        var imagesJson = Assert.IsType<string>(detail["images_json"]);
+        using var imagesDoc = JsonDocument.Parse(imagesJson);
+        Assert.Equal(21, imagesDoc.RootElement[0].GetProperty("id").GetInt64());
+
+        Assert.Equal("frontpage", detail["collection_handles"]);
+        var handlesJson = Assert.IsType<string>(detail["collection_handles_json"]);
+        using var handlesDoc = JsonDocument.Parse(handlesJson);
+        Assert.Equal("frontpage", handlesDoc.RootElement[0].GetString());
+
+        var imageJson = Assert.IsType<string>(detail["image_json"]);
+        using var imageDoc = JsonDocument.Parse(imageJson);
+        Assert.Equal(21, imageDoc.RootElement.GetProperty("id").GetInt64());
     }
 
     private sealed class StubHttpMessageHandler : HttpMessageHandler

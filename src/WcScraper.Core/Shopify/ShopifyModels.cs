@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -19,13 +20,22 @@ public sealed class ShopifyProduct
     [JsonPropertyName("vendor")] public string? Vendor { get; set; }
     [JsonPropertyName("product_type")] public string? ProductType { get; set; }
     [JsonPropertyName("handle")] public string? Handle { get; set; }
+    [JsonPropertyName("created_at")] public string? CreatedAt { get; set; }
+    [JsonPropertyName("updated_at")] public string? UpdatedAt { get; set; }
+    [JsonPropertyName("published_at")] public string? PublishedAt { get; set; }
+    [JsonPropertyName("template_suffix")] public string? TemplateSuffix { get; set; }
+    [JsonPropertyName("published_scope")] public string? PublishedScope { get; set; }
     [JsonPropertyName("tags")]
     [JsonConverter(typeof(ShopifyTagsJsonConverter))]
     public List<string> Tags { get; set; } = new();
     [JsonPropertyName("status")] public string? Status { get; set; }
+    [JsonPropertyName("admin_graphql_api_id")] public string? AdminGraphqlApiId { get; set; }
+    [JsonPropertyName("metafields_global_title_tag")] public string? MetafieldsGlobalTitleTag { get; set; }
+    [JsonPropertyName("metafields_global_description_tag")] public string? MetafieldsGlobalDescriptionTag { get; set; }
     [JsonPropertyName("variants")] public List<ShopifyVariant> Variants { get; set; } = new();
     [JsonPropertyName("options")] public List<ShopifyOption> Options { get; set; } = new();
     [JsonPropertyName("images")] public List<ShopifyImage> Images { get; set; } = new();
+    [JsonPropertyName("image")] public ShopifyImage? Image { get; set; }
 
     public List<ShopifyCollection> Collections { get; set; } = new();
 }
@@ -33,17 +43,42 @@ public sealed class ShopifyProduct
 public sealed class ShopifyVariant
 {
     [JsonPropertyName("id")] public long Id { get; set; }
+    [JsonPropertyName("product_id")]
+    [JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)]
+    public long? ProductId { get; set; }
     [JsonPropertyName("title")] public string? Title { get; set; }
     [JsonPropertyName("sku")] public string? Sku { get; set; }
     [JsonPropertyName("price")] public string? Price { get; set; }
     [JsonPropertyName("compare_at_price")] public string? CompareAtPrice { get; set; }
+    [JsonPropertyName("position")]
+    [JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)]
+    public int? Position { get; set; }
+    [JsonPropertyName("fulfillment_service")] public string? FulfillmentService { get; set; }
+    [JsonPropertyName("inventory_management")] public string? InventoryManagement { get; set; }
+    [JsonPropertyName("inventory_policy")] public string? InventoryPolicy { get; set; }
+    [JsonPropertyName("inventory_item_id")]
+    [JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)]
+    public long? InventoryItemId { get; set; }
     [JsonPropertyName("inventory_quantity")] public int? InventoryQuantity { get; set; }
+    [JsonPropertyName("old_inventory_quantity")] public int? OldInventoryQuantity { get; set; }
     [JsonPropertyName("requires_shipping")] public bool? RequiresShipping { get; set; }
+    [JsonPropertyName("taxable")] public bool? Taxable { get; set; }
+    [JsonPropertyName("tax_code")] public string? TaxCode { get; set; }
+    [JsonPropertyName("barcode")] public string? Barcode { get; set; }
+    [JsonPropertyName("grams")] public int? Grams { get; set; }
     [JsonPropertyName("weight")] public double? Weight { get; set; }
     [JsonPropertyName("weight_unit")] public string? WeightUnit { get; set; }
+    [JsonPropertyName("created_at")] public string? CreatedAt { get; set; }
+    [JsonPropertyName("updated_at")] public string? UpdatedAt { get; set; }
+    [JsonPropertyName("admin_graphql_api_id")] public string? AdminGraphqlApiId { get; set; }
+    [JsonPropertyName("image_id")]
+    [JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)]
+    public long? ImageId { get; set; }
     [JsonPropertyName("option1")] public string? Option1 { get; set; }
     [JsonPropertyName("option2")] public string? Option2 { get; set; }
     [JsonPropertyName("option3")] public string? Option3 { get; set; }
+    [JsonPropertyName("presentment_prices")] public List<ShopifyVariantPresentmentPrice> PresentmentPrices { get; set; } = new();
+    [JsonPropertyName("tax_lines")] public List<ShopifyVariantTaxLine> TaxLines { get; set; } = new();
 }
 
 public sealed class ShopifyOption
@@ -55,8 +90,44 @@ public sealed class ShopifyOption
 public sealed class ShopifyImage
 {
     [JsonPropertyName("id")] public long Id { get; set; }
+    [JsonPropertyName("product_id")]
+    [JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)]
+    public long? ProductId { get; set; }
     [JsonPropertyName("src")] public string? Src { get; set; }
     [JsonPropertyName("alt")] public string? Alt { get; set; }
+    [JsonPropertyName("position")]
+    [JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)]
+    public int? Position { get; set; }
+    [JsonPropertyName("created_at")] public string? CreatedAt { get; set; }
+    [JsonPropertyName("updated_at")] public string? UpdatedAt { get; set; }
+    [JsonPropertyName("width")]
+    [JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)]
+    public int? Width { get; set; }
+    [JsonPropertyName("height")]
+    [JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)]
+    public int? Height { get; set; }
+    [JsonPropertyName("variant_ids")] public List<long> VariantIds { get; set; } = new();
+    [JsonPropertyName("admin_graphql_api_id")] public string? AdminGraphqlApiId { get; set; }
+}
+
+public sealed class ShopifyVariantPresentmentPrice
+{
+    [JsonPropertyName("price")] public ShopifyVariantPrice? Price { get; set; }
+    [JsonPropertyName("compare_at_price")] public ShopifyVariantPrice? CompareAtPrice { get; set; }
+}
+
+public sealed class ShopifyVariantPrice
+{
+    [JsonPropertyName("amount")] public string? Amount { get; set; }
+    [JsonPropertyName("currency_code")] public string? CurrencyCode { get; set; }
+}
+
+public sealed class ShopifyVariantTaxLine
+{
+    [JsonPropertyName("title")] public string? Title { get; set; }
+    [JsonPropertyName("price")] public string? Price { get; set; }
+    [JsonPropertyName("rate")] public double? Rate { get; set; }
+    [JsonPropertyName("channel_liable")] public bool? ChannelLiable { get; set; }
 }
 
 public sealed class ShopifyCollection
