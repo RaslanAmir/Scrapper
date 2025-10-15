@@ -345,6 +345,61 @@ public class ShopifyScraperTests
         Assert.Equal(2, requestCount);
     }
 
+    [Fact]
+    public async Task FetchStoreProductsAsync_FallsBackToProductTypeCategory()
+    {
+        const string restPayload = """
+        {
+          "products": [
+            {
+              "id": 24680,
+              "title": "Beauty Kit",
+              "body_html": "<p>Includes essentials</p>",
+              "product_type": "Beauty & Health",
+              "handle": "beauty-kit",
+              "variants": [
+                {
+                  "id": 13579,
+                  "title": "Default Title",
+                  "sku": "BK-1",
+                  "price": "9.99",
+                  "inventory_quantity": 3
+                }
+              ],
+              "options": [
+                {
+                  "name": "Title",
+                  "values": ["Default Title"]
+                }
+              ],
+              "images": []
+            }
+          ]
+        }
+        """;
+
+        using var handler = new StubHttpMessageHandler(request =>
+        {
+            Assert.Equal(HttpMethod.Get, request.Method);
+            Assert.EndsWith("/products.json", request.RequestUri!.AbsolutePath, StringComparison.Ordinal);
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(restPayload, Encoding.UTF8, "application/json")
+            };
+        });
+
+        using var httpClient = new HttpClient(handler);
+        var scraper = new ShopifyScraper(httpClient);
+        var settings = new ShopifySettings("https://demo.myshopify.com", "admin-token");
+
+        var storeProducts = await scraper.FetchStoreProductsAsync(settings);
+
+        var storeProduct = Assert.Single(storeProducts);
+        var category = Assert.Single(storeProduct.Categories);
+        Assert.Equal("Beauty & Health", category.Name);
+        Assert.Equal("beauty-health", category.Slug);
+    }
+
     private sealed class StubHttpMessageHandler : HttpMessageHandler
     {
         private readonly Func<HttpRequestMessage, HttpResponseMessage> _responder;

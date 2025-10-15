@@ -132,6 +132,19 @@ public static class ShopifyConverters
         var inStock = firstVariant?.InventoryQuantity is > 0;
         var hasOptions = product.Options.Count > 1 || product.Variants.Count > 1;
 
+        var categories = ConvertCollections(product.Collections).ToList();
+        if (categories.Count == 0 && !string.IsNullOrWhiteSpace(product.ProductType))
+        {
+            var fallbackSlug = ShopifySlugHelper.Slugify(product.ProductType)
+                ?? $"category-{Math.Abs(product.ProductType.GetHashCode())}";
+            categories.Add(new Category
+            {
+                Id = Math.Abs(product.ProductType.GetHashCode()),
+                Name = product.ProductType,
+                Slug = fallbackSlug
+            });
+        }
+
         return new StoreProduct
         {
             Id = ToIntId(product.Id),
@@ -150,7 +163,7 @@ public static class ShopifyConverters
             IsInStock = inStock,
             HasOptions = hasOptions,
             Tags = ConvertTags(product.Tags).ToList(),
-            Categories = ConvertCollections(product.Collections).ToList(),
+            Categories = categories,
             Images = ConvertImages(product.Images).ToList(),
             Attributes = ConvertOptions(product.Options).ToList()
         };

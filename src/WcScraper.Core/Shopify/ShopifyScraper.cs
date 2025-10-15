@@ -252,7 +252,7 @@ public sealed class ShopifyScraper : IDisposable
                 {
                     Id = index++,
                     Name = tagName,
-                    Slug = Slugify(tagName)
+                    Slug = ShopifySlugHelper.Slugify(tagName)
                 });
             }
 
@@ -302,7 +302,7 @@ public sealed class ShopifyScraper : IDisposable
                 {
                     Id = id != 0 ? unchecked((int)(id % int.MaxValue)) : Math.Abs((handle ?? title ?? Guid.NewGuid().ToString()).GetHashCode()),
                     Name = title,
-                    Slug = !string.IsNullOrWhiteSpace(handle) ? handle : Slugify(title)
+                    Slug = !string.IsNullOrWhiteSpace(handle) ? handle : ShopifySlugHelper.Slugify(title)
                 });
             }
 
@@ -324,27 +324,6 @@ public sealed class ShopifyScraper : IDisposable
             var credentials = Convert.ToBase64String(Encoding.UTF8.GetBytes($"{settings.ApiKey}:{settings.ApiSecret}"));
             request.Headers.Authorization = new AuthenticationHeaderValue("Basic", credentials);
         }
-    }
-
-    private static string? Slugify(string? value)
-    {
-        if (string.IsNullOrWhiteSpace(value)) return null;
-        var span = value.Trim().ToLowerInvariant().AsSpan();
-        var builder = new StringBuilder(span.Length);
-        foreach (var ch in span)
-        {
-            if (char.IsLetterOrDigit(ch))
-            {
-                builder.Append(ch);
-            }
-            else if (char.IsWhiteSpace(ch) || ch == '-' || ch == '_')
-            {
-                if (builder.Length > 0 && builder[^1] != '-') builder.Append('-');
-            }
-        }
-
-        var slug = builder.ToString().Trim('-');
-        return string.IsNullOrWhiteSpace(slug) ? null : slug;
     }
 
     private async Task EnrichCollectionsFromGraphAsync(
