@@ -1,3 +1,4 @@
+using System;
 using System.Net;
 using System.Net.Http;
 using System.Text;
@@ -398,6 +399,46 @@ public class ShopifyScraperTests
         var category = Assert.Single(storeProduct.Categories);
         Assert.Equal("Beauty & Health", category.Name);
         Assert.Equal("beauty-health", category.Slug);
+    }
+
+    [Fact]
+    public async Task FetchCollectionsAsync_WithoutCredentials_ReturnsEmptyList()
+    {
+        var invoked = false;
+        using var handler = new StubHttpMessageHandler(request =>
+        {
+            invoked = true;
+            throw new InvalidOperationException("HTTP request should not be sent when credentials are missing.");
+        });
+
+        using var httpClient = new HttpClient(handler);
+        var scraper = new ShopifyScraper(httpClient);
+        var settings = new ShopifySettings("https://example.myshopify.com");
+
+        var collections = await scraper.FetchCollectionsAsync(settings);
+
+        Assert.Empty(collections);
+        Assert.False(invoked);
+    }
+
+    [Fact]
+    public async Task FetchProductTagsAsync_WithoutCredentials_ReturnsEmptyList()
+    {
+        var invoked = false;
+        using var handler = new StubHttpMessageHandler(request =>
+        {
+            invoked = true;
+            throw new InvalidOperationException("HTTP request should not be sent when credentials are missing.");
+        });
+
+        using var httpClient = new HttpClient(handler);
+        var scraper = new ShopifyScraper(httpClient);
+        var settings = new ShopifySettings("https://example.myshopify.com");
+
+        var tags = await scraper.FetchProductTagsAsync(settings);
+
+        Assert.Empty(tags);
+        Assert.False(invoked);
     }
 
     private sealed class StubHttpMessageHandler : HttpMessageHandler

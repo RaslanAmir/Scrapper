@@ -17,8 +17,8 @@ namespace WcScraper.Wpf.ViewModels;
 public sealed class MainViewModel : INotifyPropertyChanged
 {
     private readonly IDialogService _dialogs;
-    private readonly WooScraper _wooScraper = new();
-    private readonly ShopifyScraper _shopifyScraper = new();
+    private readonly WooScraper _wooScraper;
+    private readonly ShopifyScraper _shopifyScraper;
     private bool _isRunning;
     private string _storeUrl = "";
     private string _outputFolder = Path.GetFullPath("output");
@@ -36,8 +36,15 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private string _shopifyApiSecret = "";
 
     public MainViewModel(IDialogService dialogs)
+        : this(dialogs, new WooScraper(), new ShopifyScraper())
+    {
+    }
+
+    internal MainViewModel(IDialogService dialogs, WooScraper wooScraper, ShopifyScraper shopifyScraper)
     {
         _dialogs = dialogs;
+        _wooScraper = wooScraper;
+        _shopifyScraper = shopifyScraper;
         BrowseCommand = new RelayCommand(OnBrowse);
         RunCommand = new RelayCommand(async () => await OnRunAsync(), () => !IsRunning);
     }
@@ -140,8 +147,22 @@ public sealed class MainViewModel : INotifyPropertyChanged
             else
             {
                 var settings = BuildShopifySettings(baseUrl);
-                var collections = await _shopifyScraper.FetchCollectionsAsync(settings, logger);
-                var tags = await _shopifyScraper.FetchProductTagsAsync(settings, logger);
+                IReadOnlyList<TermItem> collections = Array.Empty<TermItem>();
+                IReadOnlyList<TermItem> tags = Array.Empty<TermItem>();
+
+                var hasRestCredentials = settings.HasAdminAccess || settings.HasPrivateAppCredentials;
+                if (hasRestCredentials)
+                {
+                    collections = await _shopifyScraper.FetchCollectionsAsync(settings, logger);
+                    tags = await _shopifyScraper.FetchProductTagsAsync(settings, logger);
+                }
+                else
+                {
+                    var message = settings.HasStorefrontAccess
+                        ? "Shopify collections and tags require admin or private app credentials. Skipping filter fetch."
+                        : "Provide Shopify admin or private app credentials to load collections and tags. Skipping filter fetch.";
+                    logger.Report(message);
+                }
                 App.Current?.Dispatcher.Invoke(() =>
                 {
                     CategoryChoices.Clear();
