@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
@@ -481,7 +482,12 @@ public sealed class WooScraper : IDisposable
             {
                 var entry = product.MetaData.FirstOrDefault(m =>
                     string.Equals(m.Key, key, StringComparison.OrdinalIgnoreCase));
-                var value = Normalize(entry?.ValueAsString());
+                if (entry is null)
+                {
+                    continue;
+                }
+
+                var value = ExtractMetaValue(entry, key);
                 if (value is not null)
                 {
                     return value;
@@ -491,16 +497,155 @@ public sealed class WooScraper : IDisposable
             return null;
         }
 
+        string? ExtractMetaValue(StoreMetaData entry, string key)
+        {
+            var raw = entry.ValueAsString();
+            if (string.IsNullOrWhiteSpace(raw))
+            {
+                return null;
+            }
+
+            var trimmed = raw.Trim();
+            if (trimmed.StartsWith("{") && trimmed.EndsWith("}"))
+            {
+                if (TryExtractFromAioseoJson(trimmed, key, out var fromJson))
+                {
+                    var normalizedJson = Normalize(fromJson);
+                    if (normalizedJson is not null)
+                    {
+                        return normalizedJson;
+                    }
+                }
+            }
+
+            return Normalize(raw);
+        }
+
+        bool TryExtractFromAioseoJson(string json, string key, out string? value)
+        {
+            try
+            {
+                using var doc = JsonDocument.Parse(json);
+                if (doc.RootElement.ValueKind != JsonValueKind.Object)
+                {
+                    value = null;
+                    return false;
+                }
+
+                var fields = GetAioseoFieldCandidates(key);
+                foreach (var field in fields)
+                {
+                    if (!doc.RootElement.TryGetProperty(field, out var prop))
+                    {
+                        continue;
+                    }
+
+                    var extracted = ExtractJsonString(prop);
+                    if (extracted is not null)
+                    {
+                        value = extracted;
+                        return true;
+                    }
+                }
+
+                value = ExtractJsonString(doc.RootElement);
+                return value is not null;
+            }
+            catch (JsonException)
+            {
+                value = null;
+                return false;
+            }
+        }
+
+        static IEnumerable<string> GetAioseoFieldCandidates(string key)
+        {
+            if (key.Contains("title", StringComparison.OrdinalIgnoreCase))
+            {
+                yield return "title";
+            }
+
+            if (key.Contains("description", StringComparison.OrdinalIgnoreCase))
+            {
+                yield return "description";
+            }
+
+            if (key.Contains("keyword", StringComparison.OrdinalIgnoreCase))
+            {
+                yield return "keywords";
+                yield return "keyword";
+                yield return "focus";
+                yield return "focus_keyphrase";
+                yield return "focusKeyphrase";
+            }
+        }
+
+        static string? ExtractJsonString(JsonElement element)
+        {
+            switch (element.ValueKind)
+            {
+                case JsonValueKind.String:
+                    return element.GetString();
+                case JsonValueKind.Number:
+                case JsonValueKind.True:
+                case JsonValueKind.False:
+                    return element.ToString();
+                case JsonValueKind.Array:
+                {
+                    var items = element
+                        .EnumerateArray()
+                        .Select(ExtractJsonString)
+                        .Where(v => !string.IsNullOrWhiteSpace(v))
+                        .ToList();
+                    return items.Count == 0 ? null : string.Join(", ", items);
+                }
+                case JsonValueKind.Object:
+                {
+                    if (element.TryGetProperty("value", out var valueProperty))
+                    {
+                        var fromValue = ExtractJsonString(valueProperty);
+                        if (!string.IsNullOrWhiteSpace(fromValue))
+                        {
+                            return fromValue;
+                        }
+                    }
+
+                    foreach (var property in element.EnumerateObject())
+                    {
+                        var nested = ExtractJsonString(property.Value);
+                        if (!string.IsNullOrWhiteSpace(nested))
+                        {
+                            return nested;
+                        }
+                    }
+
+                    return null;
+                }
+                default:
+                    return null;
+            }
+        }
+
         var metaTitle = FirstNonEmpty(
             product.MetaTitle,
-            ExtractFromMeta("_yoast_wpseo_title", "_rank_math_title", "rank_math_title"),
+            ExtractFromMeta(
+                "_yoast_wpseo_title",
+                "_rank_math_title",
+                "rank_math_title",
+                "_aioseo_title",
+                "_aioseop_title"),
             product.YoastHead?.Title,
             product.YoastHead?.OgTitle,
             product.YoastHead?.TwitterTitle);
 
         var metaDescription = FirstNonEmpty(
             product.MetaDescription,
-            ExtractFromMeta("_yoast_wpseo_metadesc", "_rank_math_description", "rank_math_description"),
+            ExtractFromMeta(
+                "_yoast_wpseo_metadesc",
+                "_rank_math_description",
+                "rank_math_description",
+                "_aioseo_description",
+                "_aioseop_description"),
             product.YoastHead?.Description,
             product.YoastHead?.OgDescription,
             product.YoastHead?.TwitterDescription,
@@ -514,7 +659,11 @@ public sealed class WooScraper : IDisposable
                 "_yoast_wpseo_focuskw",
                 "_yoast_wpseo_metakeywords",
                 "rank_math_focus_keyword",
-                "_rank_math_focus_keyword"),
+                "_rank_math_focus_keyword",
+                "_aioseo_keywords",
+                "_aioseo_focus_keyword",
+                "_aioseop_keywords",
+                "_aioseop_focuskw"),
             product.YoastHead?.Keywords);
 
         if (metaKeywords is null && product.Tags is { Count: > 0 })

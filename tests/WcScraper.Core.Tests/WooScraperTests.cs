@@ -72,6 +72,60 @@ public sealed class WooScraperTests
         Assert.Equal("Bravo Tag", second.MetaKeywords);
     }
 
+    [Fact]
+    public async Task FetchStoreProductsAsync_PopulatesSeoMetadataFromAllInOneSeo()
+    {
+        const string payload = """
+        [
+          {
+            "id": 10,
+            "name": "Product AIO",
+            "description": "<p>Description</p>",
+            "short_description": "<p>Short</p>",
+            "meta_data": [
+              {
+                "id": 201,
+                "key": "_aioseo_title",
+                "value": { "title": "All in One Title", "default": "Default Title" }
+              },
+              {
+                "id": 202,
+                "key": "_aioseo_description",
+                "value": { "description": "All in One Description" }
+              },
+              {
+                "id": 203,
+                "key": "_aioseo_keywords",
+                "value": { "keywords": ["First Keyword", "Second Keyword"] }
+              },
+              {
+                "id": 204,
+                "key": "_aioseo_focus_keyword",
+                "value": "Unused Focus"
+              }
+            ],
+            "tags": [],
+            "images": []
+          }
+        ]
+        """;
+
+        using var handler = new StubHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(payload, Encoding.UTF8, "application/json")
+        });
+        using var client = new HttpClient(handler);
+        var scraper = new WooScraper(client, allowLegacyTls: false);
+
+        var products = await scraper.FetchStoreProductsAsync("https://example.com");
+
+        Assert.Single(products);
+        var product = products[0];
+        Assert.Equal("All in One Title", product.MetaTitle);
+        Assert.Equal("All in One Description", product.MetaDescription);
+        Assert.Equal("First Keyword, Second Keyword", product.MetaKeywords);
+    }
+
     private sealed class StubHttpMessageHandler : HttpMessageHandler
     {
         private readonly Func<HttpRequestMessage, HttpResponseMessage> _responder;
