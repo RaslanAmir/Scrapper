@@ -22,6 +22,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private readonly WooScraper _wooScraper;
     private readonly ShopifyScraper _shopifyScraper;
     private readonly HttpClient _httpClient;
+    private readonly WooProvisioningService _wooProvisioningService;
     private bool _isRunning;
     private string _storeUrl = "";
     private string _outputFolder = Path.GetFullPath("output");
@@ -43,6 +44,10 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private string _shopifyApiSecret = "";
     private string _wordPressUsername = "";
     private string _wordPressApplicationPassword = "";
+    private string _targetStoreUrl = "";
+    private string _targetConsumerKey = "";
+    private string _targetConsumerSecret = "";
+    private ProvisioningContext? _lastProvisioningContext;
 
     public MainViewModel(IDialogService dialogs)
         : this(dialogs, new WooScraper(), new ShopifyScraper(), new HttpClient())
@@ -60,6 +65,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         _wooScraper = wooScraper;
         _shopifyScraper = shopifyScraper;
         _httpClient = httpClient;
+        _wooProvisioningService = new WooProvisioningService();
         BrowseCommand = new RelayCommand(OnBrowse);
         RunCommand = new RelayCommand(async () => await OnRunAsync(), () => !IsRunning);
         SelectAllCategoriesCommand = new RelayCommand(() => SetSelection(CategoryChoices, true));
@@ -67,6 +73,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         SelectAllTagsCommand = new RelayCommand(() => SetSelection(TagChoices, true));
         ClearTagsCommand = new RelayCommand(() => SetSelection(TagChoices, false));
         ExportCollectionsCommand = new RelayCommand(OnExportCollections);
+        ReplicateCommand = new RelayCommand(async () => await OnReplicateStoreAsync(), () => !IsRunning && CanReplicate);
     }
 
     // XAML-friendly default constructor + Dialogs setter
@@ -85,7 +92,17 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public bool ExportPluginsJsonl { get => _expPluginsJsonl; set { _expPluginsJsonl = value; OnPropertyChanged(); } }
     public bool ExportThemesCsv { get => _expThemesCsv; set { _expThemesCsv = value; OnPropertyChanged(); } }
     public bool ExportThemesJsonl { get => _expThemesJsonl; set { _expThemesJsonl = value; OnPropertyChanged(); } }
-    public bool IsRunning { get => _isRunning; private set { _isRunning = value; OnPropertyChanged(); (RunCommand as RelayCommand)?.RaiseCanExecuteChanged(); } }
+    public bool IsRunning
+    {
+        get => _isRunning;
+        private set
+        {
+            _isRunning = value;
+            OnPropertyChanged();
+            RunCommand.RaiseCanExecuteChanged();
+            ReplicateCommand.RaiseCanExecuteChanged();
+        }
+    }
 
     public PlatformMode SelectedPlatform
     {
@@ -137,6 +154,10 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public string ShopifyApiSecret { get => _shopifyApiSecret; set { _shopifyApiSecret = value; OnPropertyChanged(); } }
     public string WordPressUsername { get => _wordPressUsername; set { _wordPressUsername = value; OnPropertyChanged(); } }
     public string WordPressApplicationPassword { get => _wordPressApplicationPassword; set { _wordPressApplicationPassword = value; OnPropertyChanged(); } }
+    public string TargetStoreUrl { get => _targetStoreUrl; set { _targetStoreUrl = value; OnPropertyChanged(); } }
+    public string TargetConsumerKey { get => _targetConsumerKey; set { _targetConsumerKey = value; OnPropertyChanged(); } }
+    public string TargetConsumerSecret { get => _targetConsumerSecret; set { _targetConsumerSecret = value; OnPropertyChanged(); } }
+    public bool CanReplicate => _lastProvisioningContext is { Products.Count: > 0 };
 
     // Selectable terms for filters
     public ObservableCollection<SelectableTerm> CategoryChoices { get; } = new();
@@ -151,6 +172,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public RelayCommand SelectAllTagsCommand { get; }
     public RelayCommand ClearTagsCommand { get; }
     public RelayCommand ExportCollectionsCommand { get; }
+    public RelayCommand ReplicateCommand { get; }
 
     private void OnBrowse()
     {
@@ -279,6 +301,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
             Append("Please enter a store URL (e.g., https://example.com).");
             return;
         }
+
+        ResetProvisioningContext();
 
         try
         {
@@ -611,6 +635,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 }
             }
 
+            SetProvisioningContext(prods);
+
             Append("All done.");
         }
         catch (Exception ex)
@@ -625,6 +651,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
     private async Task<string?> DownloadProductImagesAsync(StoreProduct product, string imagesFolder, IProgress<string>? logger)
     {
+        product.LocalImageFilePaths.Clear();
         if (product.Images is null || product.Images.Count == 0)
         {
             return null;
@@ -632,6 +659,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
         var baseName = SanitizeForPath(product.Name ?? product.Slug ?? $"product-{product.Id}");
         var relativePaths = new List<string>();
+        var absolutePaths = new List<string>();
         var index = 1;
 
         foreach (var image in product.Images)
@@ -664,6 +692,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 var bytes = await _httpClient.GetByteArrayAsync(uri);
                 await File.WriteAllBytesAsync(absolutePath, bytes);
                 relativePaths.Add(relativePath);
+                absolutePaths.Add(absolutePath);
                 index++;
             }
             catch (Exception ex)
@@ -672,12 +701,32 @@ public sealed class MainViewModel : INotifyPropertyChanged
             }
         }
 
+        if (absolutePaths.Count > 0)
+        {
+            product.LocalImageFilePaths.Clear();
+            product.LocalImageFilePaths.AddRange(absolutePaths);
+        }
+
         return relativePaths.Count > 0 ? string.Join(", ", relativePaths) : null;
     }
 
     private void Append(string message)
     {
         App.Current?.Dispatcher.Invoke(() => Logs.Add(message));
+    }
+
+    private void SetProvisioningContext(List<StoreProduct> products)
+    {
+        _lastProvisioningContext = new ProvisioningContext(products);
+        OnPropertyChanged(nameof(CanReplicate));
+        ReplicateCommand.RaiseCanExecuteChanged();
+    }
+
+    private void ResetProvisioningContext()
+    {
+        _lastProvisioningContext = null;
+        OnPropertyChanged(nameof(CanReplicate));
+        ReplicateCommand.RaiseCanExecuteChanged();
     }
 
     private void ClearFilters()
@@ -695,6 +744,48 @@ public sealed class MainViewModel : INotifyPropertyChanged
         {
             term.IsSelected = isSelected;
         }
+    }
+
+    private async Task OnReplicateStoreAsync()
+    {
+        if (_lastProvisioningContext is null || _lastProvisioningContext.Products.Count == 0)
+        {
+            Append("Run an export before provisioning.");
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(TargetStoreUrl) || string.IsNullOrWhiteSpace(TargetConsumerKey) || string.IsNullOrWhiteSpace(TargetConsumerSecret))
+        {
+            Append("Enter the target store URL, consumer key, and consumer secret before provisioning.");
+            return;
+        }
+
+        try
+        {
+            IsRunning = true;
+            IProgress<string> logger = new Progress<string>(Append);
+            var settings = new WooProvisioningSettings(TargetStoreUrl, TargetConsumerKey, TargetConsumerSecret);
+            Append($"Provisioning {_lastProvisioningContext.Products.Count} products to {settings.BaseUrl}…");
+            await _wooProvisioningService.ProvisionAsync(settings, _lastProvisioningContext.Products, logger);
+        }
+        catch (Exception ex)
+        {
+            Append($"Provisioning failed: {ex.Message}");
+        }
+        finally
+        {
+            IsRunning = false;
+        }
+    }
+
+    private sealed class ProvisioningContext
+    {
+        public ProvisioningContext(List<StoreProduct> products)
+        {
+            Products = products;
+        }
+
+        public List<StoreProduct> Products { get; }
     }
 
     private ShopifySettings BuildShopifySettings(string baseUrl)

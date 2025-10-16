@@ -38,6 +38,7 @@ public sealed class StoreProduct
     [JsonPropertyName("tags")] public List<ProductTag> Tags { get; set; } = new();
     [JsonPropertyName("images")] public List<ProductImage> Images { get; set; } = new();
     public string? ImageFilePaths { get; set; }
+    [JsonIgnore] public List<string> LocalImageFilePaths { get; } = new();
 }
 
 public sealed class PriceInfo
