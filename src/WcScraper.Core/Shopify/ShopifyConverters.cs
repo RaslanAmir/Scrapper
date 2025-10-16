@@ -3,6 +3,7 @@ using System.Globalization;
 using System.Linq;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using WcScraper.Core;
 
 namespace WcScraper.Core.Shopify;
 
@@ -199,7 +200,7 @@ public static class ShopifyConverters
         return materialized.Count == 0 ? null : JsonSerializer.Serialize(materialized, DetailSerializerOptions);
     }
 
-    public static Dictionary<string, object?> ToShopifyDetailDictionary(ShopifyProduct product)
+    public static Dictionary<string, object?> ToShopifyDetailDictionary(ShopifyProduct product, StoreProduct? storeProduct = null)
     {
         var tagList = product.Tags ?? new List<string>();
         var collections = product.Collections ?? new List<ShopifyCollection>();
@@ -210,6 +211,10 @@ public static class ShopifyConverters
             .Where(handle => handle.Length > 0)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
+
+        var metaTitle = storeProduct?.MetaTitle ?? product.MetafieldsGlobalTitleTag;
+        var metaDescription = storeProduct?.MetaDescription ?? product.MetafieldsGlobalDescriptionTag;
+        var metaKeywords = storeProduct?.MetaKeywords;
 
         var dict = new Dictionary<string, object?>
         {
@@ -230,6 +235,9 @@ public static class ShopifyConverters
             ["admin_graphql_api_id"] = product.AdminGraphqlApiId,
             ["metafields_global_title_tag"] = product.MetafieldsGlobalTitleTag,
             ["metafields_global_description_tag"] = product.MetafieldsGlobalDescriptionTag,
+            ["meta_title"] = metaTitle,
+            ["meta_description"] = metaDescription,
+            ["meta_keywords"] = metaKeywords,
             ["options_json"] = SerializeIfAny(product.Options),
             ["variants_json"] = SerializeIfAny(product.Variants),
             ["images_json"] = SerializeIfAny(product.Images),
