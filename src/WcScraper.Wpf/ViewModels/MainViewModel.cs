@@ -273,7 +273,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
             IsRunning = true;
             var baseOutputFolder = ResolveBaseOutputFolder();
             Directory.CreateDirectory(baseOutputFolder);
-            var logger = new Progress<string>(Append);
+            IProgress<string> logger = new Progress<string>(Append);
 
             var storeId = BuildStoreIdentifier(targetUrl);
             var storeOutputFolder = Path.Combine(baseOutputFolder, storeId);
