@@ -99,7 +99,7 @@ public class MainViewModelTests
                 var ctor = typeof(MainViewModel).GetConstructor(
                     BindingFlags.NonPublic | BindingFlags.Instance,
                     binder: null,
-                    new[] { typeof(IDialogService), typeof(WooScraper), typeof(ShopifyScraper) },
+                    new[] { typeof(IDialogService), typeof(WooScraper), typeof(ShopifyScraper), typeof(HttpClient) },
                     modifiers: null);
                 Assert.NotNull(ctor);
 
@@ -107,7 +107,8 @@ public class MainViewModelTests
                 {
                     new StubDialogService(),
                     wooScraper,
-                    shopifyScraper
+                    shopifyScraper,
+                    httpClient
                 });
                 viewModel.SelectedPlatform = PlatformMode.Shopify;
 
@@ -163,11 +164,12 @@ public class MainViewModelTests
     {
         using var wooScraper = new WooScraper();
         using var shopifyScraper = new ShopifyScraper();
+        using var httpClient = new HttpClient();
 
         var ctor = typeof(MainViewModel).GetConstructor(
             BindingFlags.NonPublic | BindingFlags.Instance,
             binder: null,
-            new[] { typeof(IDialogService), typeof(WooScraper), typeof(ShopifyScraper) },
+            new[] { typeof(IDialogService), typeof(WooScraper), typeof(ShopifyScraper), typeof(HttpClient) },
             modifiers: null);
         Assert.NotNull(ctor);
 
@@ -175,7 +177,8 @@ public class MainViewModelTests
         {
             new StubDialogService(),
             wooScraper,
-            shopifyScraper
+            shopifyScraper,
+            httpClient
         });
 
         viewModel.CategoryChoices.Add(new SelectableTerm(new TermItem { Id = 1, Name = "One" }));
@@ -194,11 +197,12 @@ public class MainViewModelTests
     {
         using var wooScraper = new WooScraper();
         using var shopifyScraper = new ShopifyScraper();
+        using var httpClient = new HttpClient();
 
         var ctor = typeof(MainViewModel).GetConstructor(
             BindingFlags.NonPublic | BindingFlags.Instance,
             binder: null,
-            new[] { typeof(IDialogService), typeof(WooScraper), typeof(ShopifyScraper) },
+            new[] { typeof(IDialogService), typeof(WooScraper), typeof(ShopifyScraper), typeof(HttpClient) },
             modifiers: null);
         Assert.NotNull(ctor);
 
@@ -206,7 +210,8 @@ public class MainViewModelTests
         {
             new StubDialogService(),
             wooScraper,
-            shopifyScraper
+            shopifyScraper,
+            httpClient
         });
 
         viewModel.TagChoices.Add(new SelectableTerm(new TermItem { Id = 1, Name = "Alpha" }) { IsSelected = true });
@@ -224,11 +229,12 @@ public class MainViewModelTests
     {
         using var wooScraper = new WooScraper();
         using var shopifyScraper = new ShopifyScraper();
+        using var httpClient = new HttpClient();
 
         var ctor = typeof(MainViewModel).GetConstructor(
             BindingFlags.NonPublic | BindingFlags.Instance,
             binder: null,
-            new[] { typeof(IDialogService), typeof(WooScraper), typeof(ShopifyScraper) },
+            new[] { typeof(IDialogService), typeof(WooScraper), typeof(ShopifyScraper), typeof(HttpClient) },
             modifiers: null);
         Assert.NotNull(ctor);
 
@@ -236,7 +242,8 @@ public class MainViewModelTests
         {
             new StubDialogService(),
             wooScraper,
-            shopifyScraper
+            shopifyScraper,
+            httpClient
         });
 
         var tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
@@ -417,7 +424,8 @@ public class MainViewModelTests
               { "id": 2, "name": "Tag", "slug": "tag" }
             ],
             "images": [
-              { "id": 10, "src": "https://example.com/img.jpg", "alt": "Img" }
+              { "id": 10, "src": "https://example.com/assets/sample-one.png", "alt": "Front" },
+              { "id": 11, "src": "https://example.com/assets/sample-two.jpg?size=large", "alt": "Back" }
             ]
           }
         ]
@@ -451,6 +459,14 @@ public class MainViewModelTests
                 };
             }
 
+            if (path.EndsWith("sample-one.png", StringComparison.Ordinal) || path.EndsWith("sample-two.jpg", StringComparison.Ordinal))
+            {
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new ByteArrayContent(new byte[] { 1, 2, 3, 4 })
+                };
+            }
+
             throw new InvalidOperationException($"Unexpected request: {request.RequestUri}");
         });
 
@@ -461,7 +477,7 @@ public class MainViewModelTests
         var ctor = typeof(MainViewModel).GetConstructor(
             BindingFlags.NonPublic | BindingFlags.Instance,
             binder: null,
-            new[] { typeof(IDialogService), typeof(WooScraper), typeof(ShopifyScraper) },
+            new[] { typeof(IDialogService), typeof(WooScraper), typeof(ShopifyScraper), typeof(HttpClient) },
             modifiers: null);
         Assert.NotNull(ctor);
 
@@ -469,7 +485,8 @@ public class MainViewModelTests
         {
             new StubDialogService(),
             wooScraper,
-            shopifyScraper
+            shopifyScraper,
+            wooHttp
         });
 
         var tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
@@ -514,6 +531,34 @@ public class MainViewModelTests
             Assert.Single(productsJsonl);
             Assert.Single(shopifyCsv);
             Assert.Single(wooCsv);
+
+            var imagesFolder = Path.Combine(storeFolder, "images");
+            Assert.True(Directory.Exists(imagesFolder));
+            var imageFiles = Directory.GetFiles(imagesFolder)
+                .Select(Path.GetFileName)
+                .OrderBy(name => name, StringComparer.Ordinal)
+                .ToList();
+            Assert.Equal(new[] { "Sample-1.png", "Sample-2.jpg" }, imageFiles);
+
+            var jsonLines = File.ReadAllLines(productsJsonl[0]);
+            Assert.Single(jsonLines);
+            using (var doc = JsonDocument.Parse(jsonLines[0]))
+            {
+                Assert.True(doc.RootElement.TryGetProperty("image_file_paths", out var pathProp));
+                Assert.Equal("images/Sample-1.png, images/Sample-2.jpg", pathProp.GetString());
+            }
+
+            var csvLines = File.ReadAllLines(productsCsv[0]);
+            Assert.Contains("image_file_paths", csvLines[0]);
+            Assert.Contains("images/Sample-1.png, images/Sample-2.jpg", csvLines[1]);
+
+            var shopifyCsvText = File.ReadAllText(shopifyCsv[0]);
+            Assert.Contains("Image Src Local", shopifyCsvText);
+            Assert.Contains("images/Sample-1.png, images/Sample-2.jpg", shopifyCsvText);
+
+            var wooCsvText = File.ReadAllText(wooCsv[0]);
+            Assert.Contains("Image File Paths", wooCsvText);
+            Assert.Contains("images/Sample-1.png, images/Sample-2.jpg", wooCsvText);
 
             var timestamps = new HashSet<string>(StringComparer.Ordinal);
 
