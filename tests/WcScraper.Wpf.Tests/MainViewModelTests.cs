@@ -245,6 +245,8 @@ public class MainViewModelTests
         try
         {
             viewModel.OutputFolder = tempDir;
+            viewModel.SelectedPlatform = PlatformMode.Shopify;
+            viewModel.ShopifyStoreUrl = "https://example.myshopify.com";
             const string collectionJson = """
             {
               "id": 1001,
@@ -286,8 +288,17 @@ public class MainViewModelTests
 
             viewModel.ExportCollectionsCommand.Execute(null);
 
-            var collectionsPath = Path.Combine(tempDir, "collections.xlsx");
-            Assert.True(File.Exists(collectionsPath));
+            var storeIdMethod = typeof(MainViewModel)
+                .GetMethod("BuildStoreIdentifier", BindingFlags.NonPublic | BindingFlags.Static);
+            Assert.NotNull(storeIdMethod);
+
+            var storeId = (string)storeIdMethod!.Invoke(null, new object[] { viewModel.ShopifyStoreUrl })!;
+            var storeFolder = Path.Combine(tempDir, storeId);
+            Assert.True(Directory.Exists(storeFolder));
+
+            var collectionsFiles = Directory.GetFiles(storeFolder, $"{storeId}_*_collections.xlsx");
+            Assert.Single(collectionsFiles);
+            var collectionsPath = collectionsFiles[0];
 
             using (var workbook = new XLWorkbook(collectionsPath))
             {
@@ -356,8 +367,9 @@ public class MainViewModelTests
                 Assert.Equal("Blog", worksheet.Cell(3, 6).GetString());
             }
 
-            var tagsPath = Path.Combine(tempDir, "tags.xlsx");
-            Assert.True(File.Exists(tagsPath));
+            var tagsFiles = Directory.GetFiles(storeFolder, $"{storeId}_*_tags.xlsx");
+            Assert.Single(tagsFiles);
+            var tagsPath = tagsFiles[0];
 
             using var tagsWorkbook = new XLWorkbook(tagsPath);
             var tagsWorksheet = tagsWorkbook.Worksheet(1);
@@ -366,6 +378,166 @@ public class MainViewModelTests
             Assert.Equal(2, lastTagRow!.RowNumber());
             Assert.Equal("Featured", tagsWorksheet.Cell(2, 2).GetString());
             Assert.Equal("featured", tagsWorksheet.Cell(2, 3).GetString());
+        }
+        finally
+        {
+            Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task OnRunAsync_WooCommerce_WritesFilesToStoreFolder()
+    {
+        const string productResponse = """
+        [
+          {
+            "id": 101,
+            "name": "Sample",
+            "slug": "sample",
+            "permalink": "https://example.com/store/product/sample",
+            "sku": "SKU-1",
+            "type": "simple",
+            "meta_title": "Sample Title",
+            "meta_description": "Sample Description",
+            "meta_keywords": "sample,keywords",
+            "prices": {
+              "currency_code": "USD",
+              "price": "19.99",
+              "regular_price": "19.99"
+            },
+            "is_in_stock": true,
+            "stock_status": "instock",
+            "average_rating": 4.5,
+            "review_count": 3,
+            "has_options": false,
+            "categories": [
+              { "id": 1, "name": "Cat", "slug": "cat" }
+            ],
+            "tags": [
+              { "id": 2, "name": "Tag", "slug": "tag" }
+            ],
+            "images": [
+              { "id": 10, "src": "https://example.com/img.jpg", "alt": "Img" }
+            ]
+          }
+        ]
+        """;
+
+        using var wooHandler = new StubHttpMessageHandler(request =>
+        {
+            Assert.Equal(HttpMethod.Get, request.Method);
+            var path = request.RequestUri!.AbsolutePath;
+            if (path.EndsWith("/wp-json/wc/store/v1/products/categories", StringComparison.Ordinal))
+            {
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent("[]", Encoding.UTF8, "application/json")
+                };
+            }
+
+            if (path.EndsWith("/wp-json/wc/store/v1/products/tags", StringComparison.Ordinal))
+            {
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent("[]", Encoding.UTF8, "application/json")
+                };
+            }
+
+            if (path.EndsWith("/wp-json/wc/store/v1/products", StringComparison.Ordinal))
+            {
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(productResponse, Encoding.UTF8, "application/json")
+                };
+            }
+
+            throw new InvalidOperationException($"Unexpected request: {request.RequestUri}");
+        });
+
+        using var wooHttp = new HttpClient(wooHandler);
+        using var wooScraper = new WooScraper(wooHttp);
+        using var shopifyScraper = new ShopifyScraper();
+
+        var ctor = typeof(MainViewModel).GetConstructor(
+            BindingFlags.NonPublic | BindingFlags.Instance,
+            binder: null,
+            new[] { typeof(IDialogService), typeof(WooScraper), typeof(ShopifyScraper) },
+            modifiers: null);
+        Assert.NotNull(ctor);
+
+        var viewModel = (MainViewModel)ctor!.Invoke(new object[]
+        {
+            new StubDialogService(),
+            wooScraper,
+            shopifyScraper
+        });
+
+        var tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+
+        try
+        {
+            viewModel.OutputFolder = tempDir;
+            viewModel.StoreUrl = "https://example.com/store";
+            viewModel.SelectedPlatform = PlatformMode.WooCommerce;
+            viewModel.ExportCsv = true;
+            viewModel.ExportJsonl = true;
+            viewModel.ExportShopify = true;
+            viewModel.ExportWoo = true;
+            viewModel.ExportReviews = false;
+            viewModel.ExportXlsx = false;
+
+            var onRun = typeof(MainViewModel)
+                .GetMethod("OnRunAsync", BindingFlags.NonPublic | BindingFlags.Instance);
+            Assert.NotNull(onRun);
+
+            var task = (Task)onRun!.Invoke(viewModel, Array.Empty<object>())!;
+            await task;
+
+            var storeIdMethod = typeof(MainViewModel)
+                .GetMethod("BuildStoreIdentifier", BindingFlags.NonPublic | BindingFlags.Static);
+            Assert.NotNull(storeIdMethod);
+
+            var storeId = (string)storeIdMethod!.Invoke(null, new object[] { viewModel.StoreUrl })!;
+            var storeFolder = Path.Combine(tempDir, storeId);
+            Assert.True(Directory.Exists(storeFolder));
+
+            var topLevelFiles = Directory.GetFiles(tempDir, "*", SearchOption.TopDirectoryOnly);
+            Assert.DoesNotContain(topLevelFiles, f => Path.GetFileName(f).StartsWith(storeId, StringComparison.Ordinal));
+
+            var productsCsv = Directory.GetFiles(storeFolder, $"{storeId}_*_products.csv");
+            var productsJsonl = Directory.GetFiles(storeFolder, $"{storeId}_*_products.jsonl");
+            var shopifyCsv = Directory.GetFiles(storeFolder, $"{storeId}_*_shopify_products.csv");
+            var wooCsv = Directory.GetFiles(storeFolder, $"{storeId}_*_woocommerce_products.csv");
+
+            Assert.Single(productsCsv);
+            Assert.Single(productsJsonl);
+            Assert.Single(shopifyCsv);
+            Assert.Single(wooCsv);
+
+            var timestamps = new HashSet<string>(StringComparer.Ordinal);
+
+            static string ExtractTimestamp(string fileName, string storeId, string suffix)
+            {
+                var prefix = storeId + "_";
+                var start = prefix.Length;
+                var index = fileName.IndexOf(suffix, start, StringComparison.Ordinal);
+                Assert.True(index > start, $"Suffix '{suffix}' not found in '{fileName}'");
+                return fileName[start..index];
+            }
+
+            void CaptureTimestamp(string filePath, string suffix)
+            {
+                var fileName = Path.GetFileName(filePath);
+                timestamps.Add(ExtractTimestamp(fileName, storeId, suffix));
+            }
+
+            CaptureTimestamp(productsCsv[0], "_products");
+            CaptureTimestamp(productsJsonl[0], "_products");
+            CaptureTimestamp(shopifyCsv[0], "_shopify_products");
+            CaptureTimestamp(wooCsv[0], "_woocommerce_products");
+
+            Assert.Single(timestamps);
         }
         finally
         {
