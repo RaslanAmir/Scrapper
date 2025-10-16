@@ -1418,7 +1418,7 @@ public sealed class WooScraper : IDisposable
             return list;
         }
 
-        var rowRegex = new Regex("<tr[^>]*class=\"(?<class>[^\"]*plugin[^\"]*)\"(?<attrs>[^>]*)>(?<content>.*?)</tr>", RegexOptions.IgnoreCase | RegexOptions.Singleline);
+        var rowRegex = new Regex(@"<tr[^>]*class=""(?<class>[^""]*plugin[^""]*)""(?<attrs>[^>]*)>(?<content>.*?)</tr>", RegexOptions.IgnoreCase | RegexOptions.Singleline);
         foreach (Match match in rowRegex.Matches(html))
         {
             var classes = match.Groups["class"].Value;
@@ -1442,13 +1442,13 @@ public sealed class WooScraper : IDisposable
                         : null,
             };
 
-            var nameMatch = Regex.Match(content, "<strong[^>]*>\\s*(?<name>[^<]+)", RegexOptions.IgnoreCase);
+            var nameMatch = Regex.Match(content, @"<strong[^>]*>\s*(?<name>[^<]+)", RegexOptions.IgnoreCase);
             if (nameMatch.Success)
             {
                 plugin.Name = HttpUtility.HtmlDecode(nameMatch.Groups["name"].Value.Trim());
             }
 
-            var versionMatch = Regex.Match(content, "Version\\s*(?<version>[0-9A-Za-z\\.\-_]+)", RegexOptions.IgnoreCase);
+            var versionMatch = Regex.Match(content, @"Version\s*(?<version>[0-9A-Za-z._-]+)", RegexOptions.IgnoreCase);
             if (versionMatch.Success)
             {
                 plugin.Version = HttpUtility.HtmlDecode(versionMatch.Groups["version"].Value.Trim());
@@ -1471,7 +1471,7 @@ public sealed class WooScraper : IDisposable
             return list;
         }
 
-        var themeRegex = new Regex("<div[^>]*class=\"(?<class>[^\"]*theme[^\"]*)\"(?<attrs>[^>]*)>(?<content>.*?)(?=<div[^>]*class=\"[^\"]*theme[^\"]*\"|$)", RegexOptions.IgnoreCase | RegexOptions.Singleline);
+        var themeRegex = new Regex(@"<div[^>]*class=""(?<class>[^""]*theme[^""]*)""(?<attrs>[^>]*)>(?<content>.*?)(?=<div[^>]*class=""[^""]*theme[^""]*""|$)", RegexOptions.IgnoreCase | RegexOptions.Singleline);
         foreach (Match match in themeRegex.Matches(html))
         {
             var classes = match.Groups["class"].Value;
@@ -1491,20 +1491,20 @@ public sealed class WooScraper : IDisposable
                 AutoUpdate = DetermineAutoUpdate(attrs, classes)
             };
 
-            var nameMatch = Regex.Match(content, "class=\"theme-name\"[^>]*>\\s*(?<name>[^<]+)", RegexOptions.IgnoreCase);
+            var nameMatch = Regex.Match(content, @"class=""theme-name""[^>]*>\s*(?<name>[^<]+)", RegexOptions.IgnoreCase);
             if (!nameMatch.Success)
             {
-                nameMatch = Regex.Match(content, "aria-label=\"(?<name>[^\"]+)\"", RegexOptions.IgnoreCase);
+                nameMatch = Regex.Match(content, @"aria-label=""(?<name>[^""]+)""", RegexOptions.IgnoreCase);
             }
             if (nameMatch.Success)
             {
                 theme.Name = HttpUtility.HtmlDecode(nameMatch.Groups["name"].Value.Trim());
             }
 
-            var versionMatch = Regex.Match(content, "Version[:\\s]*<span[^>]*>\\s*(?<version>[^<]+)", RegexOptions.IgnoreCase);
+            var versionMatch = Regex.Match(content, @"Version[:\s]*<span[^>]*>\s*(?<version>[^<]+)", RegexOptions.IgnoreCase);
             if (!versionMatch.Success)
             {
-                versionMatch = Regex.Match(content, "Version[:\\s]*(?<version>[0-9A-Za-z\\.\-_]+)", RegexOptions.IgnoreCase);
+                versionMatch = Regex.Match(content, @"Version[:\s]*(?<version>[0-9A-Za-z._-]+)", RegexOptions.IgnoreCase);
             }
             if (versionMatch.Success)
             {
