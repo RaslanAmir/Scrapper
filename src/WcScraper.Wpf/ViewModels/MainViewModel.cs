@@ -355,7 +355,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
                 prods = filteredList.Select(pair => pair.Store).ToList();
                 shopifyDetailDicts = filteredList
-                    .Select(pair => ShopifyConverters.ToShopifyDetailDictionary(pair.Product))
+                    .Select(pair => ShopifyConverters.ToShopifyDetailDictionary(pair.Product, pair.Store))
                     .ToList();
 
                 Append($"Found {prods.Count} products.");

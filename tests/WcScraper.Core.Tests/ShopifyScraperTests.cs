@@ -856,6 +856,8 @@ public class ShopifyScraperTests
             PublishedAt = "2024-01-03T00:00:00-05:00",
             TemplateSuffix = "suffix",
             PublishedScope = "web",
+            MetafieldsGlobalTitleTag = "Meta Title",
+            MetafieldsGlobalDescriptionTag = "Meta Description",
             AdminGraphqlApiId = "gid://shopify/Product/1",
             Tags = new List<string> { "one", "two" },
             Variants =
@@ -886,12 +888,16 @@ public class ShopifyScraperTests
             }
         };
 
-        var detail = ShopifyConverters.ToShopifyDetailDictionary(product);
+        var storeProduct = ShopifyConverters.ToStoreProduct(product, new ShopifySettings("https://demo.myshopify.com"));
+        var detail = ShopifyConverters.ToShopifyDetailDictionary(product, storeProduct);
 
         Assert.Equal("Product", detail["title"]);
         Assert.Equal("2024-01-01T00:00:00-05:00", detail["created_at"]);
         Assert.Equal("web", detail["published_scope"]);
         Assert.Equal("one, two", detail["tags"]);
+        Assert.Equal(storeProduct.MetaTitle, detail["meta_title"]);
+        Assert.Equal(storeProduct.MetaDescription, detail["meta_description"]);
+        Assert.Equal(storeProduct.MetaKeywords, detail["meta_keywords"]);
 
         var variantsJson = Assert.IsType<string>(detail["variants_json"]);
         using var variantsDoc = JsonDocument.Parse(variantsJson);
