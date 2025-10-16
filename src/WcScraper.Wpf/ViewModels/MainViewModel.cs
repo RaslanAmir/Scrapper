@@ -6,6 +6,7 @@ using System.ComponentModel;
 using System.IO;
 using System.Linq;
 using System.Runtime.CompilerServices;
+using System.Text;
 using System.Threading.Tasks;
 using WcScraper.Core;
 using WcScraper.Core.Exporters;
@@ -140,17 +141,20 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
     private void OnExportCollections()
     {
-        var folder = string.IsNullOrWhiteSpace(OutputFolder)
-            ? Path.GetFullPath("output")
-            : OutputFolder;
+        var baseFolder = ResolveBaseOutputFolder();
+        Directory.CreateDirectory(baseFolder);
 
-        Directory.CreateDirectory(folder);
+        var targetUrl = SelectedPlatform == PlatformMode.WooCommerce ? StoreUrl : ShopifyStoreUrl;
+        var storeId = BuildStoreIdentifier(targetUrl);
+        var storeFolder = Path.Combine(baseFolder, storeId);
+        Directory.CreateDirectory(storeFolder);
+        var timestamp = DateTime.UtcNow.ToString("yyyyMMdd_HHmmss");
 
         var categories = CategoryChoices
             .Select(BuildCollectionExportRow)
             .ToList();
 
-        var collectionsPath = Path.Combine(folder, "collections.xlsx");
+        var collectionsPath = Path.Combine(storeFolder, $"{storeId}_{timestamp}_collections.xlsx");
         XlsxExporter.Write(collectionsPath, categories);
         Append($"Wrote {collectionsPath}");
 
@@ -166,7 +170,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 })
                 .ToList();
 
-            var tagsPath = Path.Combine(folder, "tags.xlsx");
+            var tagsPath = Path.Combine(storeFolder, $"{storeId}_{timestamp}_tags.xlsx");
             XlsxExporter.Write(tagsPath, tagDicts);
             Append($"Wrote {tagsPath}");
         }
@@ -259,8 +263,14 @@ public sealed class MainViewModel : INotifyPropertyChanged
         try
         {
             IsRunning = true;
-            Directory.CreateDirectory(OutputFolder);
+            var baseOutputFolder = ResolveBaseOutputFolder();
+            Directory.CreateDirectory(baseOutputFolder);
             var logger = new Progress<string>(Append);
+
+            var storeId = BuildStoreIdentifier(targetUrl);
+            var storeOutputFolder = Path.Combine(baseOutputFolder, storeId);
+            Directory.CreateDirectory(storeOutputFolder);
+            var timestamp = DateTime.UtcNow.ToString("yyyyMMdd_HHmmss");
 
             // Refresh filters for this store
             await LoadFiltersForStoreAsync(targetUrl, logger);
@@ -397,13 +407,13 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
             if (ExportCsv)
             {
-                var path = Path.Combine(OutputFolder, "products.csv");
+                var path = Path.Combine(storeOutputFolder, $"{storeId}_{timestamp}_products.csv");
                 CsvExporter.Write(path, genericDicts);
                 Append($"Wrote {path}");
             }
             if (ExportXlsx)
             {
-                var path = Path.Combine(OutputFolder, "products.xlsx");
+                var path = Path.Combine(storeOutputFolder, $"{storeId}_{timestamp}_products.xlsx");
                 var excelRows = SelectedPlatform == PlatformMode.Shopify && shopifyDetailDicts is { Count: > 0 }
                     ? shopifyDetailDicts
                     : genericDicts;
@@ -412,7 +422,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
             }
             if (ExportJsonl)
             {
-                var path = Path.Combine(OutputFolder, "products.jsonl");
+                var path = Path.Combine(storeOutputFolder, $"{storeId}_{timestamp}_products.jsonl");
                 JsonlExporter.Write(path, genericDicts);
                 Append($"Wrote {path}");
             }
@@ -422,7 +432,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 var rows = (variations.Count > 0)
                     ? Mappers.ToShopifyCsvWithVariants(prods, variations, StoreUrl).ToList()
                     : Mappers.ToShopifyCsv(prods, StoreUrl).ToList();
-                var path = Path.Combine(OutputFolder, "shopify_products.csv");
+                var path = Path.Combine(storeOutputFolder, $"{storeId}_{timestamp}_shopify_products.csv");
                 CsvExporter.Write(path, rows);
                 Append($"Wrote {path}");
             }
@@ -430,7 +440,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
             if (ExportWoo)
             {
                 var rows = Mappers.ToWooImporterCsv(prods).ToList();
-                var path = Path.Combine(OutputFolder, "woocommerce_products.csv");
+                var path = Path.Combine(storeOutputFolder, $"{storeId}_{timestamp}_woocommerce_products.csv");
                 CsvExporter.Write(path, rows);
                 Append($"Wrote {path}");
             }
@@ -443,7 +453,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                     var revs = await _wooScraper.FetchStoreReviewsAsync(targetUrl, ids, log: logger);
                     if (revs.Count > 0)
                     {
-                        var path = Path.Combine(OutputFolder, "reviews.csv");
+                        var path = Path.Combine(storeOutputFolder, $"{storeId}_{timestamp}_reviews.csv");
                         CsvExporter.Write(path, revs.Select(r => new Dictionary<string, object?>
                         {
                             ["id"] = r.Id,
@@ -510,6 +520,64 @@ public sealed class MainViewModel : INotifyPropertyChanged
             string.IsNullOrWhiteSpace(ShopifyStorefrontAccessToken) ? null : ShopifyStorefrontAccessToken,
             string.IsNullOrWhiteSpace(ShopifyApiKey) ? null : ShopifyApiKey,
             string.IsNullOrWhiteSpace(ShopifyApiSecret) ? null : ShopifyApiSecret);
+    }
+
+    private string ResolveBaseOutputFolder()
+        => string.IsNullOrWhiteSpace(OutputFolder)
+            ? Path.GetFullPath("output")
+            : OutputFolder;
+
+    private static string BuildStoreIdentifier(string targetUrl)
+    {
+        if (!Uri.TryCreate(targetUrl, UriKind.Absolute, out var uri))
+        {
+            var fallback = SanitizeForPath(targetUrl);
+            return string.IsNullOrWhiteSpace(fallback) ? "store" : fallback;
+        }
+
+        var segments = uri.AbsolutePath
+            .Split('/', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var parts = new List<string>();
+        if (!string.IsNullOrWhiteSpace(uri.Host))
+        {
+            parts.Add(uri.Host);
+        }
+
+        if (segments.Length > 0)
+        {
+            parts.AddRange(segments);
+        }
+
+        var combined = parts.Count > 0
+            ? string.Join("_", parts)
+            : uri.Host ?? targetUrl;
+
+        var sanitized = SanitizeForPath(combined);
+        return string.IsNullOrWhiteSpace(sanitized) ? "store" : sanitized;
+    }
+
+    private static string SanitizeForPath(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return "store";
+        }
+
+        var builder = new StringBuilder(value.Length);
+        foreach (var ch in value)
+        {
+            if (char.IsLetterOrDigit(ch) || ch == '-' || ch == '_' || ch == '.')
+            {
+                builder.Append(ch);
+            }
+            else
+            {
+                builder.Append('-');
+            }
+        }
+
+        var sanitized = builder.ToString().Trim('-');
+        return string.IsNullOrWhiteSpace(sanitized) ? "store" : sanitized;
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;
