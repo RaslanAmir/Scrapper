@@ -156,6 +156,11 @@ public static class ShopifyConverters
             });
         }
 
+        var keywordCandidates = SplitTags(product.Tags).ToList();
+        var metaKeywords = keywordCandidates.Count == 0
+            ? null
+            : string.Join(", ", keywordCandidates);
+
         return new StoreProduct
         {
             Id = ToIntId(product.Id),
@@ -176,7 +181,10 @@ public static class ShopifyConverters
             Tags = ConvertTags(product.Tags).ToList(),
             Categories = categories,
             Images = ConvertImages(product.Images).ToList(),
-            Attributes = ConvertOptions(product.Options).ToList()
+            Attributes = ConvertOptions(product.Options).ToList(),
+            MetaTitle = product.MetafieldsGlobalTitleTag,
+            MetaDescription = product.MetafieldsGlobalDescriptionTag,
+            MetaKeywords = metaKeywords
         };
     }
 

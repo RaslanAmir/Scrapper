@@ -99,6 +99,8 @@ public sealed class WooScraper : IDisposable
                     {
                         it.ShortDescription = it.Summary;
                     }
+
+                    PopulateWooSeoMetadata(it);
                 }
 
                 all.AddRange(items);
@@ -217,6 +219,19 @@ public sealed class WooScraper : IDisposable
                     var title = it.GetPropertyOrDefault("title")?.GetPropertyOrDefault("rendered")?.GetString();
                     var content = it.GetPropertyOrDefault("content")?.GetPropertyOrDefault("rendered")?.GetString();
                     var excerpt = it.GetPropertyOrDefault("excerpt")?.GetPropertyOrDefault("rendered")?.GetString();
+                    var yoast = it.GetPropertyOrDefault("yoast_head_json");
+                    YoastHead? yoastHead = null;
+                    if (yoast is JsonElement yoastElement && yoastElement.ValueKind == JsonValueKind.Object)
+                    {
+                        try
+                        {
+                            yoastHead = yoastElement.Deserialize<YoastHead>(_jsonOptions);
+                        }
+                        catch (JsonException)
+                        {
+                            // ignore malformed Yoast payloads
+                        }
+                    }
 
                     var images = new List<ProductImage>();
                     var emb = it.GetPropertyOrDefault("_embedded");
@@ -231,7 +246,7 @@ public sealed class WooScraper : IDisposable
                         }
                     }
 
-                    all.Add(new StoreProduct
+                    var storeProduct = new StoreProduct
                     {
                         Id = id,
                         Name = title,
@@ -245,8 +260,15 @@ public sealed class WooScraper : IDisposable
                         IsInStock = null,
                         AverageRating = null,
                         ReviewCount = null,
-                        Images = images
-                    });
+                        Images = images,
+                        YoastHead = yoastHead,
+                        MetaTitle = yoastHead?.Title,
+                        MetaDescription = yoastHead?.Description,
+                        MetaKeywords = yoastHead?.Keywords
+                    };
+
+                    PopulateWooSeoMetadata(storeProduct);
+                    all.Add(storeProduct);
                 }
 
                 if (arr.Count < perPage) break;
@@ -440,6 +462,105 @@ public sealed class WooScraper : IDisposable
 
         return all;
     }
+
+    private static void PopulateWooSeoMetadata(StoreProduct product)
+    {
+        if (product is null)
+        {
+            return;
+        }
+
+        string? ExtractFromMeta(params string[] keys)
+        {
+            if (product.MetaData is null || product.MetaData.Count == 0)
+            {
+                return null;
+            }
+
+            foreach (var key in keys)
+            {
+                var entry = product.MetaData.FirstOrDefault(m =>
+                    string.Equals(m.Key, key, StringComparison.OrdinalIgnoreCase));
+                var value = Normalize(entry?.ValueAsString());
+                if (value is not null)
+                {
+                    return value;
+                }
+            }
+
+            return null;
+        }
+
+        var metaTitle = FirstNonEmpty(
+            product.MetaTitle,
+            ExtractFromMeta("_yoast_wpseo_title", "_rank_math_title", "rank_math_title"),
+            product.YoastHead?.Title,
+            product.YoastHead?.OgTitle,
+            product.YoastHead?.TwitterTitle);
+
+        var metaDescription = FirstNonEmpty(
+            product.MetaDescription,
+            ExtractFromMeta("_yoast_wpseo_metadesc", "_rank_math_description", "rank_math_description"),
+            product.YoastHead?.Description,
+            product.YoastHead?.OgDescription,
+            product.YoastHead?.TwitterDescription,
+            product.ShortDescription,
+            product.Summary);
+
+        var metaKeywords = FirstNonEmpty(
+            product.MetaKeywords,
+            ExtractFromMeta(
+                "_yoast_wpseo_focuskeywords",
+                "_yoast_wpseo_focuskw",
+                "_yoast_wpseo_metakeywords",
+                "rank_math_focus_keyword",
+                "_rank_math_focus_keyword"),
+            product.YoastHead?.Keywords);
+
+        if (metaKeywords is null && product.Tags is { Count: > 0 })
+        {
+            var keywords = product.Tags
+                .Select(t => Normalize(t.Name))
+                .Where(s => s is not null)
+                .Select(s => s!)
+                .ToList();
+
+            if (keywords.Count == 0)
+            {
+                keywords = product.Tags
+                    .Select(t => Normalize(t.Slug))
+                    .Where(s => s is not null)
+                    .Select(s => s!)
+                    .ToList();
+            }
+
+            if (keywords.Count > 0)
+            {
+                metaKeywords = string.Join(", ", keywords);
+            }
+        }
+
+        product.MetaTitle = metaTitle;
+        product.MetaDescription = metaDescription;
+        product.MetaKeywords = metaKeywords;
+    }
+
+    private static string? FirstNonEmpty(params string?[] values)
+    {
+        foreach (var value in values)
+        {
+            var normalized = Normalize(value);
+            if (normalized is not null)
+            {
+                return normalized;
+            }
+        }
+
+        return null;
+    }
+
+    private static string? Normalize(string? value)
+        => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
     private List<T> DeserializeListWithRecovery<T>(string json, string entityName, IProgress<string>? log)
     {

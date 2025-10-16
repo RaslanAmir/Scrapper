@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.Json.Serialization;
 
 namespace WcScraper.Core;
@@ -15,6 +16,12 @@ public sealed class StoreProduct
     [JsonPropertyName("short_description")] public string? ShortDescription { get; set; }
     // Some stores use "summary" in Store API; we will copy it into ShortDescription if present.
     [JsonPropertyName("summary")] public string? Summary { get; set; }
+
+    [JsonPropertyName("meta_title")] public string? MetaTitle { get; set; }
+    [JsonPropertyName("meta_description")] public string? MetaDescription { get; set; }
+    [JsonPropertyName("meta_keywords")] public string? MetaKeywords { get; set; }
+    [JsonPropertyName("yoast_head_json")] public YoastHead? YoastHead { get; set; }
+    [JsonPropertyName("meta_data")] public List<StoreMetaData> MetaData { get; set; } = new();
 
     [JsonPropertyName("prices")] public PriceInfo? Prices { get; set; }
 
@@ -103,6 +110,9 @@ public sealed class GenericRow
     public string? DescriptionHtml { get; set; }
     public string? ShortDescriptionHtml { get; set; }
     public string? SummaryHtml { get; set; }
+    public string? MetaTitle { get; set; }
+    public string? MetaDescription { get; set; }
+    public string? MetaKeywords { get; set; }
     public double? RegularPrice { get; set; }
     public double? SalePrice { get; set; }
     public double? Price { get; set; }
@@ -119,6 +129,42 @@ public sealed class GenericRow
     public string? TagSlugs { get; set; }
     public string? Images { get; set; }
     public string? ImageAlts { get; set; }
+}
+
+public sealed class YoastHead
+{
+    [JsonPropertyName("title")] public string? Title { get; set; }
+    [JsonPropertyName("description")] public string? Description { get; set; }
+    [JsonPropertyName("og_title")] public string? OgTitle { get; set; }
+    [JsonPropertyName("og_description")] public string? OgDescription { get; set; }
+    [JsonPropertyName("twitter_title")] public string? TwitterTitle { get; set; }
+    [JsonPropertyName("twitter_description")] public string? TwitterDescription { get; set; }
+    [JsonPropertyName("keywords")] public string? Keywords { get; set; }
+}
+
+public sealed class StoreMetaData
+{
+    [JsonPropertyName("id")] public int? Id { get; set; }
+    [JsonPropertyName("key")] public string? Key { get; set; }
+    [JsonPropertyName("value")] public JsonElement? Value { get; set; }
+
+    public string? ValueAsString()
+    {
+        if (Value is not JsonElement element)
+        {
+            return null;
+        }
+
+        return element.ValueKind switch
+        {
+            JsonValueKind.String => element.GetString(),
+            JsonValueKind.Number => element.ToString(),
+            JsonValueKind.True => "true",
+            JsonValueKind.False => "false",
+            JsonValueKind.Array or JsonValueKind.Object => element.GetRawText(),
+            _ => null
+        };
+    }
 }
 
 public sealed class ShopifyRow
