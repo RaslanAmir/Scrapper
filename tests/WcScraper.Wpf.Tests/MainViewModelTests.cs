@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
 using System.IO;
 using System.Linq;
 using System.Net;
@@ -22,6 +23,7 @@ namespace WcScraper.Wpf.Tests;
 public class MainViewModelTests
 {
     [Fact]
+    [SuppressMessage("xUnit.Analyzers", "xUnit1031", Justification = "Test drives an STA thread and must block until the async operation completes.")]
     public async Task LoadFiltersForStoreAsync_AnonymousShopify_LoadsPublicCollections()
     {
         const string pageOne = """
@@ -359,7 +361,9 @@ public class MainViewModelTests
 
             using var tagsWorkbook = new XLWorkbook(tagsPath);
             var tagsWorksheet = tagsWorkbook.Worksheet(1);
-            Assert.Equal(2, tagsWorksheet.LastRowUsed().RowNumber());
+            var lastTagRow = tagsWorksheet.LastRowUsed();
+            Assert.NotNull(lastTagRow);
+            Assert.Equal(2, lastTagRow!.RowNumber());
             Assert.Equal("Featured", tagsWorksheet.Cell(2, 2).GetString());
             Assert.Equal("featured", tagsWorksheet.Cell(2, 3).GetString());
         }
