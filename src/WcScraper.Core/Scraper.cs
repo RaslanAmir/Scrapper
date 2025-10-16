@@ -564,6 +564,20 @@ public sealed class WooScraper : IDisposable
                 log?.Report($"SEO fallback request failed: {ex.Message}");
             }
         }
+
+        foreach (var product in products)
+        {
+            if (!string.IsNullOrWhiteSpace(product.MetaDescription))
+            {
+                continue;
+            }
+
+            var fallbackDescription = Normalize(product.ShortDescription);
+            if (fallbackDescription is not null)
+            {
+                product.MetaDescription = fallbackDescription;
+            }
+        }
     }
 
     private static string? ResolveProductUrl(string baseUrl, StoreProduct product)
@@ -895,9 +909,7 @@ public sealed class WooScraper : IDisposable
                 "_aioseop_description"),
             product.YoastHead?.Description,
             product.YoastHead?.OgDescription,
-            product.YoastHead?.TwitterDescription,
-            product.ShortDescription,
-            product.Summary);
+            product.YoastHead?.TwitterDescription);
 
         var metaKeywords = FirstNonEmpty(
             product.MetaKeywords,
