@@ -3,6 +3,7 @@ using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Net.Http;
+using System.Net.Http.Headers;
 using System.Security.Authentication;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -142,6 +143,212 @@ public sealed class WooScraper : IDisposable
         }
 
         return all;
+    }
+
+    public Task<List<InstalledTheme>> FetchThemesAsync(
+        string baseUrl,
+        string username,
+        string applicationPassword,
+        IProgress<string>? log = null,
+        int perPage = 100)
+        => FetchThemeAsync(baseUrl, username, applicationPassword, log, perPage);
+
+    public async Task<List<InstalledPlugin>> FetchPluginsAsync(
+        string baseUrl,
+        string username,
+        string applicationPassword,
+        IProgress<string>? log = null,
+        int perPage = 100)
+    {
+        baseUrl = CleanBaseUrl(baseUrl);
+        if (string.IsNullOrWhiteSpace(username) || string.IsNullOrWhiteSpace(applicationPassword))
+        {
+            log?.Report("Plugins request skipped: missing credentials.");
+            return new();
+        }
+
+        var all = new List<InstalledPlugin>();
+        bool attemptedApi = false;
+
+        for (int page = 1; page <= 100; page++)
+        {
+            var url = $"{baseUrl}/wp-json/wp/v2/plugins?context=edit&per_page={perPage}&page={page}";
+            try
+            {
+                attemptedApi = true;
+                using var req = new HttpRequestMessage(HttpMethod.Get, url);
+                req.Headers.Authorization = CreateBasicAuthHeader(username, applicationPassword);
+                log?.Report($"GET {url} (authenticated)");
+                using var resp = await _http.SendAsync(req);
+                if (!resp.IsSuccessStatusCode)
+                {
+                    if ((int)resp.StatusCode == 404)
+                    {
+                        log?.Report("Plugins API endpoint not found. Falling back to admin page scrape.");
+                    }
+                    else
+                    {
+                        log?.Report($"Plugins API returned {(int)resp.StatusCode} ({resp.ReasonPhrase}).");
+                    }
+                    all.Clear();
+                    break;
+                }
+
+                var text = await resp.Content.ReadAsStringAsync();
+                if (string.IsNullOrWhiteSpace(text))
+                {
+                    break;
+                }
+
+                var items = DeserializeListWithRecovery<InstalledPlugin>(text, "plugins", log);
+                if (items.Count == 0)
+                {
+                    break;
+                }
+
+                foreach (var plugin in items)
+                {
+                    plugin.Normalize();
+                }
+
+                all.AddRange(items);
+                if (items.Count < perPage)
+                {
+                    break;
+                }
+            }
+            catch (TaskCanceledException ex)
+            {
+                log?.Report($"Plugins request timed out: {ex.Message}");
+                break;
+            }
+            catch (AuthenticationException ex)
+            {
+                log?.Report($"Plugins request TLS handshake failed: {ex.Message}");
+                break;
+            }
+            catch (IOException ex)
+            {
+                log?.Report($"Plugins request I/O failure: {ex.Message}");
+                break;
+            }
+            catch (HttpRequestException ex)
+            {
+                log?.Report($"Plugins request failed: {ex.Message}");
+                break;
+            }
+        }
+
+        if (all.Count > 0)
+        {
+            return all;
+        }
+
+        if (attemptedApi)
+        {
+            log?.Report("Attempting plugins admin page scrape fallback.");
+        }
+
+        return await FetchPluginsViaAdminAsync(baseUrl, username, applicationPassword, log);
+    }
+
+    public async Task<List<InstalledTheme>> FetchThemeAsync(
+        string baseUrl,
+        string username,
+        string applicationPassword,
+        IProgress<string>? log = null,
+        int perPage = 100)
+    {
+        baseUrl = CleanBaseUrl(baseUrl);
+        if (string.IsNullOrWhiteSpace(username) || string.IsNullOrWhiteSpace(applicationPassword))
+        {
+            log?.Report("Themes request skipped: missing credentials.");
+            return new();
+        }
+
+        var all = new List<InstalledTheme>();
+        bool attemptedApi = false;
+
+        for (int page = 1; page <= 100; page++)
+        {
+            var url = $"{baseUrl}/wp-json/wp/v2/themes?context=edit&per_page={perPage}&page={page}";
+            try
+            {
+                attemptedApi = true;
+                using var req = new HttpRequestMessage(HttpMethod.Get, url);
+                req.Headers.Authorization = CreateBasicAuthHeader(username, applicationPassword);
+                log?.Report($"GET {url} (authenticated)");
+                using var resp = await _http.SendAsync(req);
+                if (!resp.IsSuccessStatusCode)
+                {
+                    if ((int)resp.StatusCode == 404)
+                    {
+                        log?.Report("Themes API endpoint not found. Falling back to admin page scrape.");
+                    }
+                    else
+                    {
+                        log?.Report($"Themes API returned {(int)resp.StatusCode} ({resp.ReasonPhrase}).");
+                    }
+                    all.Clear();
+                    break;
+                }
+
+                var text = await resp.Content.ReadAsStringAsync();
+                if (string.IsNullOrWhiteSpace(text))
+                {
+                    break;
+                }
+
+                var items = DeserializeListWithRecovery<InstalledTheme>(text, "themes", log);
+                if (items.Count == 0)
+                {
+                    break;
+                }
+
+                foreach (var theme in items)
+                {
+                    theme.Normalize();
+                }
+
+                all.AddRange(items);
+                if (items.Count < perPage)
+                {
+                    break;
+                }
+            }
+            catch (TaskCanceledException ex)
+            {
+                log?.Report($"Themes request timed out: {ex.Message}");
+                break;
+            }
+            catch (AuthenticationException ex)
+            {
+                log?.Report($"Themes request TLS handshake failed: {ex.Message}");
+                break;
+            }
+            catch (IOException ex)
+            {
+                log?.Report($"Themes request I/O failure: {ex.Message}");
+                break;
+            }
+            catch (HttpRequestException ex)
+            {
+                log?.Report($"Themes request failed: {ex.Message}");
+                break;
+            }
+        }
+
+        if (all.Count > 0)
+        {
+            return all;
+        }
+
+        if (attemptedApi)
+        {
+            log?.Report("Attempting themes admin page scrape fallback.");
+        }
+
+        return await FetchThemesViaAdminAsync(baseUrl, username, applicationPassword, log);
     }
 
     public async Task<List<StoreReview>> FetchStoreReviewsAsync(
@@ -1082,6 +1289,283 @@ public sealed class WooScraper : IDisposable
         catch (InvalidOperationException ex)
         {
             log?.Report($"{errorPrefix}: {ex.Message}");
+        }
+
+        return null;
+    }
+
+    private async Task<List<InstalledPlugin>> FetchPluginsViaAdminAsync(
+        string baseUrl,
+        string username,
+        string applicationPassword,
+        IProgress<string>? log)
+    {
+        var url = $"{baseUrl}/wp-admin/plugins.php";
+        try
+        {
+            using var req = new HttpRequestMessage(HttpMethod.Get, url);
+            req.Headers.Authorization = CreateBasicAuthHeader(username, applicationPassword);
+            log?.Report($"GET {url} (scrape)");
+            using var resp = await _http.SendAsync(req);
+            if (!resp.IsSuccessStatusCode)
+            {
+                log?.Report($"Plugins admin page returned {(int)resp.StatusCode} ({resp.ReasonPhrase}).");
+                return new();
+            }
+
+            var html = await resp.Content.ReadAsStringAsync();
+            var parsed = ParsePluginsFromHtml(html);
+            foreach (var plugin in parsed)
+            {
+                plugin.Normalize();
+            }
+
+            if (parsed.Count == 0)
+            {
+                log?.Report("No plugins detected on admin page.");
+            }
+
+            return parsed;
+        }
+        catch (TaskCanceledException ex)
+        {
+            log?.Report($"Plugins fallback request timed out: {ex.Message}");
+            return new();
+        }
+        catch (AuthenticationException ex)
+        {
+            log?.Report($"Plugins fallback TLS handshake failed: {ex.Message}");
+            return new();
+        }
+        catch (IOException ex)
+        {
+            log?.Report($"Plugins fallback I/O failure: {ex.Message}");
+            return new();
+        }
+        catch (HttpRequestException ex)
+        {
+            log?.Report($"Plugins fallback request failed: {ex.Message}");
+            return new();
+        }
+    }
+
+    private async Task<List<InstalledTheme>> FetchThemesViaAdminAsync(
+        string baseUrl,
+        string username,
+        string applicationPassword,
+        IProgress<string>? log)
+    {
+        var url = $"{baseUrl}/wp-admin/themes.php";
+        try
+        {
+            using var req = new HttpRequestMessage(HttpMethod.Get, url);
+            req.Headers.Authorization = CreateBasicAuthHeader(username, applicationPassword);
+            log?.Report($"GET {url} (scrape)");
+            using var resp = await _http.SendAsync(req);
+            if (!resp.IsSuccessStatusCode)
+            {
+                log?.Report($"Themes admin page returned {(int)resp.StatusCode} ({resp.ReasonPhrase}).");
+                return new();
+            }
+
+            var html = await resp.Content.ReadAsStringAsync();
+            var parsed = ParseThemesFromHtml(html);
+            foreach (var theme in parsed)
+            {
+                theme.Normalize();
+            }
+
+            if (parsed.Count == 0)
+            {
+                log?.Report("No themes detected on admin page.");
+            }
+
+            return parsed;
+        }
+        catch (TaskCanceledException ex)
+        {
+            log?.Report($"Themes fallback request timed out: {ex.Message}");
+            return new();
+        }
+        catch (AuthenticationException ex)
+        {
+            log?.Report($"Themes fallback TLS handshake failed: {ex.Message}");
+            return new();
+        }
+        catch (IOException ex)
+        {
+            log?.Report($"Themes fallback I/O failure: {ex.Message}");
+            return new();
+        }
+        catch (HttpRequestException ex)
+        {
+            log?.Report($"Themes fallback request failed: {ex.Message}");
+            return new();
+        }
+    }
+
+    private static AuthenticationHeaderValue CreateBasicAuthHeader(string username, string password)
+    {
+        var token = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes($"{username}:{password}"));
+        return new AuthenticationHeaderValue("Basic", token);
+    }
+
+    private static List<InstalledPlugin> ParsePluginsFromHtml(string html)
+    {
+        var list = new List<InstalledPlugin>();
+        if (string.IsNullOrWhiteSpace(html))
+        {
+            return list;
+        }
+
+        var rowRegex = new Regex("<tr[^>]*class=\"(?<class>[^\"]*plugin[^\"]*)\"(?<attrs>[^>]*)>(?<content>.*?)</tr>", RegexOptions.IgnoreCase | RegexOptions.Singleline);
+        foreach (Match match in rowRegex.Matches(html))
+        {
+            var classes = match.Groups["class"].Value;
+            var attrs = match.Groups["attrs"].Value;
+            var content = match.Groups["content"].Value;
+            if (string.IsNullOrWhiteSpace(content))
+            {
+                continue;
+            }
+
+            var plugin = new InstalledPlugin
+            {
+                Slug = ExtractAttribute(attrs, "data-slug"),
+                PluginFile = ExtractAttribute(attrs, "data-plugin"),
+                Status = classes.Contains("inactive", StringComparison.OrdinalIgnoreCase) ? "inactive" :
+                    (classes.Contains("active", StringComparison.OrdinalIgnoreCase) ? "active" : null),
+                AutoUpdate = classes.Contains("auto-update-enabled", StringComparison.OrdinalIgnoreCase)
+                    ? true
+                    : classes.Contains("auto-update-disabled", StringComparison.OrdinalIgnoreCase)
+                        ? false
+                        : null,
+            };
+
+            var nameMatch = Regex.Match(content, "<strong[^>]*>\\s*(?<name>[^<]+)", RegexOptions.IgnoreCase);
+            if (nameMatch.Success)
+            {
+                plugin.Name = HttpUtility.HtmlDecode(nameMatch.Groups["name"].Value.Trim());
+            }
+
+            var versionMatch = Regex.Match(content, "Version\\s*(?<version>[0-9A-Za-z\\.\-_]+)", RegexOptions.IgnoreCase);
+            if (versionMatch.Success)
+            {
+                plugin.Version = HttpUtility.HtmlDecode(versionMatch.Groups["version"].Value.Trim());
+            }
+
+            if (!string.IsNullOrWhiteSpace(plugin.Name))
+            {
+                list.Add(plugin);
+            }
+        }
+
+        return list;
+    }
+
+    private static List<InstalledTheme> ParseThemesFromHtml(string html)
+    {
+        var list = new List<InstalledTheme>();
+        if (string.IsNullOrWhiteSpace(html))
+        {
+            return list;
+        }
+
+        var themeRegex = new Regex("<div[^>]*class=\"(?<class>[^\"]*theme[^\"]*)\"(?<attrs>[^>]*)>(?<content>.*?)(?=<div[^>]*class=\"[^\"]*theme[^\"]*\"|$)", RegexOptions.IgnoreCase | RegexOptions.Singleline);
+        foreach (Match match in themeRegex.Matches(html))
+        {
+            var classes = match.Groups["class"].Value;
+            var attrs = match.Groups["attrs"].Value;
+            var content = match.Groups["content"].Value;
+            if (string.IsNullOrWhiteSpace(content))
+            {
+                continue;
+            }
+
+            var theme = new InstalledTheme
+            {
+                Slug = ExtractAttribute(attrs, "data-slug"),
+                Stylesheet = ExtractAttribute(attrs, "data-slug"),
+                Template = ExtractAttribute(attrs, "data-template"),
+                Status = classes.Contains("active", StringComparison.OrdinalIgnoreCase) ? "active" : "inactive",
+                AutoUpdate = DetermineAutoUpdate(attrs, classes)
+            };
+
+            var nameMatch = Regex.Match(content, "class=\"theme-name\"[^>]*>\\s*(?<name>[^<]+)", RegexOptions.IgnoreCase);
+            if (!nameMatch.Success)
+            {
+                nameMatch = Regex.Match(content, "aria-label=\"(?<name>[^\"]+)\"", RegexOptions.IgnoreCase);
+            }
+            if (nameMatch.Success)
+            {
+                theme.Name = HttpUtility.HtmlDecode(nameMatch.Groups["name"].Value.Trim());
+            }
+
+            var versionMatch = Regex.Match(content, "Version[:\\s]*<span[^>]*>\\s*(?<version>[^<]+)", RegexOptions.IgnoreCase);
+            if (!versionMatch.Success)
+            {
+                versionMatch = Regex.Match(content, "Version[:\\s]*(?<version>[0-9A-Za-z\\.\-_]+)", RegexOptions.IgnoreCase);
+            }
+            if (versionMatch.Success)
+            {
+                theme.Version = HttpUtility.HtmlDecode(versionMatch.Groups["version"].Value.Trim());
+            }
+
+            if (!string.IsNullOrWhiteSpace(theme.Name))
+            {
+                list.Add(theme);
+            }
+        }
+
+        return list;
+    }
+
+    private static bool? DetermineAutoUpdate(string attrs, string classes)
+    {
+        var attrValue = ExtractAttribute(attrs, "data-autoupdate");
+        if (!string.IsNullOrWhiteSpace(attrValue))
+        {
+            if (attrValue.Equals("enabled", StringComparison.OrdinalIgnoreCase)
+                || attrValue.Equals("on", StringComparison.OrdinalIgnoreCase)
+                || attrValue.Equals("1"))
+            {
+                return true;
+            }
+
+            if (attrValue.Equals("disabled", StringComparison.OrdinalIgnoreCase)
+                || attrValue.Equals("off", StringComparison.OrdinalIgnoreCase)
+                || attrValue.Equals("0"))
+            {
+                return false;
+            }
+        }
+
+        if (classes.Contains("autoupdate-enabled", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        if (classes.Contains("autoupdate-disabled", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        return null;
+    }
+
+    private static string? ExtractAttribute(string input, string attributeName)
+    {
+        if (string.IsNullOrWhiteSpace(input))
+        {
+            return null;
+        }
+
+        var pattern = attributeName + "\\s*=\\s*\"(?<value>[^\"]*)\"";
+        var match = Regex.Match(input, pattern, RegexOptions.IgnoreCase);
+        if (match.Success)
+        {
+            var raw = match.Groups["value"].Value;
+            return string.IsNullOrWhiteSpace(raw) ? null : HttpUtility.HtmlDecode(raw.Trim());
         }
 
         return null;

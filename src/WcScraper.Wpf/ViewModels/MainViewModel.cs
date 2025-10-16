@@ -31,12 +31,18 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private bool _expReviews = true;
     private bool _expXlsx = false;
     private bool _expJsonl = false;
+    private bool _expPluginsCsv = false;
+    private bool _expPluginsJsonl = false;
+    private bool _expThemesCsv = false;
+    private bool _expThemesJsonl = false;
     private PlatformMode _selectedPlatform = PlatformMode.WooCommerce;
     private string _shopifyStoreUrl = "";
     private string _shopifyAdminAccessToken = "";
     private string _shopifyStorefrontAccessToken = "";
     private string _shopifyApiKey = "";
     private string _shopifyApiSecret = "";
+    private string _wordPressUsername = "";
+    private string _wordPressApplicationPassword = "";
 
     public MainViewModel(IDialogService dialogs)
         : this(dialogs, new WooScraper(), new ShopifyScraper(), new HttpClient())
@@ -75,6 +81,10 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public bool ExportReviews { get => _expReviews; set { _expReviews = value; OnPropertyChanged(); } }
     public bool ExportXlsx { get => _expXlsx; set { _expXlsx = value; OnPropertyChanged(); } }
     public bool ExportJsonl { get => _expJsonl; set { _expJsonl = value; OnPropertyChanged(); } }
+    public bool ExportPluginsCsv { get => _expPluginsCsv; set { _expPluginsCsv = value; OnPropertyChanged(); } }
+    public bool ExportPluginsJsonl { get => _expPluginsJsonl; set { _expPluginsJsonl = value; OnPropertyChanged(); } }
+    public bool ExportThemesCsv { get => _expThemesCsv; set { _expThemesCsv = value; OnPropertyChanged(); } }
+    public bool ExportThemesJsonl { get => _expThemesJsonl; set { _expThemesJsonl = value; OnPropertyChanged(); } }
     public bool IsRunning { get => _isRunning; private set { _isRunning = value; OnPropertyChanged(); (RunCommand as RelayCommand)?.RaiseCanExecuteChanged(); } }
 
     public PlatformMode SelectedPlatform
@@ -125,6 +135,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public string ShopifyStorefrontAccessToken { get => _shopifyStorefrontAccessToken; set { _shopifyStorefrontAccessToken = value; OnPropertyChanged(); } }
     public string ShopifyApiKey { get => _shopifyApiKey; set { _shopifyApiKey = value; OnPropertyChanged(); } }
     public string ShopifyApiSecret { get => _shopifyApiSecret; set { _shopifyApiSecret = value; OnPropertyChanged(); } }
+    public string WordPressUsername { get => _wordPressUsername; set { _wordPressUsername = value; OnPropertyChanged(); } }
+    public string WordPressApplicationPassword { get => _wordPressApplicationPassword; set { _wordPressApplicationPassword = value; OnPropertyChanged(); } }
 
     // Selectable terms for filters
     public ObservableCollection<SelectableTerm> CategoryChoices { get; } = new();
@@ -303,6 +315,10 @@ public sealed class MainViewModel : INotifyPropertyChanged
             List<StoreProduct> prods;
             List<StoreProduct> variations = new();
             List<Dictionary<string, object?>>? shopifyDetailDicts = null;
+            List<InstalledPlugin> plugins = new();
+            List<InstalledTheme> themes = new();
+            bool attemptedPluginFetch = false;
+            bool attemptedThemeFetch = false;
 
             if (SelectedPlatform == PlatformMode.WooCommerce)
             {
@@ -377,6 +393,38 @@ public sealed class MainViewModel : INotifyPropertyChanged
                     .ToList();
 
                 Append($"Found {prods.Count} products.");
+            }
+
+            var needsPluginInventory = ExportPluginsCsv || ExportPluginsJsonl;
+            var needsThemeInventory = ExportThemesCsv || ExportThemesJsonl;
+            if (SelectedPlatform == PlatformMode.WooCommerce && (needsPluginInventory || needsThemeInventory))
+            {
+                if (string.IsNullOrWhiteSpace(WordPressUsername) || string.IsNullOrWhiteSpace(WordPressApplicationPassword))
+                {
+                    Append("Skipping plugin/theme exports: provide WordPress username and application password.");
+                }
+                else
+                {
+                    if (needsPluginInventory)
+                    {
+                        attemptedPluginFetch = true;
+                        Append("Fetching installed plugins…");
+                        plugins = await _wooScraper.FetchPluginsAsync(targetUrl, WordPressUsername, WordPressApplicationPassword, logger);
+                        Append(plugins.Count > 0
+                            ? $"Found {plugins.Count} plugins."
+                            : "No plugins returned by the authenticated endpoint.");
+                    }
+
+                    if (needsThemeInventory)
+                    {
+                        attemptedThemeFetch = true;
+                        Append("Fetching installed themes…");
+                        themes = await _wooScraper.FetchThemeAsync(targetUrl, WordPressUsername, WordPressApplicationPassword, logger);
+                        Append(themes.Count > 0
+                            ? $"Found {themes.Count} themes."
+                            : "No themes returned by the authenticated endpoint.");
+                    }
+                }
             }
 
             // Generic rows projection
@@ -454,6 +502,62 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 var path = Path.Combine(storeOutputFolder, $"{storeId}_{timestamp}_products.jsonl");
                 JsonlExporter.Write(path, genericDicts);
                 Append($"Wrote {path}");
+            }
+
+            if (SelectedPlatform == PlatformMode.WooCommerce && ExportPluginsCsv)
+            {
+                if (plugins.Count > 0)
+                {
+                    var path = Path.Combine(storeOutputFolder, $"{storeId}_{timestamp}_plugins.csv");
+                    CsvExporter.WritePlugins(path, plugins);
+                    Append($"Wrote {path}");
+                }
+                else if (attemptedPluginFetch)
+                {
+                    Append("Plugins CSV export skipped (no plugin data).");
+                }
+            }
+
+            if (SelectedPlatform == PlatformMode.WooCommerce && ExportPluginsJsonl)
+            {
+                if (plugins.Count > 0)
+                {
+                    var path = Path.Combine(storeOutputFolder, $"{storeId}_{timestamp}_plugins.jsonl");
+                    JsonlExporter.WritePlugins(path, plugins);
+                    Append($"Wrote {path}");
+                }
+                else if (attemptedPluginFetch)
+                {
+                    Append("Plugins JSONL export skipped (no plugin data).");
+                }
+            }
+
+            if (SelectedPlatform == PlatformMode.WooCommerce && ExportThemesCsv)
+            {
+                if (themes.Count > 0)
+                {
+                    var path = Path.Combine(storeOutputFolder, $"{storeId}_{timestamp}_themes.csv");
+                    CsvExporter.WriteThemes(path, themes);
+                    Append($"Wrote {path}");
+                }
+                else if (attemptedThemeFetch)
+                {
+                    Append("Themes CSV export skipped (no theme data).");
+                }
+            }
+
+            if (SelectedPlatform == PlatformMode.WooCommerce && ExportThemesJsonl)
+            {
+                if (themes.Count > 0)
+                {
+                    var path = Path.Combine(storeOutputFolder, $"{storeId}_{timestamp}_themes.jsonl");
+                    JsonlExporter.WriteThemes(path, themes);
+                    Append($"Wrote {path}");
+                }
+                else if (attemptedThemeFetch)
+                {
+                    Append("Themes JSONL export skipped (no theme data).");
+                }
             }
 
             if (ExportShopify)

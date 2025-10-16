@@ -29,6 +29,47 @@ public static class CsvExporter
         }
     }
 
+    public static void WritePlugins(string path, IEnumerable<InstalledPlugin> plugins)
+    {
+        var rows = plugins
+            .Select(p => new Dictionary<string, object?>
+            {
+                ["name"] = p.Name,
+                ["slug"] = p.Slug,
+                ["plugin_file"] = p.PluginFile,
+                ["version"] = p.Version,
+                ["status"] = p.Status,
+                ["update_channel"] = p.UpdateChannel,
+                ["auto_update"] = p.AutoUpdate,
+                ["update_available_version"] = p.Update?.NewVersion,
+                ["update_package"] = p.Update?.Package
+            })
+            .ToList();
+
+        Write(path, rows);
+    }
+
+    public static void WriteThemes(string path, IEnumerable<InstalledTheme> themes)
+    {
+        var rows = themes
+            .Select(t => new Dictionary<string, object?>
+            {
+                ["name"] = t.Name,
+                ["slug"] = t.Slug,
+                ["stylesheet"] = t.Stylesheet,
+                ["template"] = t.Template,
+                ["version"] = t.Version,
+                ["status"] = t.Status,
+                ["update_channel"] = t.UpdateChannel,
+                ["auto_update"] = t.AutoUpdate,
+                ["update_available_version"] = t.Update?.NewVersion,
+                ["update_package"] = t.Update?.Package
+            })
+            .ToList();
+
+        Write(path, rows);
+    }
+
     private static string Format(object? v)
     {
         if (v is null) return "";
