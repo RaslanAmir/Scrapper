@@ -56,7 +56,8 @@ public static class Mappers
                 Tags = JoinCsv(tagNames),
                 TagSlugs = JoinCsv(tagSlugs),
                 Images = JoinCsv(images.Select(i => i.Src)),
-                ImageAlts = JoinCsv(images.Select(i => i.Alt))
+                ImageAlts = JoinCsv(images.Select(i => i.Alt)),
+                ImageFilePaths = p.ImageFilePaths
             };
         }
     }
@@ -109,7 +110,8 @@ public static class Mappers
                 ["Variant Requires Shipping"] = "TRUE",
                 ["Variant Taxable"] = "TRUE",
                 ["Variant Weight Unit"] = "kg",
-                ["Image Src"] = imageSrc
+                ["Image Src"] = imageSrc,
+                ["Image Src Local"] = p.ImageFilePaths ?? ""
             };
         }
     }
@@ -140,6 +142,7 @@ public static class Mappers
                 ["Categories"] = categories,
                 ["Tags"] = tags,
                 ["Images"] = images,
+                ["Image File Paths"] = p.ImageFilePaths ?? "",
                 ["Position"] = 0
             };
         }
@@ -214,6 +217,9 @@ public static class Mappers
                 var price = AsFloatPrice(priceVal, prices?.CurrencyMinorUnit);
 
                 var imageSrc = v.Images.FirstOrDefault()?.Src ?? p.Images.FirstOrDefault()?.Src ?? "";
+                var imageFiles = string.IsNullOrWhiteSpace(v.ImageFilePaths)
+                    ? p.ImageFilePaths ?? ""
+                    : v.ImageFilePaths;
 
                 yield return new Dictionary<string, object?>
                 {
@@ -242,7 +248,8 @@ public static class Mappers
                     ["Variant Requires Shipping"] = "TRUE",
                     ["Variant Taxable"] = "TRUE",
                     ["Variant Weight Unit"] = "kg",
-                    ["Image Src"] = imageSrc
+                    ["Image Src"] = imageSrc,
+                    ["Image Src Local"] = imageFiles
                 };
             }
         }
