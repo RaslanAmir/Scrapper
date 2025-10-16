@@ -6,6 +6,7 @@ using System.Net.Http;
 using System.Security.Authentication;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using System.Web;
 
@@ -127,6 +128,17 @@ public sealed class WooScraper : IDisposable
                 log?.Report($"Store API request failed: {ex.Message}");
                 break;
             }
+        }
+
+        var productsNeedingSeo = all
+            .Where(p => string.IsNullOrWhiteSpace(p.MetaTitle)
+                        || string.IsNullOrWhiteSpace(p.MetaDescription)
+                        || string.IsNullOrWhiteSpace(p.MetaKeywords))
+            .ToList();
+
+        if (productsNeedingSeo.Count > 0)
+        {
+            await FetchWooSeoMetadataAsync(baseUrl, productsNeedingSeo, log);
         }
 
         return all;
@@ -462,6 +474,241 @@ public sealed class WooScraper : IDisposable
         }
 
         return all;
+    }
+
+    private async Task FetchWooSeoMetadataAsync(string baseUrl, IReadOnlyCollection<StoreProduct> products, IProgress<string>? log)
+    {
+        if (products.Count == 0)
+        {
+            return;
+        }
+
+        baseUrl = CleanBaseUrl(baseUrl);
+        var targets = new Dictionary<string, List<StoreProduct>>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var product in products)
+        {
+            var url = ResolveProductUrl(baseUrl, product);
+            if (url is null)
+            {
+                continue;
+            }
+
+            if (!targets.TryGetValue(url, out var list))
+            {
+                list = new List<StoreProduct>();
+                targets[url] = list;
+            }
+
+            list.Add(product);
+        }
+
+        foreach (var pair in targets)
+        {
+            var url = pair.Key;
+            var associatedProducts = pair.Value;
+
+            if (associatedProducts.Count == 0)
+            {
+                continue;
+            }
+
+            try
+            {
+                log?.Report($"GET {url} (SEO fallback)");
+                using var resp = await _http.GetAsync(url);
+                if (!resp.IsSuccessStatusCode)
+                {
+                    continue;
+                }
+
+                var html = await resp.Content.ReadAsStringAsync();
+                if (string.IsNullOrWhiteSpace(html))
+                {
+                    continue;
+                }
+
+                var metadata = ParseSeoMetadataFromHtml(html);
+                foreach (var product in associatedProducts)
+                {
+                    if (string.IsNullOrWhiteSpace(product.MetaTitle) && metadata.Title is not null)
+                    {
+                        product.MetaTitle = metadata.Title;
+                    }
+
+                    if (string.IsNullOrWhiteSpace(product.MetaDescription) && metadata.Description is not null)
+                    {
+                        product.MetaDescription = metadata.Description;
+                    }
+
+                    if (string.IsNullOrWhiteSpace(product.MetaKeywords) && metadata.Keywords is not null)
+                    {
+                        product.MetaKeywords = metadata.Keywords;
+                    }
+                }
+            }
+            catch (TaskCanceledException ex)
+            {
+                log?.Report($"SEO fallback request timed out: {ex.Message}");
+            }
+            catch (AuthenticationException ex)
+            {
+                log?.Report($"SEO fallback TLS handshake failed: {ex.Message}");
+            }
+            catch (IOException ex)
+            {
+                log?.Report($"SEO fallback I/O failure: {ex.Message}");
+            }
+            catch (HttpRequestException ex)
+            {
+                log?.Report($"SEO fallback request failed: {ex.Message}");
+            }
+        }
+    }
+
+    private static string? ResolveProductUrl(string baseUrl, StoreProduct product)
+    {
+        if (!string.IsNullOrWhiteSpace(product.Permalink))
+        {
+            var permalink = product.Permalink.Trim();
+            if (Uri.TryCreate(permalink, UriKind.Absolute, out var absolute))
+            {
+                return absolute.ToString();
+            }
+
+            if (Uri.TryCreate(baseUrl, UriKind.Absolute, out var baseUri)
+                && Uri.TryCreate(baseUri, permalink, out var combined))
+            {
+                return combined.ToString();
+            }
+        }
+
+        if (product.Id > 0 && Uri.TryCreate(baseUrl, UriKind.Absolute, out var baseUrlUri))
+        {
+            var builder = new UriBuilder(baseUrlUri)
+            {
+                Path = baseUrlUri.AbsolutePath,
+                Query = string.IsNullOrEmpty(baseUrlUri.Query)
+                    ? $"p={product.Id}"
+                    : baseUrlUri.Query.TrimStart('?') + $"&p={product.Id}"
+            };
+
+            return builder.Uri.ToString();
+        }
+
+        return null;
+    }
+
+    private static readonly Regex MetaTagRegex = new("<meta\\b[^>]*>", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    private static readonly Regex MetaAttributeRegex = new(
+        "(?<name>[a-zA-Z_:][-a-zA-Z0-9_:.]*)\\s*=\\s*(?:\"(?<value1>[^\"]*)\"|'(?<value2>[^']*)'|(?<value3>[^\\s\"'>/]+))",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    private static readonly Regex TitleTagRegex = new("<title[^>]*>(?<content>.*?)</title>", RegexOptions.IgnoreCase | RegexOptions.Singleline | RegexOptions.Compiled);
+
+    private static (string? Title, string? Description, string? Keywords) ParseSeoMetadataFromHtml(string html)
+    {
+        if (string.IsNullOrWhiteSpace(html))
+        {
+            return (null, null, null);
+        }
+
+        var metaValues = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (Match metaMatch in MetaTagRegex.Matches(html))
+        {
+            var attributes = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (Match attrMatch in MetaAttributeRegex.Matches(metaMatch.Value))
+            {
+                var name = attrMatch.Groups["name"].Value;
+                if (string.IsNullOrWhiteSpace(name))
+                {
+                    continue;
+                }
+
+                var value = attrMatch.Groups["value1"].Success
+                    ? attrMatch.Groups["value1"].Value
+                    : attrMatch.Groups["value2"].Success
+                        ? attrMatch.Groups["value2"].Value
+                        : attrMatch.Groups["value3"].Value;
+
+                if (string.IsNullOrWhiteSpace(value))
+                {
+                    continue;
+                }
+
+                attributes[name] = HttpUtility.HtmlDecode(value);
+            }
+
+            if (!attributes.TryGetValue("content", out var content) || string.IsNullOrWhiteSpace(content))
+            {
+                continue;
+            }
+
+            var key = attributes.TryGetValue("name", out var nameAttr) ? nameAttr
+                : attributes.TryGetValue("property", out var propertyAttr) ? propertyAttr
+                : attributes.TryGetValue("http-equiv", out var httpEquivAttr) ? httpEquivAttr
+                : null;
+
+            if (string.IsNullOrWhiteSpace(key))
+            {
+                continue;
+            }
+
+            metaValues[key] = content;
+        }
+
+        var titleMatch = TitleTagRegex.Match(html);
+        if (titleMatch.Success)
+        {
+            var rawTitle = HttpUtility.HtmlDecode(titleMatch.Groups["content"].Value);
+            if (!string.IsNullOrWhiteSpace(rawTitle))
+            {
+                metaValues["html-title"] = rawTitle;
+            }
+        }
+
+        string? GetMetaValue(params string[] keys)
+        {
+            foreach (var key in keys)
+            {
+                if (metaValues.TryGetValue(key, out var value))
+                {
+                    var normalized = Normalize(value);
+                    if (normalized is not null)
+                    {
+                        return normalized;
+                    }
+                }
+            }
+
+            return null;
+        }
+
+        var title = FirstNonEmpty(
+            GetMetaValue("og:title"),
+            GetMetaValue("twitter:title"),
+            GetMetaValue("aioseo:title"),
+            GetMetaValue("aioseo-title"),
+            GetMetaValue("title"),
+            GetMetaValue("html-title"));
+
+        var description = FirstNonEmpty(
+            GetMetaValue("description"),
+            GetMetaValue("og:description"),
+            GetMetaValue("twitter:description"),
+            GetMetaValue("aioseo:description"),
+            GetMetaValue("aioseo-description"));
+
+        var keywords = FirstNonEmpty(
+            GetMetaValue("keywords"),
+            GetMetaValue("og:keywords"),
+            GetMetaValue("twitter:keywords"),
+            GetMetaValue("aioseo:keywords"),
+            GetMetaValue("aioseo_keywords"),
+            GetMetaValue("aioseo-keywords"));
+
+        return (title, description, keywords);
     }
 
     private static void PopulateWooSeoMetadata(StoreProduct product)
