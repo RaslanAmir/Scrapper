@@ -198,6 +198,80 @@ public sealed class WooScraperTests
         Assert.Equal("alpha, beta, gamma", product.MetaKeywords);
     }
 
+    [Fact]
+    public async Task FetchStoreProductsAsync_PrefersHtmlDescriptionOverShortDescriptionFallback()
+    {
+        const string storePayload = """
+        [
+          {
+            "id": 88,
+            "name": "HTML Priority Product",
+            "permalink": "https://example.com/product/html-priority-product/",
+            "description": "<p>Description</p>",
+            "short_description": "Woo Short Description",
+            "yoast_head_json": {
+              "title": "Yoast Provided Title"
+            },
+            "tags": [
+              { "id": 5, "name": "Sample Tag", "slug": "sample-tag" }
+            ],
+            "images": []
+          }
+        ]
+        """;
+
+        const string htmlResponse = """
+        <!doctype html>
+        <html>
+          <head>
+            <meta name="description" content="HTML Provided Description" />
+          </head>
+          <body><h1>HTML Priority Product</h1></body>
+        </html>
+        """;
+
+        using var handler = new StubHttpMessageHandler(request =>
+        {
+            if (request.RequestUri is null)
+            {
+                return new HttpResponseMessage(HttpStatusCode.BadRequest);
+            }
+
+            if (request.RequestUri.AbsolutePath.StartsWith("/wp-json/wc/store/v1/products", StringComparison.Ordinal))
+            {
+                var content = request.RequestUri.Query.Contains("page=1", StringComparison.Ordinal)
+                    ? storePayload
+                    : "[]";
+
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(content, Encoding.UTF8, "application/json")
+                };
+            }
+
+            if (string.Equals(request.RequestUri.AbsoluteUri, "https://example.com/product/html-priority-product/", StringComparison.Ordinal))
+            {
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(htmlResponse, Encoding.UTF8, "text/html")
+                };
+            }
+
+            return new HttpResponseMessage(HttpStatusCode.NotFound);
+        });
+
+        using var client = new HttpClient(handler);
+        var scraper = new WooScraper(client, allowLegacyTls: false);
+
+        var products = await scraper.FetchStoreProductsAsync("https://example.com");
+
+        Assert.Single(products);
+        var product = products[0];
+        Assert.Equal("Yoast Provided Title", product.MetaTitle);
+        Assert.Equal("HTML Provided Description", product.MetaDescription);
+        Assert.Equal("Sample Tag", product.MetaKeywords);
+    }
+
     private sealed class StubHttpMessageHandler : HttpMessageHandler
     {
         private readonly Func<HttpRequestMessage, HttpResponseMessage> _responder;
