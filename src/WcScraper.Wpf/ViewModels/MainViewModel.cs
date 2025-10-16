@@ -5,6 +5,7 @@ using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.IO;
 using System.Linq;
+using System.Net.Http;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Threading.Tasks;
@@ -20,6 +21,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private readonly IDialogService _dialogs;
     private readonly WooScraper _wooScraper;
     private readonly ShopifyScraper _shopifyScraper;
+    private readonly HttpClient _httpClient;
     private bool _isRunning;
     private string _storeUrl = "";
     private string _outputFolder = Path.GetFullPath("output");
@@ -37,15 +39,21 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private string _shopifyApiSecret = "";
 
     public MainViewModel(IDialogService dialogs)
-        : this(dialogs, new WooScraper(), new ShopifyScraper())
+        : this(dialogs, new WooScraper(), new ShopifyScraper(), new HttpClient())
     {
     }
 
     internal MainViewModel(IDialogService dialogs, WooScraper wooScraper, ShopifyScraper shopifyScraper)
+        : this(dialogs, wooScraper, shopifyScraper, new HttpClient())
+    {
+    }
+
+    internal MainViewModel(IDialogService dialogs, WooScraper wooScraper, ShopifyScraper shopifyScraper, HttpClient httpClient)
     {
         _dialogs = dialogs;
         _wooScraper = wooScraper;
         _shopifyScraper = shopifyScraper;
+        _httpClient = httpClient;
         BrowseCommand = new RelayCommand(OnBrowse);
         RunCommand = new RelayCommand(async () => await OnRunAsync(), () => !IsRunning);
         SelectAllCategoriesCommand = new RelayCommand(() => SetSelection(CategoryChoices, true));
@@ -373,6 +381,26 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
             // Generic rows projection
             var genericRows = Mappers.ToGenericRows(prods).ToList();
+            var rowsById = new Dictionary<int, GenericRow>();
+            foreach (var row in genericRows)
+            {
+                rowsById[row.Id] = row;
+            }
+
+            var imagesFolder = Path.Combine(storeOutputFolder, "images");
+            Directory.CreateDirectory(imagesFolder);
+            logger.Report($"Downloading product images to {imagesFolder}…");
+
+            foreach (var product in prods)
+            {
+                var relativePaths = await DownloadProductImagesAsync(product, imagesFolder, logger);
+                product.ImageFilePaths = relativePaths;
+                if (rowsById.TryGetValue(product.Id, out var row))
+                {
+                    row.ImageFilePaths = relativePaths;
+                }
+            }
+
             var genericDicts = genericRows.Select(r => new Dictionary<string, object?>
             {
                 ["id"] = r.Id,
@@ -403,6 +431,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 ["tag_slugs"] = r.TagSlugs,
                 ["images"] = r.Images,
                 ["image_alts"] = r.ImageAlts,
+                ["image_file_paths"] = r.ImageFilePaths,
             }).ToList();
 
             if (ExportCsv)
@@ -488,6 +517,58 @@ public sealed class MainViewModel : INotifyPropertyChanged
         {
             IsRunning = false;
         }
+    }
+
+    private async Task<string?> DownloadProductImagesAsync(StoreProduct product, string imagesFolder, IProgress<string>? logger)
+    {
+        if (product.Images is null || product.Images.Count == 0)
+        {
+            return null;
+        }
+
+        var baseName = SanitizeForPath(product.Name ?? product.Slug ?? $"product-{product.Id}");
+        var relativePaths = new List<string>();
+        var index = 1;
+
+        foreach (var image in product.Images)
+        {
+            var src = image.Src;
+            if (string.IsNullOrWhiteSpace(src))
+            {
+                continue;
+            }
+
+            if (!Uri.TryCreate(src, UriKind.Absolute, out var uri))
+            {
+                logger?.Report($"Skipping image for product {product.Id}: invalid URL '{src}'.");
+                continue;
+            }
+
+            var extension = Path.GetExtension(uri.AbsolutePath);
+            if (string.IsNullOrWhiteSpace(extension) || extension.Length > 5)
+            {
+                extension = ".jpg";
+            }
+
+            var fileName = $"{baseName}-{index}{extension}";
+            var absolutePath = Path.Combine(imagesFolder, fileName);
+            var relativePath = Path.Combine("images", fileName).Replace(Path.DirectorySeparatorChar, '/');
+
+            try
+            {
+                logger?.Report($"Downloading {src} -> {relativePath}");
+                var bytes = await _httpClient.GetByteArrayAsync(uri);
+                await File.WriteAllBytesAsync(absolutePath, bytes);
+                relativePaths.Add(relativePath);
+                index++;
+            }
+            catch (Exception ex)
+            {
+                logger?.Report($"Failed to download {src}: {ex.Message}");
+            }
+        }
+
+        return relativePaths.Count > 0 ? string.Join(", ", relativePaths) : null;
     }
 
     private void Append(string message)

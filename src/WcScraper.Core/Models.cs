@@ -37,6 +37,7 @@ public sealed class StoreProduct
     [JsonPropertyName("categories")] public List<Category> Categories { get; set; } = new();
     [JsonPropertyName("tags")] public List<ProductTag> Tags { get; set; } = new();
     [JsonPropertyName("images")] public List<ProductImage> Images { get; set; } = new();
+    public string? ImageFilePaths { get; set; }
 }
 
 public sealed class PriceInfo
@@ -129,6 +130,7 @@ public sealed class GenericRow
     public string? TagSlugs { get; set; }
     public string? Images { get; set; }
     public string? ImageAlts { get; set; }
+    public string? ImageFilePaths { get; set; }
 }
 
 public sealed class YoastHead
