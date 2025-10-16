@@ -30,6 +30,8 @@ public class ShopifyScraperTests
               "published_at": "2024-01-04T03:04:05-05:00",
               "template_suffix": "custom",
               "published_scope": "web",
+              "metafields_global_title_tag": "Sample Meta Title",
+              "metafields_global_description_tag": "Sample Meta Description",
               "admin_graphql_api_id": "gid://shopify/Product/123456789",
               "tags": "tag-a, tag-b",
               "variants": [
@@ -185,6 +187,8 @@ public class ShopifyScraperTests
 
         var product = Assert.Single(products);
         Assert.Equal("sample-product", product.Handle);
+        Assert.Equal("Sample Meta Title", product.MetafieldsGlobalTitleTag);
+        Assert.Equal("Sample Meta Description", product.MetafieldsGlobalDescriptionTag);
         var collection = Assert.Single(product.Collections);
         Assert.Equal("frontpage", collection.Handle);
     }
