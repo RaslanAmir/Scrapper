@@ -99,6 +99,87 @@ public sealed class TermItem
     [JsonPropertyName("slug")] public string? Slug { get; set; }
 }
 
+public sealed class InstalledPlugin
+{
+    [JsonPropertyName("plugin")] public string? PluginFile { get; set; }
+    [JsonPropertyName("slug")] public string? Slug { get; set; }
+    [JsonPropertyName("name")] public string? Name { get; set; }
+    [JsonPropertyName("version")] public string? Version { get; set; }
+    [JsonPropertyName("status")] public string? Status { get; set; }
+    [JsonPropertyName("autoupdate")] public bool? AutoUpdate { get; set; }
+    [JsonPropertyName("update_channel")] public string? UpdateChannel { get; set; }
+    [JsonPropertyName("update")] public PluginUpdateInfo? Update { get; set; }
+
+    public void Normalize()
+    {
+        if (!string.IsNullOrWhiteSpace(UpdateChannel))
+        {
+            UpdateChannel = UpdateChannel?.Trim();
+        }
+        else if (Update is not null && !string.IsNullOrWhiteSpace(Update.Channel))
+        {
+            UpdateChannel = Update.Channel?.Trim();
+        }
+        else if (AutoUpdate is not null)
+        {
+            UpdateChannel = AutoUpdate == true ? "auto" : "manual";
+        }
+
+        if (!string.IsNullOrWhiteSpace(Status))
+        {
+            Status = Status?.Trim();
+        }
+    }
+}
+
+public sealed class PluginUpdateInfo
+{
+    [JsonPropertyName("channel")] public string? Channel { get; set; }
+    [JsonPropertyName("new_version")] public string? NewVersion { get; set; }
+    [JsonPropertyName("package")] public string? Package { get; set; }
+}
+
+public sealed class InstalledTheme
+{
+    [JsonPropertyName("stylesheet")] public string? Stylesheet { get; set; }
+    [JsonPropertyName("template")] public string? Template { get; set; }
+    [JsonPropertyName("slug")] public string? Slug { get; set; }
+    [JsonPropertyName("name")] public string? Name { get; set; }
+    [JsonPropertyName("version")] public string? Version { get; set; }
+    [JsonPropertyName("status")] public string? Status { get; set; }
+    [JsonPropertyName("autoupdate")] public bool? AutoUpdate { get; set; }
+    [JsonPropertyName("update_channel")] public string? UpdateChannel { get; set; }
+    [JsonPropertyName("update")] public ThemeUpdateInfo? Update { get; set; }
+
+    public void Normalize()
+    {
+        if (!string.IsNullOrWhiteSpace(UpdateChannel))
+        {
+            UpdateChannel = UpdateChannel?.Trim();
+        }
+        else if (Update is not null && !string.IsNullOrWhiteSpace(Update.Channel))
+        {
+            UpdateChannel = Update.Channel?.Trim();
+        }
+        else if (AutoUpdate is not null)
+        {
+            UpdateChannel = AutoUpdate == true ? "auto" : "manual";
+        }
+
+        if (!string.IsNullOrWhiteSpace(Status))
+        {
+            Status = Status?.Trim();
+        }
+    }
+}
+
+public sealed class ThemeUpdateInfo
+{
+    [JsonPropertyName("channel")] public string? Channel { get; set; }
+    [JsonPropertyName("new_version")] public string? NewVersion { get; set; }
+    [JsonPropertyName("package")] public string? Package { get; set; }
+}
+
 // Export rows
 public sealed class GenericRow
 {
