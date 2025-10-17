@@ -52,6 +52,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private string _targetConsumerSecret = "";
     private ProvisioningContext? _lastProvisioningContext;
     private readonly JsonSerializerOptions _configurationWriteOptions = new() { WriteIndented = true };
+    private readonly JsonSerializerOptions _artifactWriteOptions = new() { WriteIndented = true };
 
     public MainViewModel(IDialogService dialogs)
         : this(dialogs, new WooScraper(), new ShopifyScraper(), new HttpClient())
@@ -428,6 +429,10 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
             var needsPluginInventory = ExportPluginsCsv || ExportPluginsJsonl;
             var needsThemeInventory = ExportThemesCsv || ExportThemesJsonl;
+            var pluginBundles = new List<ExtensionArtifact>();
+            var themeBundles = new List<ExtensionArtifact>();
+            Dictionary<string, JsonElement>? wpSettingsSnapshot = null;
+
             if (SelectedPlatform == PlatformMode.WooCommerce && (needsPluginInventory || needsThemeInventory))
             {
                 if (string.IsNullOrWhiteSpace(WordPressUsername) || string.IsNullOrWhiteSpace(WordPressApplicationPassword))
@@ -456,6 +461,30 @@ public sealed class MainViewModel : INotifyPropertyChanged
                             : "No themes returned by the authenticated endpoint.");
                     }
                 }
+            }
+
+            if (SelectedPlatform == PlatformMode.WooCommerce
+                && (plugins.Count > 0 || themes.Count > 0)
+                && !string.IsNullOrWhiteSpace(WordPressUsername)
+                && !string.IsNullOrWhiteSpace(WordPressApplicationPassword))
+            {
+                wpSettingsSnapshot = await _wooScraper.FetchWordPressSettingsAsync(targetUrl, WordPressUsername, WordPressApplicationPassword, logger);
+                if (wpSettingsSnapshot.Count > 0)
+                {
+                    Append($"Captured {wpSettingsSnapshot.Count} WordPress settings entries for extension option discovery.");
+                }
+            }
+
+            if (SelectedPlatform == PlatformMode.WooCommerce && plugins.Count > 0)
+            {
+                var pluginRoot = Path.Combine(storeOutputFolder, "plugins");
+                pluginBundles = await CapturePluginBundlesAsync(targetUrl, WordPressUsername, WordPressApplicationPassword, plugins, pluginRoot, wpSettingsSnapshot, logger);
+            }
+
+            if (SelectedPlatform == PlatformMode.WooCommerce && themes.Count > 0)
+            {
+                var themeRoot = Path.Combine(storeOutputFolder, "themes");
+                themeBundles = await CaptureThemeBundlesAsync(targetUrl, WordPressUsername, WordPressApplicationPassword, themes, themeRoot, wpSettingsSnapshot, logger);
             }
 
             if (SelectedPlatform == PlatformMode.WooCommerce && ExportStoreConfiguration)
@@ -666,7 +695,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 }
             }
 
-            SetProvisioningContext(prods, configuration);
+            SetProvisioningContext(prods, configuration, pluginBundles, themeBundles);
 
             Append("All done.");
         }
@@ -729,6 +758,179 @@ public sealed class MainViewModel : INotifyPropertyChanged
         return configuration.StoreSettings.Count > 0
             || configuration.ShippingZones.Count > 0
             || configuration.PaymentGateways.Count > 0;
+    }
+
+    private async Task<List<ExtensionArtifact>> CapturePluginBundlesAsync(
+        string baseUrl,
+        string username,
+        string applicationPassword,
+        List<InstalledPlugin> plugins,
+        string rootFolder,
+        IReadOnlyDictionary<string, JsonElement>? settingsSnapshot,
+        IProgress<string> logger)
+    {
+        var bundles = new List<ExtensionArtifact>();
+        Directory.CreateDirectory(rootFolder);
+
+        foreach (var plugin in plugins)
+        {
+            var slug = ResolvePluginSlug(plugin);
+            var folderName = SanitizeForPath(slug ?? plugin.Name ?? plugin.PluginFile ?? Guid.NewGuid().ToString("N"));
+            var bundleFolder = Path.Combine(rootFolder, folderName);
+            Directory.CreateDirectory(bundleFolder);
+
+            try
+            {
+                plugin.OptionKeys.Clear();
+                plugin.AssetPaths.Clear();
+
+                var options = await _wooScraper.FetchPluginOptionsAsync(baseUrl, username, applicationPassword, plugin, logger, settingsSnapshot);
+                if (options.Count > 0)
+                {
+                    var optionsPath = Path.Combine(bundleFolder, "options.json");
+                    var json = JsonSerializer.Serialize(options, _artifactWriteOptions);
+                    await File.WriteAllTextAsync(optionsPath, json, Encoding.UTF8);
+                    var keys = options.Keys.OrderBy(k => k, StringComparer.OrdinalIgnoreCase).ToList();
+                    plugin.OptionKeys.AddRange(keys);
+                    logger.Report($"Captured {keys.Count} options for plugin {plugin.Name ?? slug ?? plugin.PluginFile ?? folderName}.");
+                }
+
+                var manifest = await _wooScraper.FetchPluginAssetManifestAsync(baseUrl, username, applicationPassword, plugin, logger);
+                if (manifest.Count > 0)
+                {
+                    var manifestPath = Path.Combine(bundleFolder, "manifest.json");
+                    var manifestJson = JsonSerializer.Serialize(manifest, _artifactWriteOptions);
+                    await File.WriteAllTextAsync(manifestPath, manifestJson, Encoding.UTF8);
+                    plugin.AssetPaths.AddRange(manifest);
+                    logger.Report($"Captured {manifest.Count} asset references for plugin {plugin.Name ?? slug ?? plugin.PluginFile ?? folderName}.");
+                }
+
+                var archivePath = Path.Combine(bundleFolder, "archive.zip");
+                var downloaded = await _wooScraper.DownloadPluginArchiveAsync(baseUrl, username, applicationPassword, plugin, archivePath, logger);
+                if (!downloaded && File.Exists(archivePath))
+                {
+                    File.Delete(archivePath);
+                }
+            }
+            catch (Exception ex)
+            {
+                logger.Report($"Failed to capture plugin bundle for {plugin.Name ?? slug ?? plugin.PluginFile ?? folderName}: {ex.Message}");
+            }
+
+            var artifactSlug = slug ?? plugin.Slug ?? plugin.PluginFile ?? folderName;
+            bundles.Add(new ExtensionArtifact(artifactSlug, bundleFolder));
+        }
+
+        return bundles;
+    }
+
+    private async Task<List<ExtensionArtifact>> CaptureThemeBundlesAsync(
+        string baseUrl,
+        string username,
+        string applicationPassword,
+        List<InstalledTheme> themes,
+        string rootFolder,
+        IReadOnlyDictionary<string, JsonElement>? settingsSnapshot,
+        IProgress<string> logger)
+    {
+        var bundles = new List<ExtensionArtifact>();
+        Directory.CreateDirectory(rootFolder);
+
+        foreach (var theme in themes)
+        {
+            var slug = ResolveThemeSlug(theme);
+            var folderName = SanitizeForPath(slug ?? theme.Name ?? theme.Stylesheet ?? Guid.NewGuid().ToString("N"));
+            var bundleFolder = Path.Combine(rootFolder, folderName);
+            Directory.CreateDirectory(bundleFolder);
+
+            try
+            {
+                theme.OptionKeys.Clear();
+                theme.AssetPaths.Clear();
+
+                var options = await _wooScraper.FetchThemeOptionsAsync(baseUrl, username, applicationPassword, theme, logger, settingsSnapshot);
+                if (options.Count > 0)
+                {
+                    var optionsPath = Path.Combine(bundleFolder, "options.json");
+                    var json = JsonSerializer.Serialize(options, _artifactWriteOptions);
+                    await File.WriteAllTextAsync(optionsPath, json, Encoding.UTF8);
+                    var keys = options.Keys.OrderBy(k => k, StringComparer.OrdinalIgnoreCase).ToList();
+                    theme.OptionKeys.AddRange(keys);
+                    logger.Report($"Captured {keys.Count} options for theme {theme.Name ?? slug ?? folderName}.");
+                }
+
+                var manifest = await _wooScraper.FetchThemeAssetManifestAsync(baseUrl, username, applicationPassword, theme, logger);
+                if (manifest.Count > 0)
+                {
+                    var manifestPath = Path.Combine(bundleFolder, "manifest.json");
+                    var manifestJson = JsonSerializer.Serialize(manifest, _artifactWriteOptions);
+                    await File.WriteAllTextAsync(manifestPath, manifestJson, Encoding.UTF8);
+                    theme.AssetPaths.AddRange(manifest);
+                    logger.Report($"Captured {manifest.Count} asset references for theme {theme.Name ?? slug ?? folderName}.");
+                }
+
+                var archivePath = Path.Combine(bundleFolder, "archive.zip");
+                var downloaded = await _wooScraper.DownloadThemeArchiveAsync(baseUrl, username, applicationPassword, theme, archivePath, logger);
+                if (!downloaded && File.Exists(archivePath))
+                {
+                    File.Delete(archivePath);
+                }
+            }
+            catch (Exception ex)
+            {
+                logger.Report($"Failed to capture theme bundle for {theme.Name ?? slug ?? folderName}: {ex.Message}");
+            }
+
+            var artifactSlug = slug ?? theme.Slug ?? theme.Stylesheet ?? folderName;
+            bundles.Add(new ExtensionArtifact(artifactSlug, bundleFolder));
+        }
+
+        return bundles;
+    }
+
+    private static string? ResolvePluginSlug(InstalledPlugin plugin)
+    {
+        if (!string.IsNullOrWhiteSpace(plugin.Slug))
+        {
+            return plugin.Slug;
+        }
+
+        if (!string.IsNullOrWhiteSpace(plugin.PluginFile))
+        {
+            var pluginFile = plugin.PluginFile;
+            var slash = pluginFile.IndexOf('/');
+            if (slash > 0)
+            {
+                return pluginFile[..slash];
+            }
+
+            if (pluginFile.EndsWith(".php", StringComparison.OrdinalIgnoreCase))
+            {
+                return pluginFile[..^4];
+            }
+        }
+
+        return string.IsNullOrWhiteSpace(plugin.Name) ? null : SanitizeForPath(plugin.Name);
+    }
+
+    private static string? ResolveThemeSlug(InstalledTheme theme)
+    {
+        if (!string.IsNullOrWhiteSpace(theme.Slug))
+        {
+            return theme.Slug;
+        }
+
+        if (!string.IsNullOrWhiteSpace(theme.Stylesheet))
+        {
+            return theme.Stylesheet;
+        }
+
+        if (!string.IsNullOrWhiteSpace(theme.Template))
+        {
+            return theme.Template;
+        }
+
+        return string.IsNullOrWhiteSpace(theme.Name) ? null : SanitizeForPath(theme.Name);
     }
 
     private async Task<string?> DownloadProductImagesAsync(StoreProduct product, string imagesFolder, IProgress<string>? logger)
@@ -797,9 +999,13 @@ public sealed class MainViewModel : INotifyPropertyChanged
         App.Current?.Dispatcher.Invoke(() => Logs.Add(message));
     }
 
-    private void SetProvisioningContext(List<StoreProduct> products, StoreConfiguration? configuration)
+    private void SetProvisioningContext(
+        List<StoreProduct> products,
+        StoreConfiguration? configuration,
+        List<ExtensionArtifact> pluginBundles,
+        List<ExtensionArtifact> themeBundles)
     {
-        _lastProvisioningContext = new ProvisioningContext(products, configuration);
+        _lastProvisioningContext = new ProvisioningContext(products, configuration, pluginBundles, themeBundles);
         OnPropertyChanged(nameof(CanReplicate));
         ReplicateCommand.RaiseCanExecuteChanged();
     }
@@ -863,6 +1069,18 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 }
             }
 
+            if (_lastProvisioningContext.PluginBundles.Count > 0)
+            {
+                Append($"Uploading {_lastProvisioningContext.PluginBundles.Count} plugin bundles…");
+                await _wooProvisioningService.UploadPluginsAsync(settings, _lastProvisioningContext.PluginBundles, logger);
+            }
+
+            if (_lastProvisioningContext.ThemeBundles.Count > 0)
+            {
+                Append($"Uploading {_lastProvisioningContext.ThemeBundles.Count} theme bundles…");
+                await _wooProvisioningService.UploadThemesAsync(settings, _lastProvisioningContext.ThemeBundles, logger);
+            }
+
             await _wooProvisioningService.ProvisionAsync(settings, _lastProvisioningContext.Products, configuration, logger);
         }
         catch (Exception ex)
@@ -877,14 +1095,22 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
     private sealed class ProvisioningContext
     {
-        public ProvisioningContext(List<StoreProduct> products, StoreConfiguration? configuration)
+        public ProvisioningContext(
+            List<StoreProduct> products,
+            StoreConfiguration? configuration,
+            List<ExtensionArtifact> pluginBundles,
+            List<ExtensionArtifact> themeBundles)
         {
             Products = products;
             Configuration = configuration;
+            PluginBundles = pluginBundles;
+            ThemeBundles = themeBundles;
         }
 
         public List<StoreProduct> Products { get; }
         public StoreConfiguration? Configuration { get; }
+        public List<ExtensionArtifact> PluginBundles { get; }
+        public List<ExtensionArtifact> ThemeBundles { get; }
     }
 
     private ShopifySettings BuildShopifySettings(string baseUrl)

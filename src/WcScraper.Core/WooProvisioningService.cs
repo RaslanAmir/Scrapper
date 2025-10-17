@@ -128,6 +128,147 @@ public sealed class WooProvisioningService : IDisposable
         progress?.Report("Provisioning complete.");
     }
 
+    public Task UploadPluginsAsync(
+        WooProvisioningSettings settings,
+        IEnumerable<ExtensionArtifact> bundles,
+        IProgress<string>? progress = null,
+        CancellationToken cancellationToken = default)
+        => UploadExtensionsAsync(settings, bundles, "plugin", progress, cancellationToken);
+
+    public Task UploadThemesAsync(
+        WooProvisioningSettings settings,
+        IEnumerable<ExtensionArtifact> bundles,
+        IProgress<string>? progress = null,
+        CancellationToken cancellationToken = default)
+        => UploadExtensionsAsync(settings, bundles, "theme", progress, cancellationToken);
+
+    private async Task UploadExtensionsAsync(
+        WooProvisioningSettings settings,
+        IEnumerable<ExtensionArtifact> bundles,
+        string scope,
+        IProgress<string>? progress,
+        CancellationToken cancellationToken)
+    {
+        if (settings is null) throw new ArgumentNullException(nameof(settings));
+        if (bundles is null) throw new ArgumentNullException(nameof(bundles));
+
+        var list = bundles.Where(b => b is not null).ToList();
+        if (list.Count == 0)
+        {
+            progress?.Report($"No {scope} bundles to upload.");
+            return;
+        }
+
+        foreach (var bundle in list)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            await UploadExtensionAsync(settings, bundle, scope, progress, cancellationToken);
+        }
+    }
+
+    private async Task UploadExtensionAsync(
+        WooProvisioningSettings settings,
+        ExtensionArtifact bundle,
+        string scope,
+        IProgress<string>? progress,
+        CancellationToken cancellationToken)
+    {
+        if (!Directory.Exists(bundle.DirectoryPath))
+        {
+            progress?.Report($"Skipping {scope} '{bundle.Slug}': directory not found ({bundle.DirectoryPath}).");
+            return;
+        }
+
+        var archivePath = File.Exists(bundle.ArchivePath) ? bundle.ArchivePath : null;
+        var manifestPath = File.Exists(bundle.ManifestPath) ? bundle.ManifestPath : null;
+        var optionsPath = File.Exists(bundle.OptionsPath) ? bundle.OptionsPath : null;
+
+        if (archivePath is null && manifestPath is null && optionsPath is null)
+        {
+            progress?.Report($"Skipping {scope} '{bundle.Slug}': no bundle files found in {bundle.DirectoryPath}.");
+            return;
+        }
+
+        var endpoints = scope == "plugin"
+            ? new[] { "/wp-json/wc-scraper/v1/plugins/install", "/?rest_route=/wc-scraper/v1/plugins/install" }
+            : new[] { "/wp-json/wc-scraper/v1/themes/install", "/?rest_route=/wc-scraper/v1/themes/install" };
+
+        foreach (var endpoint in endpoints)
+        {
+            var uploaded = await TryUploadBundleAsync(settings, bundle, scope, endpoint, archivePath, manifestPath, optionsPath, progress, cancellationToken);
+            if (uploaded)
+            {
+                return;
+            }
+        }
+
+        progress?.Report($"No {scope} upload endpoint accepted '{bundle.Slug}'.");
+    }
+
+    private async Task<bool> TryUploadBundleAsync(
+        WooProvisioningSettings settings,
+        ExtensionArtifact bundle,
+        string scope,
+        string path,
+        string? archivePath,
+        string? manifestPath,
+        string? optionsPath,
+        IProgress<string>? progress,
+        CancellationToken cancellationToken)
+    {
+        var url = BuildUrl(settings.BaseUrl, path);
+        using var form = new MultipartFormDataContent();
+        form.Add(new StringContent(bundle.Slug), "slug");
+
+        if (!string.IsNullOrWhiteSpace(optionsPath) && File.Exists(optionsPath))
+        {
+            var json = await File.ReadAllTextAsync(optionsPath, Encoding.UTF8, cancellationToken);
+            form.Add(new StringContent(json, Encoding.UTF8, "application/json"), "options");
+        }
+
+        if (!string.IsNullOrWhiteSpace(manifestPath) && File.Exists(manifestPath))
+        {
+            var json = await File.ReadAllTextAsync(manifestPath, Encoding.UTF8, cancellationToken);
+            form.Add(new StringContent(json, Encoding.UTF8, "application/json"), "manifest");
+        }
+
+        StreamContent? archiveContent = null;
+        if (!string.IsNullOrWhiteSpace(archivePath) && File.Exists(archivePath))
+        {
+            var stream = new FileStream(archivePath, FileMode.Open, FileAccess.Read, FileShare.Read);
+            archiveContent = new StreamContent(stream);
+            archiveContent.Headers.ContentType = new MediaTypeHeaderValue("application/zip");
+            form.Add(archiveContent, "archive", Path.GetFileName(archivePath));
+        }
+
+        try
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Post, url);
+            request.Headers.Authorization = CreateAuthHeader(settings);
+            request.Content = form;
+
+            using var response = await _httpClient.SendAsync(request, cancellationToken);
+            if (response.IsSuccessStatusCode)
+            {
+                progress?.Report($"Uploaded {scope} bundle '{bundle.Slug}'.");
+                return true;
+            }
+
+            if (response.StatusCode == HttpStatusCode.NotFound)
+            {
+                return false;
+            }
+
+            var body = await response.Content.ReadAsStringAsync(cancellationToken);
+            progress?.Report($"{scope} upload failed ({(int)response.StatusCode} {response.ReasonPhrase}): {body}");
+            return false;
+        }
+        finally
+        {
+            archiveContent?.Dispose();
+        }
+    }
+
     private async Task EnsureProductAsync(
         string baseUrl,
         WooProvisioningSettings settings,
