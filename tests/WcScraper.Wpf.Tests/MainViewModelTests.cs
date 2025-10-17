@@ -637,6 +637,13 @@ public class MainViewModelTests
             var variationImageFull = Path.Combine(storeFolder, storedVariation.ImageFilePaths!.Replace('/', Path.DirectorySeparatorChar));
             Assert.True(File.Exists(variationImageFull));
             Assert.Equal(Path.GetFullPath(variationImageFull), Path.GetFullPath(storedVariation.LocalImageFilePaths[0]));
+
+            var variableProductsProperty = context.GetType().GetProperty("VariableProducts", BindingFlags.Public | BindingFlags.Instance);
+            Assert.NotNull(variableProductsProperty);
+            var storedVariableProducts = (IEnumerable<ProvisioningVariableProduct>)variableProductsProperty!.GetValue(context)!;
+            var variableProduct = Assert.Single(storedVariableProducts);
+            Assert.Same(storedVariation, Assert.Single(variableProduct.Variations));
+            Assert.Equal(storedVariation.ParentId, variableProduct.Parent.Id);
             Assert.Contains(viewModel.Logs, message => message.Contains("Found 1 variations", StringComparison.Ordinal));
         }
         finally

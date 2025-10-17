@@ -1297,9 +1297,51 @@ public sealed class MainViewModel : INotifyPropertyChanged
         List<WooSubscription> subscriptions,
         WordPressSiteContent? siteContent)
     {
-        _lastProvisioningContext = new ProvisioningContext(products, variations, configuration, pluginBundles, themeBundles, customers, coupons, orders, subscriptions, siteContent);
+        var variableProducts = BuildVariableProducts(products, variations);
+        _lastProvisioningContext = new ProvisioningContext(products, variations, variableProducts, configuration, pluginBundles, themeBundles, customers, coupons, orders, subscriptions, siteContent);
         OnPropertyChanged(nameof(CanReplicate));
         ReplicateCommand.RaiseCanExecuteChanged();
+    }
+
+    private static List<ProvisioningVariableProduct> BuildVariableProducts(
+        List<StoreProduct> products,
+        List<StoreProduct> variations)
+    {
+        var result = new List<ProvisioningVariableProduct>();
+        if (products.Count == 0 || variations.Count == 0)
+        {
+            return result;
+        }
+
+        var parentLookup = products
+            .Where(p => p is not null && p.Id > 0)
+            .ToDictionary(p => p.Id, p => p);
+
+        var grouped = variations
+            .Where(v => v is not null && v.ParentId is int id && id > 0)
+            .GroupBy(v => v.ParentId!.Value);
+
+        foreach (var group in grouped)
+        {
+            if (!parentLookup.TryGetValue(group.Key, out var parent))
+            {
+                continue;
+            }
+
+            var orderedVariations = group
+                .Where(v => v is not null)
+                .Select(v => v!)
+                .ToList();
+
+            if (orderedVariations.Count == 0)
+            {
+                continue;
+            }
+
+            result.Add(new ProvisioningVariableProduct(parent, orderedVariations));
+        }
+
+        return result;
     }
 
     private void ResetProvisioningContext()
@@ -1381,7 +1423,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
             await _wooProvisioningService.ProvisionAsync(
                 settings,
                 _lastProvisioningContext.Products,
-                variations: _lastProvisioningContext.Variations,
+                variableProducts: _lastProvisioningContext.VariableProducts,
                 configuration: configuration,
                 _lastProvisioningContext.Customers,
                 _lastProvisioningContext.Coupons,
@@ -1405,6 +1447,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         public ProvisioningContext(
             List<StoreProduct> products,
             List<StoreProduct> variations,
+            List<ProvisioningVariableProduct> variableProducts,
             StoreConfiguration? configuration,
             List<ExtensionArtifact> pluginBundles,
             List<ExtensionArtifact> themeBundles,
@@ -1416,6 +1459,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         {
             Products = products;
             Variations = variations;
+            VariableProducts = variableProducts;
             Configuration = configuration;
             PluginBundles = pluginBundles;
             ThemeBundles = themeBundles;
@@ -1428,6 +1472,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
         public List<StoreProduct> Products { get; }
         public List<StoreProduct> Variations { get; }
+        public List<ProvisioningVariableProduct> VariableProducts { get; }
         public StoreConfiguration? Configuration { get; }
         public List<ExtensionArtifact> PluginBundles { get; }
         public List<ExtensionArtifact> ThemeBundles { get; }
