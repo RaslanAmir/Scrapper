@@ -358,6 +358,13 @@ public sealed class MainViewModel : INotifyPropertyChanged
             bool attemptedCustomerFetch = false;
             bool attemptedOrderFetch = false;
             bool attemptedCouponFetch = false;
+            List<WordPressPage> pages = new();
+            List<WordPressPost> posts = new();
+            List<WordPressMediaItem> mediaLibrary = new();
+            WordPressMenuCollection? menuCollection = null;
+            WordPressWidgetSnapshot widgets = new();
+            var mediaReferenceMap = new Dictionary<string, MediaReference>(StringComparer.OrdinalIgnoreCase);
+            WordPressSiteContent? siteContent = null;
 
             if (SelectedPlatform == PlatformMode.WooCommerce)
             {
@@ -525,6 +532,121 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 themeBundles = await CaptureThemeBundlesAsync(targetUrl, WordPressUsername, WordPressApplicationPassword, themes, themeRoot, wpSettingsSnapshot, logger);
             }
 
+            if (SelectedPlatform == PlatformMode.WooCommerce)
+            {
+                Append("Fetching WordPress pages…");
+                pages = await _wooScraper.FetchWordPressPagesAsync(targetUrl, log: logger);
+                Append(pages.Count > 0
+                    ? $"Captured {pages.Count} pages."
+                    : "No pages returned by the REST API.");
+
+                Append("Fetching WordPress posts…");
+                posts = await _wooScraper.FetchWordPressPostsAsync(targetUrl, log: logger);
+                Append(posts.Count > 0
+                    ? $"Captured {posts.Count} posts."
+                    : "No posts returned by the REST API.");
+
+                Append("Fetching WordPress media library…");
+                mediaLibrary = await _wooScraper.FetchWordPressMediaAsync(targetUrl, log: logger);
+                Append(mediaLibrary.Count > 0
+                    ? $"Captured {mediaLibrary.Count} media entries."
+                    : "No media entries returned by the REST API.");
+
+                Append("Discovering WordPress menus…");
+                menuCollection = await _wooScraper.FetchWordPressMenusAsync(targetUrl, log: logger);
+                if (menuCollection is not null && menuCollection.Menus.Count > 0)
+                {
+                    Append($"Captured {menuCollection.Menus.Count} menus from {menuCollection.Endpoint}.");
+                }
+                else
+                {
+                    Append("No menu endpoint responded or menus unavailable.");
+                }
+
+                if (!string.IsNullOrWhiteSpace(WordPressUsername) && !string.IsNullOrWhiteSpace(WordPressApplicationPassword))
+                {
+                    Append("Fetching WordPress widgets…");
+                    widgets = await _wooScraper.FetchWordPressWidgetsAsync(targetUrl, WordPressUsername, WordPressApplicationPassword, logger);
+                    Append(widgets.Widgets.Count > 0
+                        ? $"Captured {widgets.Widgets.Count} widgets across {widgets.Areas.Count} areas."
+                        : "No widgets returned by the REST API.");
+                }
+                else
+                {
+                    widgets = new WordPressWidgetSnapshot();
+                    Append("Skipping widgets: provide WordPress username and application password.");
+                }
+
+                var mediaFolder = Path.Combine(storeOutputFolder, "media");
+                Directory.CreateDirectory(mediaFolder);
+                if (mediaLibrary.Count > 0)
+                {
+                    Append($"Downloading media library to {mediaFolder}…");
+                    var downloadedMedia = await DownloadMediaLibraryAsync(mediaLibrary, mediaFolder, logger);
+                    foreach (var pair in downloadedMedia)
+                    {
+                        mediaReferenceMap[pair.Key] = pair.Value;
+                    }
+                }
+                else
+                {
+                    Append("Media download skipped (no entries).");
+                }
+
+                var contentFolder = Path.Combine(storeOutputFolder, "content");
+                Directory.CreateDirectory(contentFolder);
+
+                if (pages.Count > 0)
+                {
+                    var pagePath = Path.Combine(contentFolder, $"{storeId}_{timestamp}_pages.json");
+                    var json = JsonSerializer.Serialize(pages, _artifactWriteOptions);
+                    await File.WriteAllTextAsync(pagePath, json, Encoding.UTF8);
+                    Append($"Wrote {pagePath}");
+                }
+
+                if (posts.Count > 0)
+                {
+                    var postPath = Path.Combine(contentFolder, $"{storeId}_{timestamp}_posts.json");
+                    var json = JsonSerializer.Serialize(posts, _artifactWriteOptions);
+                    await File.WriteAllTextAsync(postPath, json, Encoding.UTF8);
+                    Append($"Wrote {postPath}");
+                }
+
+                if (mediaLibrary.Count > 0)
+                {
+                    var mediaPath = Path.Combine(contentFolder, $"{storeId}_{timestamp}_media.json");
+                    var json = JsonSerializer.Serialize(mediaLibrary, _artifactWriteOptions);
+                    await File.WriteAllTextAsync(mediaPath, json, Encoding.UTF8);
+                    Append($"Wrote {mediaPath}");
+                }
+
+                if (menuCollection is not null && (menuCollection.Menus.Count > 0 || menuCollection.Locations.Count > 0))
+                {
+                    var menuPath = Path.Combine(contentFolder, $"{storeId}_{timestamp}_menus.json");
+                    var json = JsonSerializer.Serialize(menuCollection, _artifactWriteOptions);
+                    await File.WriteAllTextAsync(menuPath, json, Encoding.UTF8);
+                    Append($"Wrote {menuPath}");
+                }
+
+                if (widgets.Widgets.Count > 0 || widgets.Areas.Count > 0 || widgets.WidgetTypes.Count > 0)
+                {
+                    var widgetPath = Path.Combine(contentFolder, $"{storeId}_{timestamp}_widgets.json");
+                    var json = JsonSerializer.Serialize(widgets, _artifactWriteOptions);
+                    await File.WriteAllTextAsync(widgetPath, json, Encoding.UTF8);
+                    Append($"Wrote {widgetPath}");
+                }
+
+                siteContent = new WordPressSiteContent
+                {
+                    Pages = pages,
+                    Posts = posts,
+                    MediaLibrary = mediaLibrary,
+                    Menus = menuCollection,
+                    Widgets = widgets,
+                    MediaRootDirectory = mediaFolder
+                };
+            }
+
             if (SelectedPlatform == PlatformMode.WooCommerce && ExportStoreConfiguration)
             {
                 if (string.IsNullOrWhiteSpace(WordPressUsername) || string.IsNullOrWhiteSpace(WordPressApplicationPassword))
@@ -563,7 +685,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
             foreach (var product in prods)
             {
-                var relativePaths = await DownloadProductImagesAsync(product, imagesFolder, logger);
+                var relativePaths = await DownloadProductImagesAsync(product, imagesFolder, logger, mediaReferenceMap);
                 product.ImageFilePaths = relativePaths;
                 if (rowsById.TryGetValue(product.Id, out var row))
                 {
@@ -733,7 +855,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 }
             }
 
-            SetProvisioningContext(prods, configuration, pluginBundles, themeBundles, customers, coupons, orders, subscriptions);
+            SetProvisioningContext(prods, configuration, pluginBundles, themeBundles, customers, coupons, orders, subscriptions, siteContent);
 
             Append("All done.");
         }
@@ -971,7 +1093,11 @@ public sealed class MainViewModel : INotifyPropertyChanged
         return string.IsNullOrWhiteSpace(theme.Name) ? null : SanitizeForPath(theme.Name);
     }
 
-    private async Task<string?> DownloadProductImagesAsync(StoreProduct product, string imagesFolder, IProgress<string>? logger)
+    private async Task<string?> DownloadProductImagesAsync(
+        StoreProduct product,
+        string imagesFolder,
+        IProgress<string>? logger,
+        IDictionary<string, MediaReference>? mediaMap = null)
     {
         product.LocalImageFilePaths.Clear();
         if (product.Images is null || product.Images.Count == 0)
@@ -992,6 +1118,13 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 continue;
             }
 
+            if (mediaMap is not null && mediaMap.TryGetValue(src, out var reference))
+            {
+                relativePaths.Add(reference.RelativePath);
+                absolutePaths.Add(reference.AbsolutePath);
+                continue;
+            }
+
             if (!Uri.TryCreate(src, UriKind.Absolute, out var uri))
             {
                 logger?.Report($"Skipping image for product {product.Id}: invalid URL '{src}'.");
@@ -1006,7 +1139,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
             var fileName = $"{baseName}-{index}{extension}";
             var absolutePath = Path.Combine(imagesFolder, fileName);
-            var relativePath = Path.Combine("images", fileName).Replace(Path.DirectorySeparatorChar, '/');
+            var relativePath = NormalizeRelativePath(Path.Combine("images", fileName));
 
             try
             {
@@ -1015,6 +1148,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 await File.WriteAllBytesAsync(absolutePath, bytes);
                 relativePaths.Add(relativePath);
                 absolutePaths.Add(absolutePath);
+                mediaMap?[src] = new MediaReference(relativePath, absolutePath);
                 index++;
             }
             catch (Exception ex)
@@ -1032,9 +1166,117 @@ public sealed class MainViewModel : INotifyPropertyChanged
         return relativePaths.Count > 0 ? string.Join(", ", relativePaths) : null;
     }
 
+    private async Task<Dictionary<string, MediaReference>> DownloadMediaLibraryAsync(
+        List<WordPressMediaItem> mediaItems,
+        string mediaRoot,
+        IProgress<string>? logger)
+    {
+        var map = new Dictionary<string, MediaReference>(StringComparer.OrdinalIgnoreCase);
+        foreach (var item in mediaItems)
+        {
+            if (string.IsNullOrWhiteSpace(item.SourceUrl))
+            {
+                continue;
+            }
+
+            var relativeWithinMedia = BuildMediaRelativePath(item);
+            if (string.IsNullOrWhiteSpace(relativeWithinMedia))
+            {
+                continue;
+            }
+
+            var absolutePath = Path.Combine(mediaRoot, relativeWithinMedia);
+            var directory = Path.GetDirectoryName(absolutePath);
+            if (!string.IsNullOrEmpty(directory))
+            {
+                Directory.CreateDirectory(directory);
+            }
+
+            var relativePath = NormalizeRelativePath(Path.Combine("media", relativeWithinMedia));
+
+            if (!File.Exists(absolutePath))
+            {
+                try
+                {
+                    logger?.Report($"Downloading {item.SourceUrl} -> {relativePath}");
+                    using var response = await _httpClient.GetAsync(item.SourceUrl);
+                    if (!response.IsSuccessStatusCode)
+                    {
+                        logger?.Report($"Failed to download {item.SourceUrl}: {(int)response.StatusCode} ({response.ReasonPhrase}).");
+                        continue;
+                    }
+
+                    await using var input = await response.Content.ReadAsStreamAsync();
+                    await using var output = File.Create(absolutePath);
+                    await input.CopyToAsync(output);
+                }
+                catch (Exception ex)
+                {
+                    logger?.Report($"Failed to download {item.SourceUrl}: {ex.Message}");
+                    continue;
+                }
+            }
+
+            item.LocalFilePath = absolutePath;
+            item.RelativeFilePath = relativePath;
+            map[item.SourceUrl] = new MediaReference(relativePath, absolutePath);
+        }
+
+        return map;
+    }
+
     private void Append(string message)
     {
         App.Current?.Dispatcher.Invoke(() => Logs.Add(message));
+    }
+
+    private static string BuildMediaRelativePath(WordPressMediaItem item)
+    {
+        var uploadPath = item.MediaDetails?.File;
+        if (!string.IsNullOrWhiteSpace(uploadPath))
+        {
+            var parts = uploadPath
+                .Split(new[] { '/', '\\' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Select(SanitizeSegment)
+                .ToArray();
+            if (parts.Length > 0)
+            {
+                return Path.Combine(parts);
+            }
+        }
+
+        var fileName = item.GuessFileName();
+        var baseName = string.IsNullOrWhiteSpace(fileName)
+            ? $"media-{item.Id}"
+            : Path.GetFileNameWithoutExtension(fileName);
+        baseName = SanitizeSegment(baseName);
+        var extension = string.IsNullOrWhiteSpace(fileName) ? ".bin" : Path.GetExtension(fileName);
+        if (string.IsNullOrWhiteSpace(extension) || extension.Length > 5)
+        {
+            extension = ".bin";
+        }
+
+        var folder = item.Date?.UtcDateTime.ToString("yyyy/MM") ?? "misc";
+        var folderParts = folder
+            .Split(new[] { '/', '\\' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(SanitizeSegment)
+            .ToArray();
+
+        return Path.Combine(folderParts.Append($"{baseName}{extension}").ToArray());
+    }
+
+    private static string NormalizeRelativePath(string path)
+        => path.Replace('\', '/');
+
+    private static string SanitizeSegment(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return "segment";
+        }
+
+        var sanitized = SanitizeForPath(value);
+        return string.IsNullOrWhiteSpace(sanitized) ? "segment" : sanitized;
     }
 
     private void SetProvisioningContext(
@@ -1045,9 +1287,10 @@ public sealed class MainViewModel : INotifyPropertyChanged
         List<WooCustomer> customers,
         List<WooCoupon> coupons,
         List<WooOrder> orders,
-        List<WooSubscription> subscriptions)
+        List<WooSubscription> subscriptions,
+        WordPressSiteContent? siteContent)
     {
-        _lastProvisioningContext = new ProvisioningContext(products, configuration, pluginBundles, themeBundles, customers, coupons, orders, subscriptions);
+        _lastProvisioningContext = new ProvisioningContext(products, configuration, pluginBundles, themeBundles, customers, coupons, orders, subscriptions, siteContent);
         OnPropertyChanged(nameof(CanReplicate));
         ReplicateCommand.RaiseCanExecuteChanged();
     }
@@ -1094,7 +1337,12 @@ public sealed class MainViewModel : INotifyPropertyChanged
         {
             IsRunning = true;
             IProgress<string> logger = new Progress<string>(Append);
-            var settings = new WooProvisioningSettings(TargetStoreUrl, TargetConsumerKey, TargetConsumerSecret);
+            var settings = new WooProvisioningSettings(
+                TargetStoreUrl,
+                TargetConsumerKey,
+                TargetConsumerSecret,
+                string.IsNullOrWhiteSpace(WordPressUsername) ? null : WordPressUsername,
+                string.IsNullOrWhiteSpace(WordPressApplicationPassword) ? null : WordPressApplicationPassword);
             Append($"Provisioning {_lastProvisioningContext.Products.Count} products to {settings.BaseUrl}…");
             StoreConfiguration? configuration = null;
             if (ImportStoreConfiguration)
@@ -1131,6 +1379,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 _lastProvisioningContext.Coupons,
                 _lastProvisioningContext.Orders,
                 subscriptions: _lastProvisioningContext.Subscriptions,
+                siteContent: _lastProvisioningContext.SiteContent,
                 progress: logger);
         }
         catch (Exception ex)
@@ -1153,7 +1402,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
             List<WooCustomer> customers,
             List<WooCoupon> coupons,
             List<WooOrder> orders,
-            List<WooSubscription> subscriptions)
+            List<WooSubscription> subscriptions,
+            WordPressSiteContent? siteContent)
         {
             Products = products;
             Configuration = configuration;
@@ -1163,6 +1413,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
             Coupons = coupons;
             Orders = orders;
             Subscriptions = subscriptions;
+            SiteContent = siteContent;
         }
 
         public List<StoreProduct> Products { get; }
@@ -1173,7 +1424,10 @@ public sealed class MainViewModel : INotifyPropertyChanged
         public List<WooCoupon> Coupons { get; }
         public List<WooOrder> Orders { get; }
         public List<WooSubscription> Subscriptions { get; }
+        public WordPressSiteContent? SiteContent { get; }
     }
+
+    private sealed record MediaReference(string RelativePath, string AbsolutePath);
 
     private ShopifySettings BuildShopifySettings(string baseUrl)
     {

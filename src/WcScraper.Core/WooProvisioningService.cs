@@ -15,7 +15,12 @@ namespace WcScraper.Core;
 
 public sealed class WooProvisioningSettings
 {
-    public WooProvisioningSettings(string baseUrl, string consumerKey, string consumerSecret)
+    public WooProvisioningSettings(
+        string baseUrl,
+        string consumerKey,
+        string consumerSecret,
+        string? wordpressUsername = null,
+        string? wordpressApplicationPassword = null)
     {
         if (string.IsNullOrWhiteSpace(baseUrl))
         {
@@ -33,11 +38,17 @@ public sealed class WooProvisioningSettings
         BaseUrl = WooScraper.CleanBaseUrl(baseUrl);
         ConsumerKey = consumerKey.Trim();
         ConsumerSecret = consumerSecret.Trim();
+        WordPressUsername = string.IsNullOrWhiteSpace(wordpressUsername) ? null : wordpressUsername.Trim();
+        WordPressApplicationPassword = string.IsNullOrWhiteSpace(wordpressApplicationPassword) ? null : wordpressApplicationPassword.Trim();
     }
 
     public string BaseUrl { get; }
     public string ConsumerKey { get; }
     public string ConsumerSecret { get; }
+    public string? WordPressUsername { get; }
+    public string? WordPressApplicationPassword { get; }
+    public bool HasWordPressCredentials =>
+        !string.IsNullOrWhiteSpace(WordPressUsername) && !string.IsNullOrWhiteSpace(WordPressApplicationPassword);
 }
 
 public sealed class WooProvisioningService : IDisposable
@@ -91,6 +102,7 @@ public sealed class WooProvisioningService : IDisposable
         IEnumerable<WooCoupon>? coupons = null,
         IEnumerable<WooOrder>? orders = null,
         IEnumerable<WooSubscription>? subscriptions = null,
+        WordPressSiteContent? siteContent = null,
         IProgress<string>? progress = null,
         CancellationToken cancellationToken = default)
     {
@@ -102,8 +114,14 @@ public sealed class WooProvisioningService : IDisposable
         var couponList = coupons?.Where(c => c is not null).ToList() ?? new List<WooCoupon>();
         var orderList = orders?.Where(o => o is not null).ToList() ?? new List<WooOrder>();
         var subscriptionList = subscriptions?.Where(s => s is not null).ToList() ?? new List<WooSubscription>();
+        var hasContent = siteContent is not null
+                          && ((siteContent.Pages?.Count ?? 0) > 0
+                              || (siteContent.Posts?.Count ?? 0) > 0
+                              || (siteContent.MediaLibrary?.Count ?? 0) > 0
+                              || (siteContent.Menus?.Menus.Count ?? 0) > 0
+                              || (siteContent.Widgets?.Widgets.Count ?? 0) > 0);
 
-        if (productList.Count == 0 && customerList.Count == 0 && couponList.Count == 0 && orderList.Count == 0 && subscriptionList.Count == 0)
+        if (productList.Count == 0 && customerList.Count == 0 && couponList.Count == 0 && orderList.Count == 0 && subscriptionList.Count == 0 && !hasContent)
         {
             progress?.Report("No artifacts to provision.");
             return;
@@ -114,6 +132,19 @@ public sealed class WooProvisioningService : IDisposable
         if (configuration is not null)
         {
             await ApplyStoreConfigurationAsync(baseUrl, settings, configuration, progress, cancellationToken);
+        }
+
+        MediaProvisioningResult? mediaResult = null;
+        Dictionary<int, int>? pageIdMap = null;
+        Dictionary<int, int>? postIdMap = null;
+
+        if (siteContent is not null)
+        {
+            mediaResult = await EnsureMediaLibraryAsync(baseUrl, settings, siteContent.MediaLibrary, siteContent.MediaRootDirectory, progress, cancellationToken);
+            pageIdMap = await EnsurePagesAsync(baseUrl, settings, siteContent.Pages, mediaResult, progress, cancellationToken);
+            postIdMap = await EnsurePostsAsync(baseUrl, settings, siteContent.Posts, mediaResult, progress, cancellationToken);
+            await EnsureMenusAsync(baseUrl, settings, siteContent.Menus, pageIdMap, postIdMap, mediaResult, progress, cancellationToken);
+            await EnsureWidgetsAsync(baseUrl, settings, siteContent.Widgets, progress, cancellationToken);
         }
 
         var productIdMap = new Dictionary<int, int>();
@@ -134,6 +165,16 @@ public sealed class WooProvisioningService : IDisposable
 
             progress?.Report("Provisioning products…");
             var mediaCache = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            if (mediaResult is not null)
+            {
+                foreach (var pair in mediaResult.UrlToIdMap)
+                {
+                    if (!mediaCache.ContainsKey(pair.Key))
+                    {
+                        mediaCache[pair.Key] = pair.Value;
+                    }
+                }
+            }
 
             foreach (var product in productList)
             {
@@ -314,6 +355,1005 @@ public sealed class WooProvisioningService : IDisposable
         finally
         {
             archiveContent?.Dispose();
+        }
+    }
+
+    private sealed class MediaProvisioningResult
+    {
+        public Dictionary<int, int> IdMap { get; } = new();
+        public Dictionary<string, string> UrlMap { get; } = new(StringComparer.OrdinalIgnoreCase);
+        public Dictionary<string, int> UrlToIdMap { get; } = new(StringComparer.OrdinalIgnoreCase);
+    }
+
+    private async Task<MediaProvisioningResult> EnsureMediaLibraryAsync(
+        string baseUrl,
+        WooProvisioningSettings settings,
+        IReadOnlyList<WordPressMediaItem>? mediaItems,
+        string? mediaRootDirectory,
+        IProgress<string>? progress,
+        CancellationToken cancellationToken)
+    {
+        var result = new MediaProvisioningResult();
+
+        if (mediaItems is null || mediaItems.Count == 0)
+        {
+            return result;
+        }
+
+        if (!settings.HasWordPressCredentials)
+        {
+            progress?.Report("Skipping media library upload: missing WordPress credentials.");
+            return result;
+        }
+
+        if (string.IsNullOrWhiteSpace(mediaRootDirectory))
+        {
+            progress?.Report("Skipping media library upload: media root directory not provided.");
+            return result;
+        }
+
+        var fullMediaRoot = Path.GetFullPath(mediaRootDirectory);
+
+        foreach (var item in mediaItems)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (string.IsNullOrWhiteSpace(item.SourceUrl))
+            {
+                continue;
+            }
+
+            var localPath = item.LocalFilePath;
+            if (string.IsNullOrWhiteSpace(localPath) && !string.IsNullOrWhiteSpace(item.RelativeFilePath))
+            {
+                var relative = item.RelativeFilePath.Replace('/', Path.DirectorySeparatorChar);
+                if (relative.StartsWith("media" + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+                {
+                    relative = relative[("media" + Path.DirectorySeparatorChar).Length..];
+                }
+                localPath = Path.Combine(fullMediaRoot, relative);
+            }
+
+            if (string.IsNullOrWhiteSpace(localPath) || !File.Exists(localPath))
+            {
+                progress?.Report($"Skipping media {item.Id} ({item.SourceUrl}): local file not found.");
+                continue;
+            }
+
+            var existing = await FindExistingMediaAsync(baseUrl, settings, item, progress, cancellationToken);
+            WordPressMediaItem? ensured = existing;
+
+            if (ensured is null)
+            {
+                ensured = await UploadMediaAsync(baseUrl, settings, item, localPath, progress, cancellationToken);
+            }
+
+            if (ensured is null)
+            {
+                continue;
+            }
+
+            if (item.Id > 0 && ensured.Id > 0)
+            {
+                result.IdMap[item.Id] = ensured.Id;
+            }
+
+            if (!string.IsNullOrWhiteSpace(item.SourceUrl) && !string.IsNullOrWhiteSpace(ensured.SourceUrl))
+            {
+                result.UrlMap[item.SourceUrl] = ensured.SourceUrl;
+                result.UrlToIdMap[item.SourceUrl] = ensured.Id;
+            }
+        }
+
+        return result;
+    }
+
+    private async Task<Dictionary<int, int>> EnsurePagesAsync(
+        string baseUrl,
+        WooProvisioningSettings settings,
+        IReadOnlyList<WordPressPage>? pages,
+        MediaProvisioningResult? mediaResult,
+        IProgress<string>? progress,
+        CancellationToken cancellationToken)
+    {
+        var map = new Dictionary<int, int>();
+        if (pages is null || pages.Count == 0)
+        {
+            return map;
+        }
+
+        if (!settings.HasWordPressCredentials)
+        {
+            progress?.Report("Skipping WordPress pages: missing credentials.");
+            return map;
+        }
+
+        var ordered = pages
+            .OrderBy(p => p.ParentId.HasValue ? 1 : 0)
+            .ThenBy(p => p.Id)
+            .ToList();
+
+        foreach (var page in ordered)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var ensuredId = await EnsureContentItemAsync(baseUrl, settings, page, "pages", mediaResult, map, progress, cancellationToken);
+            if (page.Id > 0 && ensuredId > 0)
+            {
+                map[page.Id] = ensuredId;
+            }
+        }
+
+        return map;
+    }
+
+    private async Task<Dictionary<int, int>> EnsurePostsAsync(
+        string baseUrl,
+        WooProvisioningSettings settings,
+        IReadOnlyList<WordPressPost>? posts,
+        MediaProvisioningResult? mediaResult,
+        IProgress<string>? progress,
+        CancellationToken cancellationToken)
+    {
+        var map = new Dictionary<int, int>();
+        if (posts is null || posts.Count == 0)
+        {
+            return map;
+        }
+
+        if (!settings.HasWordPressCredentials)
+        {
+            progress?.Report("Skipping WordPress posts: missing credentials.");
+            return map;
+        }
+
+        foreach (var post in posts)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var ensuredId = await EnsureContentItemAsync(baseUrl, settings, post, "posts", mediaResult, null, progress, cancellationToken);
+            if (post.Id > 0 && ensuredId > 0)
+            {
+                map[post.Id] = ensuredId;
+            }
+        }
+
+        return map;
+    }
+
+    private async Task EnsureMenusAsync(
+        string baseUrl,
+        WooProvisioningSettings settings,
+        WordPressMenuCollection? menuCollection,
+        IReadOnlyDictionary<int, int>? pageIdMap,
+        IReadOnlyDictionary<int, int>? postIdMap,
+        MediaProvisioningResult? mediaResult,
+        IProgress<string>? progress,
+        CancellationToken cancellationToken)
+    {
+        if (menuCollection is null || menuCollection.Menus.Count == 0)
+        {
+            return;
+        }
+
+        if (!settings.HasWordPressCredentials)
+        {
+            progress?.Report("Skipping WordPress menus: missing credentials.");
+            return;
+        }
+
+        var menuIdMap = new Dictionary<int, int>();
+
+        foreach (var menu in menuCollection.Menus)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var ensuredId = await EnsureMenuAsync(baseUrl, settings, menu, progress, cancellationToken);
+            if (menu.Id > 0 && ensuredId > 0)
+            {
+                menuIdMap[menu.Id] = ensuredId;
+            }
+
+            await DeleteMenuItemsAsync(baseUrl, settings, ensuredId, progress, cancellationToken);
+
+            if (menu.Items is { Count: > 0 })
+            {
+                var menuItemIdMap = new Dictionary<int, int>();
+                var orderedItems = menu.Items.OrderBy(i => i.Order ?? 0).ToList();
+                foreach (var item in orderedItems)
+                {
+                    await EnsureMenuItemRecursive(baseUrl, settings, item, ensuredId, null, pageIdMap, postIdMap, mediaResult, menuItemIdMap, progress, cancellationToken);
+                }
+            }
+        }
+
+        if (menuCollection.Locations.Count > 0)
+        {
+            await EnsureMenuLocationsAsync(baseUrl, settings, menuCollection.Locations, menuIdMap, progress, cancellationToken);
+        }
+    }
+
+    private async Task EnsureWidgetsAsync(
+        string baseUrl,
+        WooProvisioningSettings settings,
+        WordPressWidgetSnapshot? widgets,
+        IProgress<string>? progress,
+        CancellationToken cancellationToken)
+    {
+        if (widgets is null || (widgets.Widgets.Count == 0 && widgets.Areas.Count == 0))
+        {
+            return;
+        }
+
+        if (!settings.HasWordPressCredentials)
+        {
+            progress?.Report("Skipping WordPress widgets: missing credentials.");
+            return;
+        }
+
+        await ClearWidgetsAsync(baseUrl, settings, progress, cancellationToken);
+
+        foreach (var widget in widgets.Widgets)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            await CreateWidgetAsync(baseUrl, settings, widget, progress, cancellationToken);
+        }
+    }
+
+    private async Task<int> EnsureContentItemAsync<T>(
+        string baseUrl,
+        WooProvisioningSettings settings,
+        T item,
+        string resource,
+        MediaProvisioningResult? mediaResult,
+        IReadOnlyDictionary<int, int>? parentIdMap,
+        IProgress<string>? progress,
+        CancellationToken cancellationToken) where T : WordPressContentBase
+    {
+        if (item is null)
+        {
+            return 0;
+        }
+
+        var slug = string.IsNullOrWhiteSpace(item.Slug)
+            ? CreateSlug(item.Title?.Rendered)
+            : item.Slug!;
+
+        var replacements = mediaResult?.UrlMap;
+        var contentHtml = RewriteHtml(item.Content?.Rendered, replacements);
+        var excerptHtml = RewriteHtml(item.Excerpt?.Rendered, replacements);
+
+        var payload = new Dictionary<string, object?>
+        {
+            ["title"] = item.Title?.Rendered,
+            ["content"] = contentHtml,
+            ["status"] = item.Status ?? "publish",
+            ["slug"] = slug,
+            ["excerpt"] = excerptHtml,
+            ["template"] = item.Template,
+            ["author"] = item.Author
+        };
+
+        if (item.Date.HasValue)
+        {
+            payload["date"] = item.Date.Value.ToString("o");
+        }
+        if (item.DateGmt.HasValue)
+        {
+            payload["date_gmt"] = item.DateGmt.Value.ToString("o");
+        }
+        if (item.Modified.HasValue)
+        {
+            payload["modified"] = item.Modified.Value.ToString("o");
+        }
+        if (item.ModifiedGmt.HasValue)
+        {
+            payload["modified_gmt"] = item.ModifiedGmt.Value.ToString("o");
+        }
+
+        if (item.Meta is JsonElement metaElement)
+        {
+            payload["meta"] = metaElement;
+        }
+
+        if (item is WordPressPage page)
+        {
+            if (page.MenuOrder.HasValue)
+            {
+                payload["menu_order"] = page.MenuOrder.Value;
+            }
+
+            if (page.ParentId.HasValue && parentIdMap is not null && parentIdMap.TryGetValue(page.ParentId.Value, out var newParent))
+            {
+                payload["parent"] = newParent;
+            }
+        }
+
+        if (item is WordPressPost post)
+        {
+            if (!string.IsNullOrWhiteSpace(post.CommentStatus))
+            {
+                payload["comment_status"] = post.CommentStatus;
+            }
+            if (!string.IsNullOrWhiteSpace(post.PingStatus))
+            {
+                payload["ping_status"] = post.PingStatus;
+            }
+            if (post.Sticky is not null)
+            {
+                payload["sticky"] = post.Sticky;
+            }
+        }
+
+        if (item.FeaturedMediaId.HasValue && mediaResult is not null && mediaResult.IdMap.TryGetValue(item.FeaturedMediaId.Value, out var mappedFeatured))
+        {
+            payload["featured_media"] = mappedFeatured;
+        }
+        else if (!string.IsNullOrWhiteSpace(item.FeaturedMediaUrl) && mediaResult is not null && mediaResult.UrlToIdMap.TryGetValue(item.FeaturedMediaUrl, out var mappedFromUrl))
+        {
+            payload["featured_media"] = mappedFromUrl;
+        }
+
+        var existing = await FindExistingContentAsync(baseUrl, settings, resource, slug, progress, cancellationToken);
+        var url = existing is not null
+            ? $"{baseUrl}/wp-json/wp/v2/{resource}/{existing.Id}"
+            : $"{baseUrl}/wp-json/wp/v2/{resource}";
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, url);
+        request.Headers.Authorization = CreateBasicAuthHeader(settings.WordPressUsername!, settings.WordPressApplicationPassword!);
+        var json = JsonSerializer.Serialize(payload, _writeOptions);
+        request.Content = new StringContent(json, Encoding.UTF8, "application/json");
+
+        try
+        {
+            using var response = await _httpClient.SendAsync(request, cancellationToken);
+            if (!response.IsSuccessStatusCode)
+            {
+                progress?.Report($"Failed to provision WordPress {resource.TrimEnd('s')} '{slug}': {(int)response.StatusCode} ({response.ReasonPhrase}).");
+                return existing?.Id ?? 0;
+            }
+
+            var responseText = await response.Content.ReadAsStringAsync(cancellationToken);
+            using var doc = JsonDocument.Parse(responseText);
+            if (doc.RootElement.TryGetProperty("id", out var idElement) && idElement.ValueKind == JsonValueKind.Number)
+            {
+                return idElement.GetInt32();
+            }
+        }
+        catch (Exception ex)
+        {
+            progress?.Report($"Failed to provision WordPress {resource.TrimEnd('s')} '{slug}': {ex.Message}");
+        }
+
+        return existing?.Id ?? 0;
+    }
+
+    private async Task<T?> FindExistingContentAsync<T>(
+        string baseUrl,
+        WooProvisioningSettings settings,
+        string resource,
+        string slug,
+        IProgress<string>? progress,
+        CancellationToken cancellationToken) where T : WordPressContentBase
+    {
+        if (string.IsNullOrWhiteSpace(slug))
+        {
+            return null;
+        }
+
+        var url = BuildUrl(baseUrl, $"/wp-json/wp/v2/{resource}?slug={Uri.EscapeDataString(slug)}");
+        using var request = new HttpRequestMessage(HttpMethod.Get, url);
+        request.Headers.Authorization = CreateBasicAuthHeader(settings.WordPressUsername!, settings.WordPressApplicationPassword!);
+
+        try
+        {
+            using var response = await _httpClient.SendAsync(request, cancellationToken);
+            if (!response.IsSuccessStatusCode)
+            {
+                return null;
+            }
+
+            var text = await response.Content.ReadAsStringAsync(cancellationToken);
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                return null;
+            }
+
+            var items = JsonSerializer.Deserialize<List<T>>(text, _readOptions);
+            return items?.FirstOrDefault();
+        }
+        catch (Exception ex)
+        {
+            progress?.Report($"Failed to query existing WordPress {resource.TrimEnd('s')} '{slug}': {ex.Message}");
+            return null;
+        }
+    }
+
+    private static string CreateSlug(string? input)
+    {
+        if (string.IsNullOrWhiteSpace(input))
+        {
+            return $"content-{Guid.NewGuid():N}";
+        }
+
+        var lower = input.ToLowerInvariant();
+        var builder = new StringBuilder(lower.Length);
+        var lastDash = false;
+
+        foreach (var ch in lower)
+        {
+            if (char.IsLetterOrDigit(ch))
+            {
+                builder.Append(ch);
+                lastDash = false;
+            }
+            else if (!lastDash)
+            {
+                builder.Append('-');
+                lastDash = true;
+            }
+        }
+
+        var slug = builder.ToString().Trim('-');
+        return string.IsNullOrWhiteSpace(slug) ? $"content-{Guid.NewGuid():N}" : slug;
+    }
+
+    private static string? RewriteHtml(string? html, IDictionary<string, string>? replacements)
+    {
+        if (string.IsNullOrWhiteSpace(html) || replacements is null || replacements.Count == 0)
+        {
+            return html;
+        }
+
+        var result = html;
+        foreach (var pair in replacements)
+        {
+            if (!string.IsNullOrWhiteSpace(pair.Key) && !string.IsNullOrWhiteSpace(pair.Value))
+            {
+                result = result.Replace(pair.Key, pair.Value, StringComparison.OrdinalIgnoreCase);
+            }
+        }
+
+        return result;
+    }
+
+    private async Task<int> EnsureMenuAsync(
+        string baseUrl,
+        WooProvisioningSettings settings,
+        WordPressMenu menu,
+        IProgress<string>? progress,
+        CancellationToken cancellationToken)
+    {
+        if (menu is null)
+        {
+            return 0;
+        }
+
+        var slug = string.IsNullOrWhiteSpace(menu.Slug) ? CreateSlug(menu.Name) : menu.Slug!;
+        var existingId = await FindMenuIdBySlugAsync(baseUrl, settings, slug, cancellationToken);
+
+        var payload = new Dictionary<string, object?>
+        {
+            ["name"] = string.IsNullOrWhiteSpace(menu.Name) ? slug : menu.Name,
+            ["slug"] = slug,
+            ["description"] = menu.Description,
+            ["auto_add"] = menu.AutoAdd
+        };
+
+        var url = existingId > 0
+            ? BuildUrl(baseUrl, $"/wp-json/wp/v2/menus/{existingId}")
+            : BuildUrl(baseUrl, "/wp-json/wp/v2/menus");
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, url);
+        request.Headers.Authorization = CreateBasicAuthHeader(settings.WordPressUsername!, settings.WordPressApplicationPassword!);
+        var json = JsonSerializer.Serialize(payload, _writeOptions);
+        request.Content = new StringContent(json, Encoding.UTF8, "application/json");
+
+        try
+        {
+            using var response = await _httpClient.SendAsync(request, cancellationToken);
+            if (!response.IsSuccessStatusCode)
+            {
+                progress?.Report($"Failed to provision menu '{slug}': {(int)response.StatusCode} ({response.ReasonPhrase}).");
+                return existingId;
+            }
+
+            if (existingId > 0)
+            {
+                return existingId;
+            }
+
+            var responseText = await response.Content.ReadAsStringAsync(cancellationToken);
+            using var doc = JsonDocument.Parse(responseText);
+            if (doc.RootElement.TryGetProperty("id", out var idElement) && idElement.ValueKind == JsonValueKind.Number)
+            {
+                return idElement.GetInt32();
+            }
+        }
+        catch (Exception ex)
+        {
+            progress?.Report($"Failed to provision menu '{slug}': {ex.Message}");
+        }
+
+        return existingId;
+    }
+
+    private async Task<int> FindMenuIdBySlugAsync(
+        string baseUrl,
+        WooProvisioningSettings settings,
+        string slug,
+        CancellationToken cancellationToken)
+    {
+        var url = BuildUrl(baseUrl, $"/wp-json/wp/v2/menus?slug={Uri.EscapeDataString(slug)}");
+        using var request = new HttpRequestMessage(HttpMethod.Get, url);
+        request.Headers.Authorization = CreateBasicAuthHeader(settings.WordPressUsername!, settings.WordPressApplicationPassword!);
+
+        using var response = await _httpClient.SendAsync(request, cancellationToken);
+        if (!response.IsSuccessStatusCode)
+        {
+            return 0;
+        }
+
+        var text = await response.Content.ReadAsStringAsync(cancellationToken);
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return 0;
+        }
+
+        var menus = JsonSerializer.Deserialize<List<WordPressMenu>>(text, _readOptions);
+        return menus?.FirstOrDefault()?.Id ?? 0;
+    }
+
+    private async Task DeleteMenuItemsAsync(
+        string baseUrl,
+        WooProvisioningSettings settings,
+        int menuId,
+        IProgress<string>? progress,
+        CancellationToken cancellationToken)
+    {
+        if (menuId <= 0)
+        {
+            return;
+        }
+
+        for (var page = 1; page <= 10; page++)
+        {
+            var url = BuildUrl(baseUrl, $"/wp-json/wp/v2/menu-items?menu={menuId}&per_page=100&page={page}");
+            using var request = new HttpRequestMessage(HttpMethod.Get, url);
+            request.Headers.Authorization = CreateBasicAuthHeader(settings.WordPressUsername!, settings.WordPressApplicationPassword!);
+
+            using var response = await _httpClient.SendAsync(request, cancellationToken);
+            if (!response.IsSuccessStatusCode)
+            {
+                break;
+            }
+
+            var text = await response.Content.ReadAsStringAsync(cancellationToken);
+            var items = JsonSerializer.Deserialize<List<WordPressMenuItem>>(text, _readOptions);
+            if (items is null || items.Count == 0)
+            {
+                break;
+            }
+
+            foreach (var item in items)
+            {
+                if (item.Id <= 0)
+                {
+                    continue;
+                }
+
+                var deleteUrl = BuildUrl(baseUrl, $"/wp-json/wp/v2/menu-items/{item.Id}?force=true");
+                using var deleteRequest = new HttpRequestMessage(HttpMethod.Delete, deleteUrl);
+                deleteRequest.Headers.Authorization = CreateBasicAuthHeader(settings.WordPressUsername!, settings.WordPressApplicationPassword!);
+                await _httpClient.SendAsync(deleteRequest, cancellationToken);
+            }
+
+            if (items.Count < 100)
+            {
+                break;
+            }
+        }
+    }
+
+    private async Task EnsureMenuItemRecursive(
+        string baseUrl,
+        WooProvisioningSettings settings,
+        WordPressMenuItem item,
+        int menuId,
+        int? parentId,
+        IReadOnlyDictionary<int, int>? pageIdMap,
+        IReadOnlyDictionary<int, int>? postIdMap,
+        MediaProvisioningResult? mediaResult,
+        Dictionary<int, int> menuItemIdMap,
+        IProgress<string>? progress,
+        CancellationToken cancellationToken)
+    {
+        if (item is null)
+        {
+            return;
+        }
+
+        var payload = new Dictionary<string, object?>
+        {
+            ["title"] = item.Title?.Rendered,
+            ["menu"] = menuId,
+            ["status"] = item.Status ?? "publish",
+            ["description"] = item.Description,
+            ["attr_title"] = item.AttrTitle,
+            ["target"] = item.Target,
+            ["type"] = item.Type,
+            ["object"] = item.Object,
+            ["url"] = RewriteMenuItemUrl(item.Url, mediaResult)
+        };
+
+        if (parentId.HasValue)
+        {
+            payload["parent"] = parentId.Value;
+        }
+        else if (item.ParentId.HasValue && menuItemIdMap.TryGetValue(item.ParentId.Value, out var mappedParent))
+        {
+            payload["parent"] = mappedParent;
+        }
+
+        if (item.ObjectId.HasValue && item.ObjectId.Value > 0)
+        {
+            if (!string.IsNullOrWhiteSpace(item.Object)
+                && pageIdMap is not null
+                && item.Object.Equals("page", StringComparison.OrdinalIgnoreCase)
+                && pageIdMap.TryGetValue(item.ObjectId.Value, out var mappedPage))
+            {
+                payload["object_id"] = mappedPage;
+            }
+            else if (!string.IsNullOrWhiteSpace(item.Object)
+                && postIdMap is not null
+                && item.Object.Equals("post", StringComparison.OrdinalIgnoreCase)
+                && postIdMap.TryGetValue(item.ObjectId.Value, out var mappedPost))
+            {
+                payload["object_id"] = mappedPost;
+            }
+            else
+            {
+                payload["object_id"] = item.ObjectId.Value;
+            }
+        }
+
+        if (item.Classes is { Count: > 0 })
+        {
+            payload["classes"] = item.Classes;
+        }
+
+        if (item.Relationship is { Count: > 0 })
+        {
+            payload["xfn"] = item.Relationship;
+        }
+
+        if (item.Meta is JsonElement metaElement)
+        {
+            payload["meta"] = metaElement;
+        }
+
+        var url = BuildUrl(baseUrl, "/wp-json/wp/v2/menu-items");
+        using var request = new HttpRequestMessage(HttpMethod.Post, url);
+        request.Headers.Authorization = CreateBasicAuthHeader(settings.WordPressUsername!, settings.WordPressApplicationPassword!);
+        var json = JsonSerializer.Serialize(payload, _writeOptions);
+        request.Content = new StringContent(json, Encoding.UTF8, "application/json");
+
+        try
+        {
+            using var response = await _httpClient.SendAsync(request, cancellationToken);
+            if (!response.IsSuccessStatusCode)
+            {
+                progress?.Report($"Failed to create menu item '{item.Title?.Rendered ?? item.Url}': {(int)response.StatusCode} ({response.ReasonPhrase}).");
+                return;
+            }
+
+            var responseText = await response.Content.ReadAsStringAsync(cancellationToken);
+            using var doc = JsonDocument.Parse(responseText);
+            if (doc.RootElement.TryGetProperty("id", out var idElement) && idElement.ValueKind == JsonValueKind.Number)
+            {
+                var newId = idElement.GetInt32();
+                if (item.Id > 0)
+                {
+                    menuItemIdMap[item.Id] = newId;
+                }
+
+                if (item.Children is { Count: > 0 })
+                {
+                    foreach (var child in item.Children.OrderBy(i => i.Order ?? 0))
+                    {
+                        await EnsureMenuItemRecursive(baseUrl, settings, child, menuId, newId, pageIdMap, postIdMap, mediaResult, menuItemIdMap, progress, cancellationToken);
+                    }
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            progress?.Report($"Failed to create menu item '{item.Title?.Rendered ?? item.Url}': {ex.Message}");
+        }
+    }
+
+    private static string? RewriteMenuItemUrl(string? url, MediaProvisioningResult? mediaResult)
+    {
+        if (string.IsNullOrWhiteSpace(url) || mediaResult is null || mediaResult.UrlMap.Count == 0)
+        {
+            return url;
+        }
+
+        var result = url;
+        foreach (var pair in mediaResult.UrlMap)
+        {
+            result = result.Replace(pair.Key, pair.Value, StringComparison.OrdinalIgnoreCase);
+        }
+
+        return result;
+    }
+
+    private async Task EnsureMenuLocationsAsync(
+        string baseUrl,
+        WooProvisioningSettings settings,
+        IReadOnlyList<WordPressMenuLocation> locations,
+        IReadOnlyDictionary<int, int> menuIdMap,
+        IProgress<string>? progress,
+        CancellationToken cancellationToken)
+    {
+        foreach (var location in locations)
+        {
+            if (location.MenuId.HasValue
+                && menuIdMap.TryGetValue(location.MenuId.Value, out var mappedMenu)
+                && !string.IsNullOrWhiteSpace(location.Slug))
+            {
+                await AssignMenuToLocationAsync(baseUrl, settings, location.Slug!, mappedMenu, progress, cancellationToken);
+            }
+        }
+    }
+
+    private async Task AssignMenuToLocationAsync(
+        string baseUrl,
+        WooProvisioningSettings settings,
+        string locationSlug,
+        int menuId,
+        IProgress<string>? progress,
+        CancellationToken cancellationToken)
+    {
+        var url = BuildUrl(baseUrl, $"/wp-json/wp/v2/menu-locations/{locationSlug}");
+        using var request = new HttpRequestMessage(HttpMethod.Post, url);
+        request.Headers.Authorization = CreateBasicAuthHeader(settings.WordPressUsername!, settings.WordPressApplicationPassword!);
+        var payload = new Dictionary<string, object?> { ["menu"] = menuId };
+        var json = JsonSerializer.Serialize(payload, _writeOptions);
+        request.Content = new StringContent(json, Encoding.UTF8, "application/json");
+
+        try
+        {
+            using var response = await _httpClient.SendAsync(request, cancellationToken);
+            if (!response.IsSuccessStatusCode)
+            {
+                progress?.Report($"Failed to assign menu {menuId} to location '{locationSlug}': {(int)response.StatusCode} ({response.ReasonPhrase}).");
+            }
+        }
+        catch (Exception ex)
+        {
+            progress?.Report($"Failed to assign menu {menuId} to location '{locationSlug}': {ex.Message}");
+        }
+    }
+
+    private async Task ClearWidgetsAsync(
+        string baseUrl,
+        WooProvisioningSettings settings,
+        IProgress<string>? progress,
+        CancellationToken cancellationToken)
+    {
+        for (var page = 1; page <= 10; page++)
+        {
+            var url = BuildUrl(baseUrl, $"/wp-json/wp/v2/widgets?per_page=100&page={page}");
+            using var request = new HttpRequestMessage(HttpMethod.Get, url);
+            request.Headers.Authorization = CreateBasicAuthHeader(settings.WordPressUsername!, settings.WordPressApplicationPassword!);
+
+            using var response = await _httpClient.SendAsync(request, cancellationToken);
+            if (!response.IsSuccessStatusCode)
+            {
+                break;
+            }
+
+            var text = await response.Content.ReadAsStringAsync(cancellationToken);
+            var items = JsonSerializer.Deserialize<List<WordPressWidget>>(text, _readOptions);
+            if (items is null || items.Count == 0)
+            {
+                break;
+            }
+
+            foreach (var widget in items)
+            {
+                if (string.IsNullOrWhiteSpace(widget.Id))
+                {
+                    continue;
+                }
+
+                var deleteUrl = BuildUrl(baseUrl, $"/wp-json/wp/v2/widgets/{widget.Id}?force=true");
+                using var deleteRequest = new HttpRequestMessage(HttpMethod.Delete, deleteUrl);
+                deleteRequest.Headers.Authorization = CreateBasicAuthHeader(settings.WordPressUsername!, settings.WordPressApplicationPassword!);
+                await _httpClient.SendAsync(deleteRequest, cancellationToken);
+            }
+
+            if (items.Count < 100)
+            {
+                break;
+            }
+        }
+    }
+
+    private async Task CreateWidgetAsync(
+        string baseUrl,
+        WooProvisioningSettings settings,
+        WordPressWidget widget,
+        IProgress<string>? progress,
+        CancellationToken cancellationToken)
+    {
+        var payload = new Dictionary<string, object?>
+        {
+            ["id_base"] = widget.IdBase,
+            ["sidebar"] = widget.Sidebar,
+            ["title"] = widget.Title,
+            ["status"] = widget.Status ?? "publish"
+        };
+
+        if (widget.Instance is JsonElement instanceElement)
+        {
+            payload["instance"] = instanceElement;
+        }
+
+        var url = BuildUrl(baseUrl, "/wp-json/wp/v2/widgets");
+        using var request = new HttpRequestMessage(HttpMethod.Post, url);
+        request.Headers.Authorization = CreateBasicAuthHeader(settings.WordPressUsername!, settings.WordPressApplicationPassword!);
+        var json = JsonSerializer.Serialize(payload, _writeOptions);
+        request.Content = new StringContent(json, Encoding.UTF8, "application/json");
+
+        try
+        {
+            using var response = await _httpClient.SendAsync(request, cancellationToken);
+            if (!response.IsSuccessStatusCode)
+            {
+                progress?.Report($"Failed to create widget '{widget.IdBase}': {(int)response.StatusCode} ({response.ReasonPhrase}).");
+            }
+        }
+        catch (Exception ex)
+        {
+            progress?.Report($"Failed to create widget '{widget.IdBase}': {ex.Message}");
+        }
+    }
+
+    private async Task<WordPressMediaItem?> FindExistingMediaAsync(
+        string baseUrl,
+        WooProvisioningSettings settings,
+        WordPressMediaItem item,
+        IProgress<string>? progress,
+        CancellationToken cancellationToken)
+    {
+        var queries = new List<string>();
+        if (!string.IsNullOrWhiteSpace(item.Slug))
+        {
+            queries.Add($"slug={Uri.EscapeDataString(item.Slug)}");
+        }
+
+        var fileName = item.GuessFileName();
+        if (!string.IsNullOrWhiteSpace(fileName))
+        {
+            queries.Add($"search={Uri.EscapeDataString(fileName)}");
+        }
+
+        foreach (var query in queries.Distinct())
+        {
+            var url = BuildUrl(baseUrl, $"/wp-json/wp/v2/media?per_page=1&{query}");
+            using var request = new HttpRequestMessage(HttpMethod.Get, url);
+            request.Headers.Authorization = CreateBasicAuthHeader(settings.WordPressUsername!, settings.WordPressApplicationPassword!);
+
+            try
+            {
+                using var response = await _httpClient.SendAsync(request, cancellationToken);
+                if (!response.IsSuccessStatusCode)
+                {
+                    continue;
+                }
+
+                var text = await response.Content.ReadAsStringAsync(cancellationToken);
+                var matches = JsonSerializer.Deserialize<List<WordPressMediaItem>>(text, _readOptions);
+                if (matches is { Count: > 0 })
+                {
+                    return matches.First();
+                }
+            }
+            catch (Exception ex)
+            {
+                progress?.Report($"Failed to query existing media '{item.SourceUrl}': {ex.Message}");
+            }
+        }
+
+        return null;
+    }
+
+    private async Task<WordPressMediaItem?> UploadMediaAsync(
+        string baseUrl,
+        WooProvisioningSettings settings,
+        WordPressMediaItem item,
+        string localPath,
+        IProgress<string>? progress,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await using var stream = File.OpenRead(localPath);
+            using var content = new StreamContent(stream);
+            content.Headers.ContentType = new MediaTypeHeaderValue(item.MimeType ?? "application/octet-stream");
+            var fileName = Path.GetFileName(localPath);
+            content.Headers.ContentDisposition = new ContentDispositionHeaderValue("attachment")
+            {
+                FileNameStar = fileName
+            };
+
+            var url = BuildUrl(baseUrl, "/wp-json/wp/v2/media");
+            using var request = new HttpRequestMessage(HttpMethod.Post, url);
+            request.Headers.Authorization = CreateBasicAuthHeader(settings.WordPressUsername!, settings.WordPressApplicationPassword!);
+            if (!string.IsNullOrWhiteSpace(item.Slug))
+            {
+                request.Headers.Add("Slug", item.Slug);
+            }
+
+            request.Content = content;
+
+            using var response = await _httpClient.SendAsync(request, cancellationToken);
+            if (!response.IsSuccessStatusCode)
+            {
+                progress?.Report($"Failed to upload media {item.SourceUrl}: {(int)response.StatusCode} ({response.ReasonPhrase}).");
+                return null;
+            }
+
+            var responseText = await response.Content.ReadAsStringAsync(cancellationToken);
+            var created = JsonSerializer.Deserialize<WordPressMediaItem>(responseText, _readOptions);
+            if (created is null)
+            {
+                return null;
+            }
+
+            await UpdateMediaMetadataAsync(baseUrl, settings, created.Id, item, cancellationToken);
+
+            return created;
+        }
+        catch (Exception ex)
+        {
+            progress?.Report($"Failed to upload media {item.SourceUrl}: {ex.Message}");
+            return null;
+        }
+    }
+
+    private async Task UpdateMediaMetadataAsync(
+        string baseUrl,
+        WooProvisioningSettings settings,
+        int mediaId,
+        WordPressMediaItem source,
+        CancellationToken cancellationToken)
+    {
+        var payload = new Dictionary<string, object?>
+        {
+            ["title"] = source.Title?.Rendered,
+            ["caption"] = source.Caption?.Rendered,
+            ["alt_text"] = source.AltText,
+            ["description"] = source.Description?.Rendered,
+            ["slug"] = source.Slug
+        };
+
+        if (payload.Values.All(value => value is null))
+        {
+            return;
+        }
+
+        var url = BuildUrl(baseUrl, $"/wp-json/wp/v2/media/{mediaId}");
+        using var request = new HttpRequestMessage(HttpMethod.Post, url);
+        request.Headers.Authorization = CreateBasicAuthHeader(settings.WordPressUsername!, settings.WordPressApplicationPassword!);
+        var json = JsonSerializer.Serialize(payload, _writeOptions);
+        request.Content = new StringContent(json, Encoding.UTF8, "application/json");
+        try
+        {
+            await _httpClient.SendAsync(request, cancellationToken);
+        }
+        catch
+        {
+            // Ignore metadata update failures
         }
     }
 
