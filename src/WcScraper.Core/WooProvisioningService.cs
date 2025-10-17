@@ -97,6 +97,7 @@ public sealed class WooProvisioningService : IDisposable
     public async Task ProvisionAsync(
         WooProvisioningSettings settings,
         IEnumerable<StoreProduct> products,
+        IEnumerable<StoreProduct>? variations = null,
         StoreConfiguration? configuration = null,
         IEnumerable<WooCustomer>? customers = null,
         IEnumerable<WooCoupon>? coupons = null,
@@ -110,6 +111,7 @@ public sealed class WooProvisioningService : IDisposable
         if (products is null) throw new ArgumentNullException(nameof(products));
 
         var productList = products.Where(p => p is not null).ToList();
+        var variationList = variations?.Where(v => v is not null).ToList() ?? new List<StoreProduct>();
         var customerList = customers?.Where(c => c is not null).ToList() ?? new List<WooCustomer>();
         var couponList = coupons?.Where(c => c is not null).ToList() ?? new List<WooCoupon>();
         var orderList = orders?.Where(o => o is not null).ToList() ?? new List<WooOrder>();
@@ -157,7 +159,7 @@ public sealed class WooProvisioningService : IDisposable
             progress?.Report($"Preparing taxonomies for {productList.Count} products…");
             var categorySeeds = CollectTaxonomySeeds(productList.SelectMany(p => p.Categories ?? Enumerable.Empty<Category>()), c => c.Name, c => c.Slug);
             var tagSeeds = CollectTaxonomySeeds(productList.SelectMany(p => p.Tags ?? Enumerable.Empty<ProductTag>()), t => t.Name, t => t.Slug);
-            var attributeSeeds = CollectAttributeSeeds(productList);
+            var attributeSeeds = CollectAttributeSeeds(productList.Concat(variationList));
 
             var categoryMap = await EnsureTaxonomiesAsync(baseUrl, settings, "categories", categorySeeds, progress, cancellationToken);
             var tagMap = await EnsureTaxonomiesAsync(baseUrl, settings, "tags", tagSeeds, progress, cancellationToken);
@@ -176,14 +178,46 @@ public sealed class WooProvisioningService : IDisposable
                 }
             }
 
+            var variableParentIds = new HashSet<int>(variationList
+                .Select(v => v.ParentId)
+                .Where(id => id.HasValue && id.Value > 0)
+                .Select(id => id!.Value));
+            var productLookup = productList
+                .Where(p => p.Id > 0)
+                .ToDictionary(p => p.Id, p => p);
+
             foreach (var product in productList)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                var ensuredId = await EnsureProductAsync(baseUrl, settings, product, categoryMap, tagMap, attributeMap, mediaCache, progress, cancellationToken);
+                var ensuredId = await EnsureProductAsync(
+                    baseUrl,
+                    settings,
+                    product,
+                    categoryMap,
+                    tagMap,
+                    attributeMap,
+                    mediaCache,
+                    variableParentIds.Contains(product.Id),
+                    progress,
+                    cancellationToken);
                 if (product.Id > 0)
                 {
                     productIdMap[product.Id] = ensuredId;
                 }
+            }
+
+            if (variationList.Count > 0)
+            {
+                await EnsureVariationsAsync(
+                    baseUrl,
+                    settings,
+                    productLookup,
+                    variationList,
+                    attributeMap,
+                    mediaCache,
+                    productIdMap,
+                    progress,
+                    cancellationToken);
             }
         }
 
@@ -1365,6 +1399,7 @@ public sealed class WooProvisioningService : IDisposable
         IReadOnlyDictionary<string, int> tagMap,
         IReadOnlyDictionary<string, int> attributeMap,
         Dictionary<string, int> mediaCache,
+        bool isVariableProduct,
         IProgress<string>? progress,
         CancellationToken cancellationToken)
     {
@@ -1378,7 +1413,14 @@ public sealed class WooProvisioningService : IDisposable
         var payload = new Dictionary<string, object?>();
         AddIfValue(payload, "name", product.Name);
         AddIfValue(payload, "slug", NormalizeSlug(product.Slug));
-        AddIfValue(payload, "type", string.IsNullOrWhiteSpace(product.Type) ? "simple" : product.Type);
+        if (isVariableProduct)
+        {
+            payload["type"] = "variable";
+        }
+        else
+        {
+            AddIfValue(payload, "type", string.IsNullOrWhiteSpace(product.Type) ? "simple" : product.Type);
+        }
         AddIfValue(payload, "sku", string.IsNullOrWhiteSpace(product.Sku) ? null : product.Sku);
         AddIfValue(payload, "status", "publish");
         AddIfValue(payload, "regular_price", ResolvePrice(product.Prices));
@@ -1417,6 +1459,348 @@ public sealed class WooProvisioningService : IDisposable
         progress?.Report($"Creating product '{product.Name ?? product.Slug ?? product.Id.ToString()}'.");
         var created = await PostAsync<WooProductSummary>(baseUrl, settings, "/wp-json/wc/v3/products", payload, cancellationToken);
         return created.Id;
+    }
+
+    private async Task EnsureVariationsAsync(
+        string baseUrl,
+        WooProvisioningSettings settings,
+        IReadOnlyDictionary<int, StoreProduct> productLookup,
+        List<StoreProduct> variations,
+        IReadOnlyDictionary<string, int> attributeMap,
+        Dictionary<string, int> mediaCache,
+        Dictionary<int, int> productIdMap,
+        IProgress<string>? progress,
+        CancellationToken cancellationToken)
+    {
+        var grouped = variations
+            .Where(v => v?.ParentId is int id && id > 0)
+            .GroupBy(v => v.ParentId!.Value, v => v);
+
+        foreach (var group in grouped)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!productIdMap.TryGetValue(group.Key, out var mappedParentId))
+            {
+                progress?.Report($"Skipping {group.Count()} variations for parent {group.Key}: parent was not provisioned.");
+                continue;
+            }
+
+            productLookup.TryGetValue(group.Key, out var parentProduct);
+            var parentLabel = BuildParentLabel(parentProduct, group.Key);
+            progress?.Report($"Provisioning {group.Count()} variations for '{parentLabel}' (ID {mappedParentId}).");
+
+            var existing = await FetchExistingVariationsAsync(baseUrl, settings, mappedParentId, cancellationToken);
+            var existingBySku = new Dictionary<string, WooVariationResponse>(StringComparer.OrdinalIgnoreCase);
+            var existingByAttributes = new Dictionary<string, WooVariationResponse>(StringComparer.OrdinalIgnoreCase);
+            foreach (var item in existing)
+            {
+                if (!string.IsNullOrWhiteSpace(item.Sku))
+                {
+                    existingBySku[item.Sku!] = item;
+                }
+
+                var key = BuildVariationAttributeKey(item.Attributes);
+                if (key is not null)
+                {
+                    existingByAttributes[key] = item;
+                }
+            }
+
+            foreach (var variation in group)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var attributePayload = BuildVariationAttributePayload(variation, attributeMap);
+                var attributeKey = BuildVariationAttributeKey(attributePayload);
+                WooVariationResponse? existingMatch = null;
+
+                if (!string.IsNullOrWhiteSpace(variation.Sku) && existingBySku.TryGetValue(variation.Sku!, out var bySku))
+                {
+                    existingMatch = bySku;
+                }
+                else if (attributeKey is not null && existingByAttributes.TryGetValue(attributeKey, out var byAttributes))
+                {
+                    existingMatch = byAttributes;
+                }
+
+                var payload = await BuildVariationPayloadAsync(baseUrl, settings, variation, parentProduct, attributePayload, mediaCache, progress, cancellationToken);
+                var label = BuildVariationLabel(variation, parentProduct);
+
+                if (existingMatch is not null)
+                {
+                    progress?.Report($"Updating variation '{label}' (Parent {mappedParentId}, Variation {existingMatch.Id}).");
+                    var updated = await PutAsync<WooVariationResponse>(
+                        baseUrl,
+                        settings,
+                        $"/wp-json/wc/v3/products/{mappedParentId}/variations/{existingMatch.Id}",
+                        payload,
+                        cancellationToken);
+
+                    if (!string.IsNullOrWhiteSpace(updated.Sku))
+                    {
+                        existingBySku[updated.Sku!] = updated;
+                    }
+
+                    var updatedKey = BuildVariationAttributeKey(updated.Attributes);
+                    if (updatedKey is not null)
+                    {
+                        existingByAttributes[updatedKey] = updated;
+                    }
+
+                    if (variation.Id > 0)
+                    {
+                        productIdMap[variation.Id] = updated.Id;
+                    }
+
+                    continue;
+                }
+
+                progress?.Report($"Creating variation '{label}' (Parent {mappedParentId}).");
+                var created = await PostAsync<WooVariationResponse>(
+                    baseUrl,
+                    settings,
+                    $"/wp-json/wc/v3/products/{mappedParentId}/variations",
+                    payload,
+                    cancellationToken);
+
+                if (!string.IsNullOrWhiteSpace(created.Sku))
+                {
+                    existingBySku[created.Sku!] = created;
+                }
+
+                var createdKey = BuildVariationAttributeKey(created.Attributes);
+                if (createdKey is not null)
+                {
+                    existingByAttributes[createdKey] = created;
+                }
+
+                if (variation.Id > 0)
+                {
+                    productIdMap[variation.Id] = created.Id;
+                }
+            }
+        }
+    }
+
+    private async Task<List<WooVariationResponse>> FetchExistingVariationsAsync(
+        string baseUrl,
+        WooProvisioningSettings settings,
+        int parentId,
+        CancellationToken cancellationToken)
+    {
+        var result = new List<WooVariationResponse>();
+        var page = 1;
+        while (true)
+        {
+            var path = $"/wp-json/wc/v3/products/{parentId}/variations?per_page=100&page={page}";
+            var list = await GetAsync<List<WooVariationResponse>>(baseUrl, settings, path, cancellationToken) ?? new List<WooVariationResponse>();
+            if (list.Count == 0)
+            {
+                break;
+            }
+
+            result.AddRange(list);
+            if (list.Count < 100)
+            {
+                break;
+            }
+
+            page++;
+        }
+
+        return result;
+    }
+
+    private async Task<Dictionary<string, object?>> BuildVariationPayloadAsync(
+        string baseUrl,
+        WooProvisioningSettings settings,
+        StoreProduct variation,
+        StoreProduct? parent,
+        List<Dictionary<string, object?>> attributePayload,
+        Dictionary<string, int> mediaCache,
+        IProgress<string>? progress,
+        CancellationToken cancellationToken)
+    {
+        var payload = new Dictionary<string, object?>();
+        AddIfValue(payload, "sku", string.IsNullOrWhiteSpace(variation.Sku) ? null : variation.Sku);
+        AddIfValue(payload, "description", variation.Description ?? variation.ShortDescription);
+        AddIfValue(payload, "regular_price", ResolveVariationPrice(variation, parent));
+        AddIfValue(payload, "sale_price", ResolveVariationSalePrice(variation, parent));
+        AddIfValue(payload, "stock_status", ResolveStockStatus(variation));
+
+        if (attributePayload.Count > 0)
+        {
+            payload["attributes"] = attributePayload;
+        }
+
+        var imagePayload = await BuildImagePayloadAsync(baseUrl, settings, variation, mediaCache, progress, cancellationToken);
+        var firstImage = imagePayload.FirstOrDefault();
+        if (firstImage is not null)
+        {
+            payload["image"] = firstImage;
+        }
+
+        return payload;
+    }
+
+    private static string? ResolveVariationPrice(StoreProduct variation, StoreProduct? parent)
+    {
+        return ResolvePrice(variation.Prices) ?? ResolvePrice(parent?.Prices);
+    }
+
+    private static string? ResolveVariationSalePrice(StoreProduct variation, StoreProduct? parent)
+    {
+        return ResolveSalePrice(variation.Prices) ?? ResolveSalePrice(parent?.Prices);
+    }
+
+    private static List<Dictionary<string, object?>> BuildVariationAttributePayload(StoreProduct variation, IReadOnlyDictionary<string, int> attributeMap)
+    {
+        var payload = new List<Dictionary<string, object?>>();
+        if (variation.Attributes is null || variation.Attributes.Count == 0)
+        {
+            return payload;
+        }
+
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var attribute in variation.Attributes)
+        {
+            var key = NormalizeAttributeKey(attribute);
+            if (key is null || !attributeMap.TryGetValue(key, out var attributeId))
+            {
+                continue;
+            }
+
+            var option = ResolveAttributeValue(attribute);
+            if (string.IsNullOrWhiteSpace(option))
+            {
+                continue;
+            }
+
+            var normalized = option.Trim();
+            if (!seen.Add($"{attributeId}:{normalized}"))
+            {
+                continue;
+            }
+
+            payload.Add(new Dictionary<string, object?>
+            {
+                ["id"] = attributeId,
+                ["option"] = normalized
+            });
+        }
+
+        return payload;
+    }
+
+    private static string? BuildVariationAttributeKey(IEnumerable<Dictionary<string, object?>> attributes)
+    {
+        if (attributes is null)
+        {
+            return null;
+        }
+
+        var parts = new List<string>();
+        foreach (var attribute in attributes)
+        {
+            if (!attribute.TryGetValue("id", out var idValue) || !attribute.TryGetValue("option", out var optionValue))
+            {
+                continue;
+            }
+
+            if (idValue is not int id)
+            {
+                continue;
+            }
+
+            if (optionValue is not string option || string.IsNullOrWhiteSpace(option))
+            {
+                continue;
+            }
+
+            parts.Add($"{id}:{option.Trim().ToLowerInvariant()}");
+        }
+
+        if (parts.Count == 0)
+        {
+            return null;
+        }
+
+        parts.Sort(StringComparer.Ordinal);
+        return string.Join("|", parts);
+    }
+
+    private static string? BuildVariationAttributeKey(IEnumerable<WooVariationAttributeResponse>? attributes)
+    {
+        if (attributes is null)
+        {
+            return null;
+        }
+
+        var parts = new List<string>();
+        foreach (var attribute in attributes)
+        {
+            if (attribute is null || attribute.Id <= 0 || string.IsNullOrWhiteSpace(attribute.Option))
+            {
+                continue;
+            }
+
+            parts.Add($"{attribute.Id}:{attribute.Option!.Trim().ToLowerInvariant()}");
+        }
+
+        if (parts.Count == 0)
+        {
+            return null;
+        }
+
+        parts.Sort(StringComparer.Ordinal);
+        return string.Join("|", parts);
+    }
+
+    private static string BuildVariationLabel(StoreProduct variation, StoreProduct? parent)
+    {
+        if (!string.IsNullOrWhiteSpace(variation.Sku))
+        {
+            return variation.Sku!;
+        }
+
+        if (!string.IsNullOrWhiteSpace(variation.Name))
+        {
+            return variation.Name!;
+        }
+
+        if (!string.IsNullOrWhiteSpace(variation.Slug))
+        {
+            return variation.Slug!;
+        }
+
+        if (variation.Id > 0)
+        {
+            return variation.Id.ToString(CultureInfo.InvariantCulture);
+        }
+
+        if (parent is not null && parent.Id > 0)
+        {
+            return $"{parent.Id}-variation";
+        }
+
+        return "variation";
+    }
+
+    private static string BuildParentLabel(StoreProduct? parent, int parentId)
+    {
+        if (parent is not null)
+        {
+            if (!string.IsNullOrWhiteSpace(parent.Name))
+            {
+                return parent.Name!;
+            }
+
+            if (!string.IsNullOrWhiteSpace(parent.Slug))
+            {
+                return parent.Slug!;
+            }
+        }
+
+        return parentId.ToString(CultureInfo.InvariantCulture);
     }
 
     private async Task EnsureCustomersAsync(
@@ -3171,6 +3555,19 @@ public sealed class WooProvisioningService : IDisposable
         public int Id { get; set; }
         public string? Sku { get; set; }
         public string? Slug { get; set; }
+    }
+
+    private sealed class WooVariationResponse
+    {
+        public int Id { get; set; }
+        public string? Sku { get; set; }
+        public List<WooVariationAttributeResponse> Attributes { get; set; } = new();
+    }
+
+    private sealed class WooVariationAttributeResponse
+    {
+        public int Id { get; set; }
+        public string? Option { get; set; }
     }
 
     private sealed class WooMediaResponse
