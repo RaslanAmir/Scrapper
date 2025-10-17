@@ -1301,10 +1301,50 @@ public sealed class MainViewModel : INotifyPropertyChanged
         List<WooSubscription> subscriptions,
         WordPressSiteContent? siteContent)
     {
-        var variableProducts = BuildVariableProducts(products, variations);
-        _lastProvisioningContext = new ProvisioningContext(products, variations, variableProducts, configuration, pluginBundles, themeBundles, customers, coupons, orders, subscriptions, siteContent);
+        var productSnapshots = CloneProductsWithMedia(products);
+        var variationSnapshots = CloneProductsWithMedia(variations);
+        var variableProducts = BuildVariableProducts(productSnapshots, variationSnapshots);
+        _lastProvisioningContext = new ProvisioningContext(productSnapshots, variationSnapshots, variableProducts, configuration, pluginBundles, themeBundles, customers, coupons, orders, subscriptions, siteContent);
         OnPropertyChanged(nameof(CanReplicate));
         ReplicateCommand.RaiseCanExecuteChanged();
+    }
+
+    private static List<StoreProduct> CloneProductsWithMedia(IEnumerable<StoreProduct> source)
+    {
+        var list = source?.Where(p => p is not null).Select(p => p!).ToList() ?? new List<StoreProduct>();
+        if (list.Count == 0)
+        {
+            return new List<StoreProduct>();
+        }
+
+        var json = JsonSerializer.Serialize(list);
+        var clones = JsonSerializer.Deserialize<List<StoreProduct>>(json) ?? new List<StoreProduct>();
+
+        if (clones.Count != list.Count)
+        {
+            // Fallback to manual cloning to preserve indexes if serialization yielded a different count.
+            clones = list.Select(p => CloneProduct(p)).ToList();
+            return clones;
+        }
+
+        for (var i = 0; i < list.Count; i++)
+        {
+            var original = list[i];
+            var clone = clones[i];
+            clone.LocalImageFilePaths.Clear();
+            clone.LocalImageFilePaths.AddRange(original.LocalImageFilePaths);
+        }
+
+        return clones;
+    }
+
+    private static StoreProduct CloneProduct(StoreProduct product)
+    {
+        var json = JsonSerializer.Serialize(product);
+        var clone = JsonSerializer.Deserialize<StoreProduct>(json) ?? new StoreProduct();
+        clone.LocalImageFilePaths.Clear();
+        clone.LocalImageFilePaths.AddRange(product.LocalImageFilePaths);
+        return clone;
     }
 
     private static List<ProvisioningVariableProduct> BuildVariableProducts(
@@ -1428,6 +1468,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 settings,
                 _lastProvisioningContext.Products,
                 variableProducts: _lastProvisioningContext.VariableProducts,
+                variations: _lastProvisioningContext.Variations,
                 configuration: configuration,
                 _lastProvisioningContext.Customers,
                 _lastProvisioningContext.Coupons,

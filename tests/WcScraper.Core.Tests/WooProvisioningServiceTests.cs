@@ -89,6 +89,74 @@ public class WooProvisioningServiceTests
     }
 
     [Fact]
+    public async Task ProvisionAsync_VariationsCollection_CreatesVariations()
+    {
+        var handler = new RecordingHandler();
+        using var httpClient = new HttpClient(handler);
+        var service = new WooProvisioningService(httpClient);
+        var settings = new WooProvisioningSettings("https://target.example", "ck", "cs");
+
+        var parent = new StoreProduct
+        {
+            Id = 102,
+            Name = "Parent From Variations",
+            Slug = "parent-from-variations",
+            Sku = "PARENT-SKU",
+            Type = "simple"
+        };
+
+        var variation = new StoreProduct
+        {
+            Id = 401,
+            ParentId = 102,
+            Name = "Parent From Variations - Large",
+            Slug = "parent-from-variations-large",
+            Sku = "PARENT-SKU-LRG",
+            Prices = new PriceInfo { RegularPrice = "39.99" },
+            StockStatus = "instock",
+            Attributes =
+            {
+                new VariationAttribute { AttributeKey = "pa_size", Option = "Large" }
+            },
+            Images =
+            {
+                new ProductImage { Src = "https://example.com/large.png", Alt = "Large" }
+            }
+        };
+
+        var logs = new List<string>();
+        await service.ProvisionAsync(
+            settings,
+            new[] { parent },
+            variations: new[] { variation },
+            progress: new Progress<string>(logs.Add));
+
+        Assert.Contains(logs, message => message.Contains("Provisioning 1 variations", StringComparison.Ordinal));
+        Assert.Contains(logs, message => message.Contains("Creating variation 'PARENT-SKU-LRG'", StringComparison.Ordinal));
+
+        var productCall = handler.Calls.Single(call => call.Method == HttpMethod.Post && call.Path == "/wp-json/wc/v3/products");
+        using (var doc = JsonDocument.Parse(productCall.Content))
+        {
+            Assert.Equal("variable", doc.RootElement.GetProperty("type").GetString());
+        }
+
+        var variationCall = handler.Calls.Single(call => call.Method == HttpMethod.Post && call.Path == "/wp-json/wc/v3/products/200/variations");
+        using (var doc = JsonDocument.Parse(variationCall.Content))
+        {
+            var root = doc.RootElement;
+            Assert.Equal("PARENT-SKU-LRG", root.GetProperty("sku").GetString());
+            Assert.Equal("39.99", root.GetProperty("regular_price").GetString());
+            Assert.Equal("instock", root.GetProperty("stock_status").GetString());
+            var attributes = root.GetProperty("attributes").EnumerateArray().ToList();
+            Assert.Single(attributes);
+            Assert.Equal(10, attributes[0].GetProperty("id").GetInt32());
+            Assert.Equal("Large", attributes[0].GetProperty("option").GetString());
+            var image = root.GetProperty("image");
+            Assert.Equal("https://example.com/large.png", image.GetProperty("src").GetString());
+        }
+    }
+
+    [Fact]
     public async Task ProvisionAsync_CreatesCategoryHierarchyBeforeChildren()
     {
         var handler = new RecordingHandler();
@@ -152,6 +220,11 @@ public class WooProvisioningServiceTests
             }
 
             if (request.Method == HttpMethod.Get && path == "/wp-json/wc/v3/products" && query.Contains("slug=parent-product", StringComparison.Ordinal))
+            {
+                return Task.FromResult(JsonResponse("[]"));
+            }
+
+            if (request.Method == HttpMethod.Get && path == "/wp-json/wc/v3/products" && query.Contains("slug=parent-from-variations", StringComparison.Ordinal))
             {
                 return Task.FromResult(JsonResponse("[]"));
             }
