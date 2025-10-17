@@ -538,27 +538,27 @@ public class MainViewModelTests
                 .Select(Path.GetFileName)
                 .OrderBy(name => name, StringComparer.Ordinal)
                 .ToList();
-            Assert.Equal(new[] { "Sample-1.png", "Sample-2.jpg" }, imageFiles);
+            Assert.Equal(new[] { "Sample-101-1.png", "Sample-101-2.jpg" }, imageFiles);
 
             var jsonLines = File.ReadAllLines(productsJsonl[0]);
             Assert.Single(jsonLines);
             using (var doc = JsonDocument.Parse(jsonLines[0]))
             {
                 Assert.True(doc.RootElement.TryGetProperty("image_file_paths", out var pathProp));
-                Assert.Equal("images/Sample-1.png, images/Sample-2.jpg", pathProp.GetString());
+                Assert.Equal("images/Sample-101-1.png, images/Sample-101-2.jpg", pathProp.GetString());
             }
 
             var csvLines = File.ReadAllLines(productsCsv[0]);
             Assert.Contains("image_file_paths", csvLines[0]);
-            Assert.Contains("images/Sample-1.png, images/Sample-2.jpg", csvLines[1]);
+            Assert.Contains("images/Sample-101-1.png, images/Sample-101-2.jpg", csvLines[1]);
 
             var shopifyCsvText = File.ReadAllText(shopifyCsv[0]);
             Assert.Contains("Image Src Local", shopifyCsvText);
-            Assert.Contains("images/Sample-1.png, images/Sample-2.jpg", shopifyCsvText);
+            Assert.Contains("images/Sample-101-1.png, images/Sample-101-2.jpg", shopifyCsvText);
 
             var wooCsvText = File.ReadAllText(wooCsv[0]);
             Assert.Contains("Image File Paths", wooCsvText);
-            Assert.Contains("images/Sample-1.png, images/Sample-2.jpg", wooCsvText);
+            Assert.Contains("images/Sample-101-1.png, images/Sample-101-2.jpg", wooCsvText);
 
             var timestamps = new HashSet<string>(StringComparer.Ordinal);
 
