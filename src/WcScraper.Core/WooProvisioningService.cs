@@ -1407,7 +1407,7 @@ public sealed class WooProvisioningService : IDisposable
 
         var categoryRefs = BuildTaxonomyReferences(product.Categories, categoryMap);
         var tagRefs = BuildTaxonomyReferences(product.Tags, tagMap);
-        var attributePayload = BuildAttributePayload(product, attributeMap);
+        var attributePayload = BuildAttributePayload(product, attributeMap, isVariableProduct);
         var imagePayload = await BuildImagePayloadAsync(baseUrl, settings, product, mediaCache, progress, cancellationToken);
 
         var payload = new Dictionary<string, object?>();
@@ -3298,7 +3298,10 @@ public sealed class WooProvisioningService : IDisposable
         return references;
     }
 
-    private static List<Dictionary<string, object?>> BuildAttributePayload(StoreProduct product, IReadOnlyDictionary<string, int> attributeMap)
+    private static List<Dictionary<string, object?>> BuildAttributePayload(
+        StoreProduct product,
+        IReadOnlyDictionary<string, int> attributeMap,
+        bool isVariableProduct)
     {
         var payload = new List<Dictionary<string, object?>>();
         if (product.Attributes is null || product.Attributes.Count == 0)
@@ -3335,11 +3338,19 @@ public sealed class WooProvisioningService : IDisposable
             }
 
             var attributeId = attributeMap[group.Key];
-            payload.Add(new Dictionary<string, object?>
+            var attributePayload = new Dictionary<string, object?>
             {
                 ["id"] = attributeId,
                 ["options"] = options
-            });
+            };
+
+            if (isVariableProduct)
+            {
+                attributePayload["variation"] = true;
+                attributePayload["visible"] = true;
+            }
+
+            payload.Add(attributePayload);
         }
 
         return payload;
