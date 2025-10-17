@@ -1,3 +1,4 @@
+using System;
 using WcScraper.Core.Shopify;
 using Xunit;
 
@@ -119,10 +120,17 @@ public sealed class ShopifyMapperTests
         Assert.Equal("Sample Meta Description", shopifyRow["SEO Description"]);
         Assert.Equal("Tag One, Tag Two", shopifyRow["SEO Keywords"]);
 
-        var wooRow = Assert.Single(Mappers.ToWooImporterCsv(new[] { storeProduct }));
+        var wooRow = Assert.Single(Mappers.ToWooImporterCsv(new[] { storeProduct }, Array.Empty<StoreProduct>()));
+        Assert.Equal("Accessories", wooRow["Type"]);
+        Assert.Null(wooRow["ParentId"]);
         Assert.Equal("Home, Sale", wooRow["Categories"]);
         Assert.Equal("Tag One, Tag Two", wooRow["Tags"]);
         Assert.Equal("https://cdn.example/front.jpg, https://cdn.example/back.jpg", wooRow["Images"]);
+        Assert.Equal("Title: Default Title", wooRow["Attributes"]);
+        Assert.Equal(24.99, wooRow["Regular price"]);
+        Assert.Equal(19.99, wooRow["Sale price"]);
+        Assert.Equal(19.99, wooRow["Price"]);
+        Assert.Equal("1", wooRow["In stock?"]);
         Assert.Equal("Sample Meta Title", wooRow["SEO Title"]);
         Assert.Equal("Sample Meta Description", wooRow["SEO Description"]);
         Assert.Equal("Tag One, Tag Two", wooRow["SEO Keywords"]);
