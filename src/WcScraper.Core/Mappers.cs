@@ -119,13 +119,17 @@ public static class Mappers
     }
 
     public static IEnumerable<Dictionary<string, object?>> ToWooImporterCsv(
-        IEnumerable<StoreProduct> parents,
+        IEnumerable<StoreProduct> products,
         IEnumerable<StoreProduct> variations)
     {
-        var parentList = parents?.Where(p => p is not null).Select(p => p!).ToList() ?? new List<StoreProduct>();
+        var productList = products?.Where(p => p is not null).Select(p => p!).ToList() ?? new List<StoreProduct>();
         var variationList = variations?.Where(v => v is not null).Select(v => v!).ToList() ?? new List<StoreProduct>();
 
-        var parentLookup = parentList
+        var topLevelProducts = productList
+            .Where(p => p.ParentId is null)
+            .ToList();
+
+        var parentLookup = topLevelProducts
             .Where(p => p.Id > 0)
             .ToDictionary(p => p.Id, p => p);
 
@@ -134,16 +138,12 @@ public static class Mappers
             .GroupBy(v => v.ParentId!.Value)
             .ToDictionary(g => g.Key, g => g.ToList());
 
-        var remainingVariations = new List<StoreProduct>(variationList);
+        var emittedVariations = new HashSet<StoreProduct>();
 
-        foreach (var parent in parentList)
+        foreach (var product in topLevelProducts)
         {
-            var hasChildren = groupedVariations.TryGetValue(parent.Id, out var children) && children.Count > 0;
-            var parentType = !string.IsNullOrWhiteSpace(parent.Type)
-                ? parent.Type
-                : hasChildren ? "variable" : "simple";
-
-            yield return BuildWooRow(parent, parentType, parent.ParentId, null);
+            var hasChildren = groupedVariations.TryGetValue(product.Id, out var children) && children.Count > 0;
+            yield return BuildWooParentRow(product, hasChildren);
 
             if (!hasChildren)
             {
@@ -152,95 +152,138 @@ public static class Mappers
 
             foreach (var child in children)
             {
-                remainingVariations.Remove(child);
-                var parentId = child.ParentId ?? parent.Id;
-                var variationType = string.IsNullOrWhiteSpace(child.Type) ? "variation" : child.Type!;
-                yield return BuildWooRow(child, variationType, parentId, parent);
+                emittedVariations.Add(child);
+                yield return BuildWooVariationRow(product, child);
             }
         }
 
-        foreach (var leftover in remainingVariations)
+        foreach (var variation in variationList)
         {
-            StoreProduct? fallbackParent = null;
-            if (leftover.ParentId is int parentId && parentLookup.TryGetValue(parentId, out var parent))
+            if (emittedVariations.Contains(variation))
             {
-                fallbackParent = parent;
+                continue;
             }
 
-            var type = string.IsNullOrWhiteSpace(leftover.Type)
-                ? (leftover.ParentId is null ? "simple" : "variation")
-                : leftover.Type!;
+            if (variation.ParentId is null)
+            {
+                yield return BuildWooParentRow(variation, hasChildren: false);
+                continue;
+            }
 
-            yield return BuildWooRow(leftover, type, leftover.ParentId, fallbackParent);
+            parentLookup.TryGetValue(variation.ParentId.Value, out var parent);
+            yield return BuildWooVariationRow(parent, variation);
         }
     }
 
-    private static Dictionary<string, object?> BuildWooRow(
-        StoreProduct product,
-        string? productType,
-        int? parentId,
-        StoreProduct? fallback)
+    private static Dictionary<string, object?> BuildWooParentRow(StoreProduct product, bool hasChildren)
     {
-        var priceInfo = product.Prices ?? fallback?.Prices;
-        var regularRaw = product.Prices?.RegularPrice ?? fallback?.Prices?.RegularPrice;
-        var saleRaw = product.Prices?.SalePrice ?? fallback?.Prices?.SalePrice;
-        var priceRaw = product.Prices?.Price
-            ?? product.Prices?.RegularPrice
-            ?? product.Prices?.SalePrice
-            ?? fallback?.Prices?.Price
-            ?? fallback?.Prices?.RegularPrice
-            ?? fallback?.Prices?.SalePrice;
+        var priceInfo = product.Prices;
+        var regular = AsFloatPrice(priceInfo?.RegularPrice, priceInfo?.CurrencyMinorUnit);
+        var sale = AsFloatPrice(priceInfo?.SalePrice, priceInfo?.CurrencyMinorUnit);
+        var price = AsFloatPrice(priceInfo?.Price ?? priceInfo?.RegularPrice ?? priceInfo?.SalePrice, priceInfo?.CurrencyMinorUnit);
 
-        var regular = AsFloatPrice(regularRaw, priceInfo?.CurrencyMinorUnit);
-        var sale = AsFloatPrice(saleRaw, priceInfo?.CurrencyMinorUnit);
-        var price = AsFloatPrice(priceRaw, priceInfo?.CurrencyMinorUnit);
+        var resolvedType = string.IsNullOrWhiteSpace(product.Type)
+            ? (hasChildren ? "variable" : "simple")
+            : product.Type;
 
-        var resolvedType = string.IsNullOrWhiteSpace(productType) ? "simple" : productType;
+        var categories = JoinCsv(product.Categories.Select(c => c.Name));
+        var tags = JoinCsv(product.Tags.Select(t => t.Name));
+        var images = JoinCsv(product.Images.Select(i => i.Src));
+        var attributes = BuildAttributesString(product.Attributes);
 
-        var categoriesSource = product.Categories.Count > 0
-            ? product.Categories
-            : fallback?.Categories ?? Enumerable.Empty<Category>();
-        var tagsSource = product.Tags.Count > 0
-            ? product.Tags
-            : fallback?.Tags ?? Enumerable.Empty<ProductTag>();
-        var imagesSource = product.Images.Count > 0
-            ? product.Images
-            : fallback?.Images ?? Enumerable.Empty<ProductImage>();
-        var attributesSource = product.Attributes.Count > 0
-            ? product.Attributes
-            : fallback?.Attributes ?? Enumerable.Empty<VariationAttribute>();
+        return new Dictionary<string, object?>
+        {
+            ["ID"] = "",
+            ["Type"] = resolvedType,
+            ["ParentId"] = product.ParentId,
+            ["SKU"] = product.Sku ?? "",
+            ["Name"] = product.Name ?? "",
+            ["Published"] = 1,
+            ["Is featured?"] = 0,
+            ["Visibility in catalog"] = "visible",
+            ["Short description"] = FirstNonEmpty(product.ShortDescription, product.Summary) ?? "",
+            ["Description"] = product.Description ?? "",
+            ["SEO Title"] = product.MetaTitle ?? "",
+            ["SEO Description"] = product.MetaDescription ?? "",
+            ["SEO Keywords"] = product.MetaKeywords ?? "",
+            ["Tax status"] = "taxable",
+            ["Regular price"] = regular,
+            ["Sale price"] = sale,
+            ["Price"] = price,
+            ["Currency"] = priceInfo?.CurrencyCode ?? "",
+            ["In stock?"] = product.IsInStock == true ? "1" : "0",
+            ["Stock status"] = product.StockStatus ?? "",
+            ["Categories"] = categories,
+            ["Tags"] = tags,
+            ["Images"] = images,
+            ["Image File Paths"] = product.ImageFilePaths ?? "",
+            ["Attributes"] = attributes,
+            ["Position"] = 0
+        };
+    }
+
+    private static Dictionary<string, object?> BuildWooVariationRow(StoreProduct? parent, StoreProduct variation)
+    {
+        var priceInfo = variation.Prices ?? parent?.Prices;
+
+        string? ResolvePrice(Func<PriceInfo?, string?> selector)
+            => selector(variation.Prices) ?? selector(parent?.Prices);
+
+        var regular = AsFloatPrice(ResolvePrice(p => p?.RegularPrice), priceInfo?.CurrencyMinorUnit);
+        var sale = AsFloatPrice(ResolvePrice(p => p?.SalePrice), priceInfo?.CurrencyMinorUnit);
+        var price = AsFloatPrice(
+            ResolvePrice(p => p?.Price)
+            ?? ResolvePrice(p => p?.RegularPrice)
+            ?? ResolvePrice(p => p?.SalePrice),
+            priceInfo?.CurrencyMinorUnit);
+
+        var categoriesSource = variation.Categories.Count > 0
+            ? variation.Categories
+            : parent?.Categories ?? Enumerable.Empty<Category>();
+        var tagsSource = variation.Tags.Count > 0
+            ? variation.Tags
+            : parent?.Tags ?? Enumerable.Empty<ProductTag>();
+        var imagesSource = variation.Images.Count > 0
+            ? variation.Images
+            : parent?.Images ?? Enumerable.Empty<ProductImage>();
+        var attributesSource = variation.Attributes.Count > 0
+            ? variation.Attributes
+            : parent?.Attributes ?? Enumerable.Empty<VariationAttribute>();
 
         var categories = JoinCsv(categoriesSource.Select(c => c.Name));
         var tags = JoinCsv(tagsSource.Select(t => t.Name));
         var images = JoinCsv(imagesSource.Select(i => i.Src));
         var attributes = BuildAttributesString(attributesSource);
 
-        var imageFilePaths = string.IsNullOrWhiteSpace(product.ImageFilePaths)
-            ? fallback?.ImageFilePaths ?? ""
-            : product.ImageFilePaths;
+        var imageFilePaths = string.IsNullOrWhiteSpace(variation.ImageFilePaths)
+            ? parent?.ImageFilePaths ?? ""
+            : variation.ImageFilePaths;
 
         var shortDescription = FirstNonEmpty(
-            product.ShortDescription,
-            product.Summary,
-            fallback?.ShortDescription,
-            fallback?.Summary) ?? "";
+            variation.ShortDescription,
+            variation.Summary,
+            parent?.ShortDescription,
+            parent?.Summary) ?? "";
 
-        var description = FirstNonEmpty(product.Description, fallback?.Description) ?? "";
+        var description = FirstNonEmpty(variation.Description, parent?.Description) ?? "";
 
-        var seoTitle = FirstNonEmpty(product.MetaTitle, fallback?.MetaTitle) ?? "";
-        var seoDescription = FirstNonEmpty(product.MetaDescription, fallback?.MetaDescription) ?? "";
-        var seoKeywords = FirstNonEmpty(product.MetaKeywords, fallback?.MetaKeywords) ?? "";
+        var seoTitle = FirstNonEmpty(variation.MetaTitle, parent?.MetaTitle) ?? "";
+        var seoDescription = FirstNonEmpty(variation.MetaDescription, parent?.MetaDescription) ?? "";
+        var seoKeywords = FirstNonEmpty(variation.MetaKeywords, parent?.MetaKeywords) ?? "";
 
-        var stockStatus = FirstNonEmpty(product.StockStatus, fallback?.StockStatus) ?? "";
-        var inStock = (product.IsInStock ?? fallback?.IsInStock) == true ? "1" : "0";
+        var stockStatus = FirstNonEmpty(variation.StockStatus, parent?.StockStatus) ?? "";
+        var inStock = (variation.IsInStock ?? parent?.IsInStock) == true ? "1" : "0";
+
+        var resolvedType = string.IsNullOrWhiteSpace(variation.Type) ? "variation" : variation.Type;
+        var parentId = variation.ParentId ?? parent?.Id;
 
         return new Dictionary<string, object?>
         {
             ["ID"] = "",
             ["Type"] = resolvedType,
             ["ParentId"] = parentId,
-            ["SKU"] = string.IsNullOrWhiteSpace(product.Sku) ? fallback?.Sku ?? "" : product.Sku,
-            ["Name"] = FirstNonEmpty(product.Name, fallback?.Name) ?? "",
+            ["SKU"] = string.IsNullOrWhiteSpace(variation.Sku) ? parent?.Sku ?? "" : variation.Sku,
+            ["Name"] = FirstNonEmpty(variation.Name, parent?.Name) ?? "",
             ["Published"] = 1,
             ["Is featured?"] = 0,
             ["Visibility in catalog"] = "visible",
