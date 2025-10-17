@@ -470,13 +470,25 @@ public class ShopifyScraperTests
     }
 
     [Fact]
-    public async Task FetchCollectionsAsync_WithoutCredentials_ReturnsEmptyList()
+    public async Task FetchCollectionsAsync_WithoutCredentials_UsesPublicEndpoint()
     {
-        var invoked = false;
+        const string emptyCollections = """
+        {
+          "collections": []
+        }
+        """;
+
+        var calls = 0;
         using var handler = new StubHttpMessageHandler(request =>
         {
-            invoked = true;
-            throw new InvalidOperationException("HTTP request should not be sent when credentials are missing.");
+            calls++;
+            Assert.Equal(HttpMethod.Get, request.Method);
+            Assert.EndsWith("/collections.json", request.RequestUri!.AbsolutePath, StringComparison.Ordinal);
+
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(emptyCollections, Encoding.UTF8, "application/json")
+            };
         });
 
         using var httpClient = new HttpClient(handler);
@@ -486,7 +498,7 @@ public class ShopifyScraperTests
         var collections = await scraper.FetchCollectionsAsync(settings);
 
         Assert.Empty(collections);
-        Assert.False(invoked);
+        Assert.Equal(1, calls);
     }
 
     [Fact]
