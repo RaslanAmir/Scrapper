@@ -1442,13 +1442,13 @@ public sealed class WooScraper : IDisposable
                         : null,
             };
 
-            var nameMatch = Regex.Match(content, @"<strong[^>]*>\s*(?<name>[^<]+)", RegexOptions.IgnoreCase);
+            var nameMatch = Regex.Match(content, @"<strong[^>]*>\\s*(?<name>[^<]+)", RegexOptions.IgnoreCase);
             if (nameMatch.Success)
             {
                 plugin.Name = HttpUtility.HtmlDecode(nameMatch.Groups["name"].Value.Trim());
             }
 
-            var versionMatch = Regex.Match(content, @"Version\s*(?<version>[0-9A-Za-z._-]+)", RegexOptions.IgnoreCase);
+            var versionMatch = Regex.Match(content, @"Version\\s*(?<version>[0-9A-Za-z._-]+)", RegexOptions.IgnoreCase);
             if (versionMatch.Success)
             {
                 plugin.Version = HttpUtility.HtmlDecode(versionMatch.Groups["version"].Value.Trim());
@@ -1491,7 +1491,7 @@ public sealed class WooScraper : IDisposable
                 AutoUpdate = DetermineAutoUpdate(attrs, classes)
             };
 
-            var nameMatch = Regex.Match(content, @"class=""theme-name""[^>]*>\s*(?<name>[^<]+)", RegexOptions.IgnoreCase);
+            var nameMatch = Regex.Match(content, @"class=""theme-name""[^>]*>\\s*(?<name>[^<]+)", RegexOptions.IgnoreCase);
             if (!nameMatch.Success)
             {
                 nameMatch = Regex.Match(content, @"aria-label=""(?<name>[^""]+)""", RegexOptions.IgnoreCase);
@@ -1501,10 +1501,10 @@ public sealed class WooScraper : IDisposable
                 theme.Name = HttpUtility.HtmlDecode(nameMatch.Groups["name"].Value.Trim());
             }
 
-            var versionMatch = Regex.Match(content, @"Version[:\s]*<span[^>]*>\s*(?<version>[^<]+)", RegexOptions.IgnoreCase);
+            var versionMatch = Regex.Match(content, @"Version[:\\s]*<span[^>]*>\\s*(?<version>[^<]+)", RegexOptions.IgnoreCase);
             if (!versionMatch.Success)
             {
-                versionMatch = Regex.Match(content, @"Version[:\s]*(?<version>[0-9A-Za-z._-]+)", RegexOptions.IgnoreCase);
+                versionMatch = Regex.Match(content, @"Version[:\\s]*(?<version>[0-9A-Za-z._-]+)", RegexOptions.IgnoreCase);
             }
             if (versionMatch.Success)
             {
