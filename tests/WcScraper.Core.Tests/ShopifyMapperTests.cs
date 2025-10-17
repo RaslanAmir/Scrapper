@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using WcScraper.Core.Shopify;
 using Xunit;
 
@@ -134,5 +135,98 @@ public sealed class ShopifyMapperTests
         Assert.Equal("Sample Meta Title", wooRow["SEO Title"]);
         Assert.Equal("Sample Meta Description", wooRow["SEO Description"]);
         Assert.Equal("Tag One, Tag Two", wooRow["SEO Keywords"]);
+    }
+
+    [Fact]
+    public void ToWooImporterCsv_EmitsVariationRowsWithParentContext()
+    {
+        var parent = new StoreProduct
+        {
+            Id = 101,
+            Name = "Variable Shirt",
+            Type = "variable",
+            ShortDescription = "<p>Parent summary</p>",
+            Description = "<p>Parent description</p>",
+            MetaTitle = "Parent Meta Title",
+            MetaDescription = "Parent Meta Description",
+            MetaKeywords = "Parent Meta Keywords",
+            Prices = new PriceInfo
+            {
+                CurrencyCode = "USD",
+                CurrencyMinorUnit = 2,
+                RegularPrice = "2199",
+                SalePrice = "1999",
+                Price = "1999"
+            },
+            Categories =
+            {
+                new Category { Name = "Apparel" },
+                new Category { Name = "Sale" }
+            },
+            Tags =
+            {
+                new ProductTag { Name = "Featured" },
+                new ProductTag { Name = "Limited" }
+            }
+        };
+
+        var variation = new StoreProduct
+        {
+            Id = 202,
+            ParentId = parent.Id,
+            Name = "Variable Shirt - Blue",
+            Sku = "SHIRT-BLUE",
+            IsInStock = true,
+            StockStatus = "instock",
+            Prices = new PriceInfo
+            {
+                CurrencyCode = "USD",
+                CurrencyMinorUnit = 2,
+                RegularPrice = "1999",
+                SalePrice = "1499",
+                Price = "1499"
+            },
+            Attributes =
+            {
+                new VariationAttribute { Name = "Color", Option = "Blue" }
+            },
+            Images =
+            {
+                new ProductImage { Src = "https://cdn.example/blue-shirt.jpg" }
+            },
+            ImageFilePaths = "images/blue-shirt.jpg"
+        };
+
+        var rows = Mappers.ToWooImporterCsv(new[] { parent }, new[] { variation }).ToList();
+        Assert.Equal(2, rows.Count);
+
+        var parentRow = rows[0];
+        Assert.Equal("variable", parentRow["Type"]);
+        Assert.Null(parentRow["ParentId"]);
+        Assert.Equal("Variable Shirt", parentRow["Name"]);
+        Assert.Equal("Apparel, Sale", parentRow["Categories"]);
+        Assert.Equal("Featured, Limited", parentRow["Tags"]);
+
+        var variationRow = rows[1];
+        Assert.Equal("variation", variationRow["Type"]);
+        Assert.Equal(parent.Id, variationRow["ParentId"]);
+        Assert.Equal("SHIRT-BLUE", variationRow["SKU"]);
+        Assert.Equal("Variable Shirt - Blue", variationRow["Name"]);
+        Assert.Equal(19.99, variationRow["Regular price"]);
+        Assert.Equal(14.99, variationRow["Sale price"]);
+        Assert.Equal(14.99, variationRow["Price"]);
+        Assert.Equal("USD", variationRow["Currency"]);
+        Assert.Equal("1", variationRow["In stock?"]);
+        Assert.Equal("instock", variationRow["Stock status"]);
+        Assert.Equal("Apparel, Sale", variationRow["Categories"]);
+        Assert.Equal("Featured, Limited", variationRow["Tags"]);
+        Assert.Equal("Color: Blue", variationRow["Attributes"]);
+        Assert.Equal("https://cdn.example/blue-shirt.jpg", variationRow["Images"]);
+        Assert.Equal("images/blue-shirt.jpg", variationRow["Image File Paths"]);
+        Assert.Equal("Parent Meta Title", variationRow["SEO Title"]);
+        Assert.Equal("Parent Meta Description", variationRow["SEO Description"]);
+        Assert.Equal("Parent Meta Keywords", variationRow["SEO Keywords"]);
+        Assert.Equal("<p>Parent summary</p>", variationRow["Short description"]);
+        Assert.Equal("<p>Parent description</p>", variationRow["Description"]);
     }
 }
