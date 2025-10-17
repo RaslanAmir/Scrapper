@@ -19,7 +19,8 @@ public sealed class WooScraper
         if (httpClient is null)
         {
             var handler = new SocketsHttpHandler();
-            handler.SslOptions.EnabledSslProtocols = SslProtocols.Tls | SslProtocols.Tls11 | SslProtocols.Tls12;
+            handler.SslOptions.EnabledSslProtocols =
+                SslProtocols.Tls | SslProtocols.Tls11 | SslProtocols.Tls12 | SslProtocols.Tls13;
             _http = new HttpClient(handler, disposeHandler: true);
         }
         else
