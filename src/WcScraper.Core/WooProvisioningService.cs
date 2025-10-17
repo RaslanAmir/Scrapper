@@ -390,6 +390,12 @@ public sealed class WooProvisioningService : IDisposable
         IProgress<string>? progress,
         CancellationToken cancellationToken)
     {
+        var targetZones = await GetAsync<List<ShippingZoneSetting>>(baseUrl, settings, "/wp-json/wc/v3/shipping/zones?per_page=100", cancellationToken)
+            ?? new List<ShippingZoneSetting>();
+        var remainingTargetZones = targetZones
+            .Where(z => z is not null)
+            .ToList();
+
         foreach (var zone in zones)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -399,19 +405,41 @@ public sealed class WooProvisioningService : IDisposable
             }
 
             var zoneLabel = zone.Name ?? zone.Id.ToString(CultureInfo.InvariantCulture);
+            var targetZone = FindMatchingShippingZone(zone, remainingTargetZones);
+
+            if (targetZone is null)
+            {
+                var createPayload = new Dictionary<string, object?>
+                {
+                    ["name"] = zone.Name ?? zoneLabel
+                };
+
+                progress?.Report($"Creating shipping zone '{zoneLabel}'…");
+                targetZone = await PostAsync<ShippingZoneSetting>(baseUrl, settings, "/wp-json/wc/v3/shipping/zones", createPayload, cancellationToken);
+                remainingTargetZones.Add(targetZone);
+            }
+
+            if (targetZone is null || targetZone.Id <= 0)
+            {
+                continue;
+            }
+
+            remainingTargetZones.RemoveAll(z => z.Id == targetZone.Id);
+            var targetZoneId = targetZone.Id;
+
             var zonePayload = new Dictionary<string, object?>();
             AddIfValue(zonePayload, "name", zone.Name);
             AddIfValue(zonePayload, "order", zone.Order);
             if (zonePayload.Count > 0)
             {
                 progress?.Report($"Updating shipping zone '{zoneLabel}'…");
-                await PutAsync<ShippingZoneSetting>(baseUrl, settings, $"/wp-json/wc/v3/shipping/zones/{zone.Id}", zonePayload, cancellationToken);
+                await PutAsync<ShippingZoneSetting>(baseUrl, settings, $"/wp-json/wc/v3/shipping/zones/{targetZoneId}", zonePayload, cancellationToken);
             }
 
             if (zone.Locations is { Count: > 0 })
             {
                 progress?.Report($"Updating shipping zone '{zoneLabel}' locations…");
-                await PutAsync<List<ShippingZoneLocation>>(baseUrl, settings, $"/wp-json/wc/v3/shipping/zones/{zone.Id}/locations", zone.Locations, cancellationToken);
+                await PutAsync<List<ShippingZoneLocation>>(baseUrl, settings, $"/wp-json/wc/v3/shipping/zones/{targetZoneId}/locations", zone.Locations, cancellationToken);
             }
 
             if (zone.Methods is { Count: > 0 })
@@ -450,7 +478,7 @@ public sealed class WooProvisioningService : IDisposable
                         progress?.Report($"Updating shipping method '{methodLabel}' in zone '{zoneLabel}'…");
                         try
                         {
-                            await PutAsync<ShippingZoneMethodSetting>(baseUrl, settings, $"/wp-json/wc/v3/shipping/zones/{zone.Id}/methods/{method.InstanceId}", methodPayload, cancellationToken);
+                            await PutAsync<ShippingZoneMethodSetting>(baseUrl, settings, $"/wp-json/wc/v3/shipping/zones/{targetZoneId}/methods/{method.InstanceId}", methodPayload, cancellationToken);
                             continue;
                         }
                         catch (WooProvisioningException ex) when (ex.StatusCode == HttpStatusCode.NotFound)
@@ -471,11 +499,33 @@ public sealed class WooProvisioningService : IDisposable
                         }
 
                         progress?.Report($"Creating shipping method '{methodLabel}' in zone '{zoneLabel}'…");
-                        await PostAsync<ShippingZoneMethodSetting>(baseUrl, settings, $"/wp-json/wc/v3/shipping/zones/{zone.Id}/methods", createPayload, cancellationToken);
+                        await PostAsync<ShippingZoneMethodSetting>(baseUrl, settings, $"/wp-json/wc/v3/shipping/zones/{targetZoneId}/methods", createPayload, cancellationToken);
                     }
                 }
             }
         }
+    }
+
+
+    private static ShippingZoneSetting? FindMatchingShippingZone(
+        ShippingZoneSetting sourceZone,
+        List<ShippingZoneSetting> targetZones)
+    {
+        if (targetZones.Count == 0)
+        {
+            return null;
+        }
+
+        if (!string.IsNullOrWhiteSpace(sourceZone.Name))
+        {
+            var byName = targetZones.FirstOrDefault(z => string.Equals(z.Name, sourceZone.Name, StringComparison.OrdinalIgnoreCase));
+            if (byName is not null)
+            {
+                return byName;
+            }
+        }
+
+        return targetZones.FirstOrDefault(z => z.Order == sourceZone.Order);
     }
 
     private async Task ApplyPaymentGatewaysAsync(
