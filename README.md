@@ -93,9 +93,11 @@ Description, SEO Title, SEO Description, SEO Keywords, Tax status, Regular price
 Price, Currency, In stock?, Stock status, Categories, Tags, Images, Image File Paths, Attributes, Position
 ```
 
-Variation rows immediately follow their parent, set `Type` to `variation`, and populate `ParentId`, `SKU`, and all pricing
-columns. Attribute pairs (e.g. `Color: Blue | Size: Large`) are flattened into the `Attributes` column and local image paths
-are preserved so the WooCommerce CSV importer can rebuild configurable products with their pricing and stock intact.
+Parent rows keep the exact `type` WooCommerce reported (`simple`, `variable`, `grouped`, etc.) so downstream imports can
+maintain product semantics. Variation rows immediately follow their parent, set `ParentId` to the parent's ID, and capture the
+child SKU plus its price, sale price, stock status, and attribute combination. Attribute pairs (e.g. `Color: Blue | Size:
+Large`) are flattened into the `Attributes` column while the downloaded image paths remain in `Image File Paths`, ensuring the
+WooCommerce CSV importer can rebuild configurable products with their pricing and stock intact.
 
 ## Running tests
 
