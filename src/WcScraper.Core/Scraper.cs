@@ -1640,11 +1640,30 @@ public sealed class WooScraper : IDisposable
         string context)
     {
         var url = CombineUrl(baseUrl, path);
+        Uri? baseUri = null;
+        Uri? targetUri = null;
+        if (Uri.TryCreate(baseUrl, UriKind.Absolute, out var parsedBase))
+        {
+            baseUri = parsedBase;
+        }
+
+        if (Uri.TryCreate(url, UriKind.Absolute, out var parsedTarget))
+        {
+            targetUri = parsedTarget;
+        }
+
+        var shouldAuthenticate = baseUri is not null
+            && targetUri is not null
+            && string.Equals(baseUri.Host, targetUri.Host, StringComparison.OrdinalIgnoreCase);
         try
         {
             using var req = new HttpRequestMessage(HttpMethod.Get, url);
-            req.Headers.Authorization = CreateBasicAuthHeader(username, applicationPassword);
-            log?.Report($"GET {url} (authenticated)");
+            if (shouldAuthenticate)
+            {
+                req.Headers.Authorization = CreateBasicAuthHeader(username, applicationPassword);
+            }
+
+            log?.Report($"GET {url}{(shouldAuthenticate ? " (authenticated)" : string.Empty)}");
             using var resp = await _http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead);
             if (!resp.IsSuccessStatusCode)
             {
@@ -1711,11 +1730,30 @@ public sealed class WooScraper : IDisposable
         string context)
     {
         var url = CombineUrl(baseUrl, path);
+        Uri? baseUri = null;
+        Uri? targetUri = null;
+        if (Uri.TryCreate(baseUrl, UriKind.Absolute, out var parsedBase))
+        {
+            baseUri = parsedBase;
+        }
+
+        if (Uri.TryCreate(url, UriKind.Absolute, out var parsedTarget))
+        {
+            targetUri = parsedTarget;
+        }
+
+        var shouldAuthenticate = baseUri is not null
+            && targetUri is not null
+            && string.Equals(baseUri.Host, targetUri.Host, StringComparison.OrdinalIgnoreCase);
         try
         {
             using var req = new HttpRequestMessage(HttpMethod.Get, url);
-            req.Headers.Authorization = CreateBasicAuthHeader(username, applicationPassword);
-            log?.Report($"GET {url} (authenticated)");
+            if (shouldAuthenticate)
+            {
+                req.Headers.Authorization = CreateBasicAuthHeader(username, applicationPassword);
+            }
+
+            log?.Report($"GET {url}{(shouldAuthenticate ? " (authenticated)" : string.Empty)}");
             using var resp = await _http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead);
             if (!resp.IsSuccessStatusCode)
             {
