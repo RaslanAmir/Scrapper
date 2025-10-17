@@ -82,12 +82,18 @@ columns for each variant row.
 
 ### `woocommerce_products.csv`
 
-The WooCommerce importer template continues to be supported and includes the following fields:
+The WooCommerce importer export now emits a parent row that preserves the product's original type (`simple`, `variable`, etc.)
+plus additional rows for every captured variation. Parents retain catalog taxonomy, descriptions, and SEO metadata while
+variations surface granular inventory and attribute data alongside local image paths.
 
 ```
-ID, Type, SKU, Name, Published, Is featured?, Visibility in catalog, Short description,
-Description, Tax status, In stock?, Categories, Tags, Images, Position
+ID, Type, ParentId, SKU, Name, Published, Is featured?, Visibility in catalog, Short description,
+Description, SEO Title, SEO Description, SEO Keywords, Tax status, Regular price, Sale price,
+Price, Currency, In stock?, Stock status, Categories, Tags, Images, Image File Paths, Attributes, Position
 ```
+
+Variation rows set `Type` to `variation`, populate `ParentId`, and flatten attribute pairs (e.g. `Color: Blue | Size: Large`)
+so the WooCommerce CSV importer can rebuild configurable products with their pricing and stock intact.
 
 ## Running tests
 

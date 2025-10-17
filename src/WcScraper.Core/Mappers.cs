@@ -1,3 +1,5 @@
+using System.Collections.Generic;
+using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
 
@@ -116,36 +118,108 @@ public static class Mappers
         }
     }
 
-    public static IEnumerable<Dictionary<string, object?>> ToWooImporterCsv(IEnumerable<StoreProduct> products)
+    public static IEnumerable<Dictionary<string, object?>> ToWooImporterCsv(
+        IEnumerable<StoreProduct> parents,
+        IEnumerable<StoreProduct> variations)
     {
-        foreach (var p in products)
+        var parentList = parents.ToList();
+        var variationList = variations.ToList();
+        var variationLookup = variationList
+            .Where(v => v.ParentId is not null)
+            .GroupBy(v => v.ParentId!.Value)
+            .ToDictionary(g => g.Key, g => g.ToList());
+        var processedVariationIds = new HashSet<int>();
+        var parentIds = new HashSet<int>(parentList.Select(p => p.Id));
+
+        foreach (var parent in parentList)
         {
-            var images = string.Join(", ", p.Images.Select(i => i.Src).Where(s => !string.IsNullOrWhiteSpace(s))!);
-            var categories = JoinCsv(p.Categories.Select(c => c.Name));
-            var tags = JoinCsv(p.Tags.Select(t => t.Name));
-            yield return new Dictionary<string, object?>
+            yield return BuildWooRow(parent, parent.ParentId, parent.Type);
+
+            if (!variationLookup.TryGetValue(parent.Id, out var children))
             {
-                ["ID"] = "",
-                ["Type"] = "simple",
-                ["SKU"] = p.Sku ?? "",
-                ["Name"] = p.Name ?? "",
-                ["Published"] = 1,
-                ["Is featured?"] = 0,
-                ["Visibility in catalog"] = "visible",
-                ["Short description"] = p.ShortDescription ?? p.Summary ?? "",
-                ["Description"] = p.Description ?? "",
-                ["SEO Title"] = p.MetaTitle ?? "",
-                ["SEO Description"] = p.MetaDescription ?? "",
-                ["SEO Keywords"] = p.MetaKeywords ?? "",
-                ["Tax status"] = "taxable",
-                ["In stock?"] = p.IsInStock == true ? "1" : "0",
-                ["Categories"] = categories,
-                ["Tags"] = tags,
-                ["Images"] = images,
-                ["Image File Paths"] = p.ImageFilePaths ?? "",
-                ["Position"] = 0
-            };
+                continue;
+            }
+
+            foreach (var child in children)
+            {
+                if (child.Id != 0)
+                {
+                    processedVariationIds.Add(child.Id);
+                }
+
+                yield return BuildWooRow(child, child.ParentId, child.Type ?? "variation");
+            }
         }
+
+        foreach (var orphan in variationList)
+        {
+            if (orphan.Id != 0 && processedVariationIds.Contains(orphan.Id))
+            {
+                continue;
+            }
+
+            if (orphan.ParentId is not null && parentIds.Contains(orphan.ParentId.Value))
+            {
+                continue;
+            }
+
+            yield return BuildWooRow(orphan, orphan.ParentId, orphan.Type ?? "variation");
+        }
+    }
+
+    private static Dictionary<string, object?> BuildWooRow(StoreProduct product, int? parentId, string? productType)
+    {
+        var prices = product.Prices;
+        var regular = AsFloatPrice(prices?.RegularPrice, prices?.CurrencyMinorUnit);
+        var sale = AsFloatPrice(prices?.SalePrice, prices?.CurrencyMinorUnit);
+        var priceVal = prices?.Price ?? prices?.RegularPrice ?? prices?.SalePrice;
+        var price = AsFloatPrice(priceVal, prices?.CurrencyMinorUnit);
+        var type = string.IsNullOrWhiteSpace(productType) ? "simple" : productType;
+        var images = string.Join(", ", product.Images.Select(i => i.Src).Where(s => !string.IsNullOrWhiteSpace(s))!);
+        var categories = JoinCsv(product.Categories.Select(c => c.Name));
+        var tags = JoinCsv(product.Tags.Select(t => t.Name));
+        var attributes = BuildAttributesString(product.Attributes);
+
+        return new Dictionary<string, object?>
+        {
+            ["ID"] = "",
+            ["Type"] = type,
+            ["ParentId"] = parentId,
+            ["SKU"] = product.Sku ?? "",
+            ["Name"] = product.Name ?? "",
+            ["Published"] = 1,
+            ["Is featured?"] = 0,
+            ["Visibility in catalog"] = "visible",
+            ["Short description"] = FirstNonEmpty(product.ShortDescription, product.Summary) ?? "",
+            ["Description"] = product.Description ?? "",
+            ["SEO Title"] = product.MetaTitle ?? "",
+            ["SEO Description"] = product.MetaDescription ?? "",
+            ["SEO Keywords"] = product.MetaKeywords ?? "",
+            ["Tax status"] = "taxable",
+            ["Regular price"] = regular,
+            ["Sale price"] = sale,
+            ["Price"] = price,
+            ["Currency"] = prices?.CurrencyCode ?? "",
+            ["In stock?"] = product.IsInStock == true ? "1" : "0",
+            ["Stock status"] = product.StockStatus ?? "",
+            ["Categories"] = categories,
+            ["Tags"] = tags,
+            ["Images"] = images,
+            ["Image File Paths"] = product.ImageFilePaths ?? "",
+            ["Attributes"] = attributes,
+            ["Position"] = 0
+        };
+    }
+
+    private static string BuildAttributesString(IEnumerable<VariationAttribute> attributes)
+    {
+        var pairs = attributes
+            .Select(ExtractAttr)
+            .Where(p => !string.IsNullOrWhiteSpace(p.name) && !string.IsNullOrWhiteSpace(p.value))
+            .Select(p => $"{p.name}: {p.value}")
+            .ToList();
+
+        return pairs.Count == 0 ? "" : string.Join(" | ", pairs);
     }
 
     private static string? FirstNonEmpty(params string?[] vals)
