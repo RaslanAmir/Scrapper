@@ -618,29 +618,10 @@ public sealed class WooProvisioningService : IDisposable
         AddIfValue(payload, "date_expires", coupon.DateExpires);
         AddIfValue(payload, "date_expires_gmt", coupon.DateExpiresGmt);
 
-        var productIds = MapIds(coupon.ProductIds, productMap);
-        if (productIds.Count > 0)
-        {
-            payload["product_ids"] = productIds;
-        }
-
-        var excluded = MapIds(coupon.ExcludedProductIds, productMap);
-        if (excluded.Count > 0)
-        {
-            payload["excluded_product_ids"] = excluded;
-        }
-
-        var categoryIds = MapIds(coupon.ProductCategories, categoryMap);
-        if (categoryIds.Count > 0)
-        {
-            payload["product_categories"] = categoryIds;
-        }
-
-        var excludedCategories = MapIds(coupon.ExcludedProductCategories, categoryMap);
-        if (excludedCategories.Count > 0)
-        {
-            payload["excluded_product_categories"] = excludedCategories;
-        }
+        AssignMappedIds(payload, "product_ids", coupon.ProductIds, productMap);
+        AssignMappedIds(payload, "excluded_product_ids", coupon.ExcludedProductIds, productMap);
+        AssignMappedIds(payload, "product_categories", coupon.ProductCategories, categoryMap);
+        AssignMappedIds(payload, "excluded_product_categories", coupon.ExcludedProductCategories, categoryMap);
 
         if (coupon.EmailRestrictions.Count > 0)
         {
@@ -1056,6 +1037,19 @@ public sealed class WooProvisioningService : IDisposable
         }
 
         return result;
+    }
+
+    private static void AssignMappedIds(
+        Dictionary<string, object?> payload,
+        string key,
+        IEnumerable<int>? source,
+        IReadOnlyDictionary<int, int> map)
+    {
+        var mapped = MapIds(source, map);
+        if (mapped.Count > 0)
+        {
+            payload[key] = mapped;
+        }
     }
 
     private static List<int> MapIds(IEnumerable<int>? source, IReadOnlyDictionary<int, int> map)
