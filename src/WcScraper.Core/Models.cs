@@ -1,5 +1,8 @@
+using System.IO;
+using System.Net;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Text.RegularExpressions;
 
 namespace WcScraper.Core;
 
@@ -548,4 +551,342 @@ public sealed class WooRow
     public string? Categories { get; set; }
     public string? Images { get; set; }
     public int Position { get; set; } = 0;
+}
+
+public abstract class WordPressContentBase
+{
+    private static readonly Regex MediaReferenceRegex = new("(?i)(?:src|data-src|poster)\\s*=\\s*\"(?<url>[^\"#?]+[^\"\s])\"", RegexOptions.Compiled);
+
+    [JsonPropertyName("id")] public int Id { get; set; }
+    [JsonPropertyName("date")] public DateTimeOffset? Date { get; set; }
+    [JsonPropertyName("date_gmt")] public DateTimeOffset? DateGmt { get; set; }
+    [JsonPropertyName("modified")] public DateTimeOffset? Modified { get; set; }
+    [JsonPropertyName("modified_gmt")] public DateTimeOffset? ModifiedGmt { get; set; }
+    [JsonPropertyName("slug")] public string? Slug { get; set; }
+    [JsonPropertyName("status")] public string? Status { get; set; }
+    [JsonPropertyName("type")] public string? Type { get; set; }
+    [JsonPropertyName("link")] public string? Link { get; set; }
+    [JsonPropertyName("title")] public WordPressRenderedText? Title { get; set; }
+    [JsonPropertyName("content")] public WordPressRenderedText? Content { get; set; }
+    [JsonPropertyName("excerpt")] public WordPressRenderedText? Excerpt { get; set; }
+    [JsonPropertyName("author")] public int? Author { get; set; }
+    [JsonPropertyName("featured_media")] public int? FeaturedMediaId { get; set; }
+    [JsonPropertyName("template")] public string? Template { get; set; }
+    [JsonPropertyName("meta")] public JsonElement? Meta { get; set; }
+    [JsonPropertyName("_embedded")] public JsonElement? Embedded { get; set; }
+
+    [JsonIgnore] public string? RenderedHtml => Content?.Rendered;
+    [JsonIgnore] public string? RenderedExcerpt => Excerpt?.Rendered;
+    [JsonPropertyName("referenced_media_urls")] public List<string> ReferencedMediaUrls { get; set; } = new();
+    [JsonPropertyName("featured_media_url")] public string? FeaturedMediaUrl { get; set; }
+
+    public virtual void Normalize()
+    {
+        ReferencedMediaUrls.Clear();
+        foreach (var fragment in EnumerateHtmlFragments())
+        {
+            if (string.IsNullOrWhiteSpace(fragment))
+            {
+                continue;
+            }
+
+            foreach (Match match in MediaReferenceRegex.Matches(fragment))
+            {
+                var url = match.Groups["url"].Value;
+                if (string.IsNullOrWhiteSpace(url))
+                {
+                    continue;
+                }
+
+                var decoded = WebUtility.HtmlDecode(url.Trim());
+                if (!string.IsNullOrWhiteSpace(decoded) && decoded.StartsWith("http", StringComparison.OrdinalIgnoreCase))
+                {
+                    var exists = ReferencedMediaUrls.Any(existing => string.Equals(existing, decoded, StringComparison.OrdinalIgnoreCase));
+                    if (!exists)
+                    {
+                        ReferencedMediaUrls.Add(decoded);
+                    }
+                }
+            }
+        }
+
+        FeaturedMediaUrl ??= TryExtractFeaturedMediaUrl();
+    }
+
+    protected virtual IEnumerable<string?> EnumerateHtmlFragments()
+    {
+        yield return Content?.Rendered;
+        yield return Excerpt?.Rendered;
+    }
+
+    private string? TryExtractFeaturedMediaUrl()
+    {
+        if (Embedded is not JsonElement element || element.ValueKind != JsonValueKind.Object)
+        {
+            return null;
+        }
+
+        if (!element.TryGetProperty("wp:featuredmedia", out var featured) || featured.ValueKind != JsonValueKind.Array)
+        {
+            return null;
+        }
+
+        foreach (var item in featured.EnumerateArray())
+        {
+            if (item.ValueKind != JsonValueKind.Object)
+            {
+                continue;
+            }
+
+            if (item.TryGetProperty("source_url", out var sourceUrl) && sourceUrl.ValueKind == JsonValueKind.String)
+            {
+                var value = sourceUrl.GetString();
+                if (!string.IsNullOrWhiteSpace(value))
+                {
+                    return value;
+                }
+            }
+        }
+
+        return null;
+    }
+}
+
+public sealed class WordPressPage : WordPressContentBase
+{
+    [JsonPropertyName("parent")] public int? ParentId { get; set; }
+    [JsonPropertyName("menu_order")] public int? MenuOrder { get; set; }
+}
+
+public sealed class WordPressPost : WordPressContentBase
+{
+    [JsonPropertyName("comment_status")] public string? CommentStatus { get; set; }
+    [JsonPropertyName("ping_status")] public string? PingStatus { get; set; }
+    [JsonPropertyName("sticky")] public bool? Sticky { get; set; }
+    [JsonPropertyName("categories")] public List<int> Categories { get; set; } = new();
+    [JsonPropertyName("tags")] public List<int> Tags { get; set; } = new();
+}
+
+public sealed class WordPressRenderedText
+{
+    [JsonPropertyName("rendered")] public string? Rendered { get; set; }
+    [JsonPropertyName("protected")] public bool? IsProtected { get; set; }
+}
+
+public sealed class WordPressMediaItem
+{
+    [JsonPropertyName("id")] public int Id { get; set; }
+    [JsonPropertyName("date")] public DateTimeOffset? Date { get; set; }
+    [JsonPropertyName("date_gmt")] public DateTimeOffset? DateGmt { get; set; }
+    [JsonPropertyName("modified")] public DateTimeOffset? Modified { get; set; }
+    [JsonPropertyName("modified_gmt")] public DateTimeOffset? ModifiedGmt { get; set; }
+    [JsonPropertyName("slug")] public string? Slug { get; set; }
+    [JsonPropertyName("status")] public string? Status { get; set; }
+    [JsonPropertyName("type")] public string? Type { get; set; }
+    [JsonPropertyName("link")] public string? Link { get; set; }
+    [JsonPropertyName("title")] public WordPressRenderedText? Title { get; set; }
+    [JsonPropertyName("author")] public int? Author { get; set; }
+    [JsonPropertyName("comment_status")] public string? CommentStatus { get; set; }
+    [JsonPropertyName("ping_status")] public string? PingStatus { get; set; }
+    [JsonPropertyName("template")] public string? Template { get; set; }
+    [JsonPropertyName("alt_text")] public string? AltText { get; set; }
+    [JsonPropertyName("caption")] public WordPressRenderedText? Caption { get; set; }
+    [JsonPropertyName("description")] public WordPressRenderedText? Description { get; set; }
+    [JsonPropertyName("media_type")] public string? MediaType { get; set; }
+    [JsonPropertyName("mime_type")] public string? MimeType { get; set; }
+    [JsonPropertyName("media_details")] public WordPressMediaDetails? MediaDetails { get; set; }
+    [JsonPropertyName("source_url")] public string? SourceUrl { get; set; }
+    [JsonPropertyName("meta")] public JsonElement? Meta { get; set; }
+
+    [JsonPropertyName("local_path")] public string? RelativeFilePath { get; set; }
+    [JsonIgnore] public string? LocalFilePath { get; set; }
+
+    public void Normalize()
+    {
+        if (!string.IsNullOrWhiteSpace(SourceUrl))
+        {
+            SourceUrl = SourceUrl.Trim();
+        }
+        if (!string.IsNullOrWhiteSpace(Slug))
+        {
+            Slug = Slug.Trim();
+        }
+        if (MediaDetails is not null)
+        {
+            MediaDetails.Normalize();
+        }
+    }
+
+    public string? GuessFileName()
+    {
+        if (!string.IsNullOrWhiteSpace(MediaDetails?.File))
+        {
+            var parts = MediaDetails!.File!.Split('/', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            if (parts.Length > 0)
+            {
+                return parts[^1];
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(SourceUrl))
+        {
+            try
+            {
+                var uri = new Uri(SourceUrl, UriKind.Absolute);
+                return Path.GetFileName(uri.LocalPath);
+            }
+            catch
+            {
+                // ignored
+            }
+        }
+
+        return null;
+    }
+}
+
+public sealed class WordPressMediaDetails
+{
+    [JsonPropertyName("width")] public int? Width { get; set; }
+    [JsonPropertyName("height")] public int? Height { get; set; }
+    [JsonPropertyName("file")] public string? File { get; set; }
+    [JsonPropertyName("sizes")] public Dictionary<string, WordPressMediaSize> Sizes { get; set; } = new();
+
+    public void Normalize()
+    {
+        if (!string.IsNullOrWhiteSpace(File))
+        {
+            File = File.Trim();
+        }
+    }
+}
+
+public sealed class WordPressMediaSize
+{
+    [JsonPropertyName("file")] public string? File { get; set; }
+    [JsonPropertyName("width")] public int? Width { get; set; }
+    [JsonPropertyName("height")] public int? Height { get; set; }
+    [JsonPropertyName("mime_type")] public string? MimeType { get; set; }
+    [JsonPropertyName("source_url")] public string? SourceUrl { get; set; }
+}
+
+public sealed class WordPressMenuCollection
+{
+    [JsonPropertyName("endpoint")] public string? Endpoint { get; set; }
+    [JsonPropertyName("menus")] public List<WordPressMenu> Menus { get; set; } = new();
+    [JsonPropertyName("locations")] public List<WordPressMenuLocation> Locations { get; set; } = new();
+}
+
+public sealed class WordPressMenu
+{
+    [JsonPropertyName("id")] public int Id { get; set; }
+    [JsonPropertyName("name")] public string? Name { get; set; }
+    [JsonPropertyName("slug")] public string? Slug { get; set; }
+    [JsonPropertyName("description")] public string? Description { get; set; }
+    [JsonPropertyName("auto_add")] public bool? AutoAdd { get; set; }
+    [JsonPropertyName("count")] public int? Count { get; set; }
+    [JsonPropertyName("items")] public List<WordPressMenuItem> Items { get; set; } = new();
+
+    [JsonPropertyName("menu_items")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<WordPressMenuItem>? MenuItemsAlias
+    {
+        get => null;
+        set
+        {
+            if (value is not null && value.Count > 0)
+            {
+                Items = value;
+            }
+        }
+    }
+}
+
+public sealed class WordPressMenuItem
+{
+    [JsonPropertyName("id")] public int Id { get; set; }
+    [JsonPropertyName("order")] public int? Order { get; set; }
+    [JsonPropertyName("parent")] public int? ParentId { get; set; }
+    [JsonPropertyName("title")] public WordPressRenderedText? Title { get; set; }
+    [JsonPropertyName("url")] public string? Url { get; set; }
+    [JsonPropertyName("attr_title")] public string? AttrTitle { get; set; }
+    [JsonPropertyName("description")] public string? Description { get; set; }
+    [JsonPropertyName("type")] public string? Type { get; set; }
+    [JsonPropertyName("type_label")] public string? TypeLabel { get; set; }
+    [JsonPropertyName("object")] public string? Object { get; set; }
+    [JsonPropertyName("object_id")] public int? ObjectId { get; set; }
+    [JsonPropertyName("target")] public string? Target { get; set; }
+    [JsonPropertyName("classes")] public List<string> Classes { get; set; } = new();
+    [JsonPropertyName("xfn")] public List<string> Relationship { get; set; } = new();
+    [JsonPropertyName("meta")] public JsonElement? Meta { get; set; }
+    [JsonPropertyName("status")] public string? Status { get; set; }
+    [JsonPropertyName("children")] public List<WordPressMenuItem> Children { get; set; } = new();
+
+    [JsonPropertyName("child_items")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<WordPressMenuItem>? ChildItemsAlias
+    {
+        get => null;
+        set
+        {
+            if (value is not null && value.Count > 0)
+            {
+                Children = value;
+            }
+        }
+    }
+}
+
+public sealed class WordPressMenuLocation
+{
+    [JsonPropertyName("name")] public string? Name { get; set; }
+    [JsonPropertyName("description")] public string? Description { get; set; }
+    [JsonPropertyName("slug")] public string? Slug { get; set; }
+    [JsonPropertyName("menu")] public int? MenuId { get; set; }
+}
+
+public sealed class WordPressWidgetSnapshot
+{
+    [JsonPropertyName("areas")] public List<WordPressWidgetArea> Areas { get; set; } = new();
+    [JsonPropertyName("widgets")] public List<WordPressWidget> Widgets { get; set; } = new();
+    [JsonPropertyName("widget_types")] public List<WordPressWidgetType> WidgetTypes { get; set; } = new();
+}
+
+public sealed class WordPressWidgetArea
+{
+    [JsonPropertyName("id")] public string? Id { get; set; }
+    [JsonPropertyName("name")] public string? Name { get; set; }
+    [JsonPropertyName("description")] public string? Description { get; set; }
+    [JsonPropertyName("widgets")] public List<string> WidgetIds { get; set; } = new();
+}
+
+public sealed class WordPressWidget
+{
+    [JsonPropertyName("id")] public string? Id { get; set; }
+    [JsonPropertyName("id_base")] public string? IdBase { get; set; }
+    [JsonPropertyName("sidebar")] public string? Sidebar { get; set; }
+    [JsonPropertyName("rendered")] public string? Rendered { get; set; }
+    [JsonPropertyName("title")] public string? Title { get; set; }
+    [JsonPropertyName("widget_type")] public string? WidgetType { get; set; }
+    [JsonPropertyName("instance")] public JsonElement? Instance { get; set; }
+    [JsonPropertyName("status")] public string? Status { get; set; }
+}
+
+public sealed class WordPressWidgetType
+{
+    [JsonPropertyName("id")] public string? Id { get; set; }
+    [JsonPropertyName("name")] public string? Name { get; set; }
+    [JsonPropertyName("description")] public string? Description { get; set; }
+    [JsonPropertyName("icon")] public string? Icon { get; set; }
+    [JsonPropertyName("is_multi")] public bool? IsMulti { get; set; }
+}
+
+public sealed class WordPressSiteContent
+{
+    [JsonPropertyName("pages")] public List<WordPressPage> Pages { get; set; } = new();
+    [JsonPropertyName("posts")] public List<WordPressPost> Posts { get; set; } = new();
+    [JsonPropertyName("media")] public List<WordPressMediaItem> MediaLibrary { get; set; } = new();
+    [JsonPropertyName("menus")] public WordPressMenuCollection? Menus { get; set; }
+    [JsonPropertyName("widgets")] public WordPressWidgetSnapshot? Widgets { get; set; }
+    [JsonIgnore] public string? MediaRootDirectory { get; set; }
 }

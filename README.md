@@ -1,6 +1,29 @@
 # Scrapper
 
-Utilities for exporting WooCommerce and Shopify catalog data into flat files that can be re-imported into other systems.
+Utilities for exporting WooCommerce and Shopify catalog data into flat files that can be re-imported into other systems. The tooling can also mirror WordPress marketing content – including pages, posts, menus, widgets, and the complete media library – so a destination WooCommerce store can be brought online with navigation and marketing collateral already in place.
+
+## WordPress export bundle
+
+When a WooCommerce store is selected the exporter now captures a parallel WordPress bundle alongside the product catalog. The scraper talks to the core REST endpoints (`/wp-json/wp/v2/pages`, `/posts`, `/media`) plus the active menu and widget endpoints so content that is normally managed outside WooCommerce is preserved.
+
+The export bundle contains:
+
+- JSON files for pages, posts, menus, widgets, and the full media library (`wordpress-pages.json`, `wordpress-posts.json`, `wordpress-menus.json`, `wordpress-widgets.json`, `wordpress-media.json`).
+- Downloaded media organized under `media/wordpress/<timestamp>/`, mirroring the URLs referenced in the JSON artifacts so provisioning can replay the structure without redownloading assets.
+- A `wordpress-site-content.json` container that aggregates all pieces for provisioning workflows.
+
+Supply a WordPress username and application password before running the export if you want authenticated-only data (widgets, draft content) to be included.
+
+## Provisioning WordPress content
+
+During replication the WPF app now asks `WooProvisioningService` to seed WordPress content _before_ products are created. Provide the same WordPress credentials that were used during export so the provisioning pipeline can:
+
+1. Upload the downloaded media library and map remote IDs back to exported content.
+2. Recreate pages and posts, linking to the uploaded media when a match is found.
+3. Create menus and assign their locations to match the source site.
+4. Rebuild widget areas and populate them with their original widgets.
+
+These steps ensure that navigation and marketing surfaces are in place when products are provisioned, giving the cloned storefront a consistent look and feel.
 
 ## Shopify API configuration
 

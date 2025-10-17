@@ -146,6 +146,163 @@ public sealed class WooScraper : IDisposable
         return all;
     }
 
+    public Task<List<WordPressPage>> FetchWordPressPagesAsync(
+        string baseUrl,
+        IProgress<string>? log = null,
+        int perPage = 100,
+        int maxPages = 100)
+        => FetchWordPressContentAsync<WordPressPage>(baseUrl, "pages", perPage, maxPages, log);
+
+    public Task<List<WordPressPost>> FetchWordPressPostsAsync(
+        string baseUrl,
+        IProgress<string>? log = null,
+        int perPage = 100,
+        int maxPages = 100)
+        => FetchWordPressContentAsync<WordPressPost>(baseUrl, "posts", perPage, maxPages, log);
+
+    public async Task<List<WordPressMediaItem>> FetchWordPressMediaAsync(
+        string baseUrl,
+        IProgress<string>? log = null,
+        int perPage = 100,
+        int maxPages = 100)
+    {
+        baseUrl = CleanBaseUrl(baseUrl);
+        var all = new List<WordPressMediaItem>();
+
+        for (int page = 1; page <= maxPages; page++)
+        {
+            var url = $"{baseUrl}/wp-json/wp/v2/media?per_page={perPage}&page={page}&orderby=date&order=asc";
+            try
+            {
+                log?.Report($"GET {url}");
+                using var resp = await _http.GetAsync(url);
+                if (!resp.IsSuccessStatusCode)
+                {
+                    if ((int)resp.StatusCode == 404)
+                    {
+                        break;
+                    }
+                    resp.EnsureSuccessStatusCode();
+                }
+
+                var text = await resp.Content.ReadAsStringAsync();
+                if (string.IsNullOrWhiteSpace(text))
+                {
+                    break;
+                }
+
+                var items = DeserializeListWithRecovery<WordPressMediaItem>(text, "media library", log);
+                if (items.Count == 0)
+                {
+                    break;
+                }
+
+                foreach (var item in items)
+                {
+                    item.Normalize();
+                }
+
+                all.AddRange(items);
+                if (items.Count < perPage)
+                {
+                    break;
+                }
+            }
+            catch (TaskCanceledException ex)
+            {
+                log?.Report($"Media request timed out: {ex.Message}");
+                break;
+            }
+            catch (AuthenticationException ex)
+            {
+                log?.Report($"Media request TLS handshake failed: {ex.Message}");
+                break;
+            }
+            catch (IOException ex)
+            {
+                log?.Report($"Media request I/O failure: {ex.Message}");
+                break;
+            }
+            catch (HttpRequestException ex)
+            {
+                log?.Report($"Media request failed: {ex.Message}");
+                break;
+            }
+        }
+
+        return all;
+    }
+
+    public async Task<WordPressMenuCollection?> FetchWordPressMenusAsync(
+        string baseUrl,
+        IProgress<string>? log = null,
+        IEnumerable<string>? preferredEndpoints = null)
+    {
+        baseUrl = CleanBaseUrl(baseUrl);
+        var endpoints = preferredEndpoints?.ToList();
+        if (endpoints is null || endpoints.Count == 0)
+        {
+            endpoints = new List<string>
+            {
+                "/wp-json/wp/v2/menus",
+                "/wp-json/wp-api-menus/v2/menus",
+                "/wp-json/menus/v1/menus"
+            };
+        }
+
+        foreach (var endpoint in endpoints)
+        {
+            var menuCollection = await TryFetchMenusFromEndpointAsync(baseUrl, endpoint, log);
+            if (menuCollection is not null)
+            {
+                menuCollection.Endpoint = endpoint;
+                return menuCollection;
+            }
+        }
+
+        log?.Report("No WordPress menus endpoint responded.");
+        return null;
+    }
+
+    public async Task<WordPressWidgetSnapshot> FetchWordPressWidgetsAsync(
+        string baseUrl,
+        string username,
+        string applicationPassword,
+        IProgress<string>? log = null)
+    {
+        baseUrl = CleanBaseUrl(baseUrl);
+        if (string.IsNullOrWhiteSpace(username) || string.IsNullOrWhiteSpace(applicationPassword))
+        {
+            log?.Report("Widgets request skipped: missing credentials.");
+            return new WordPressWidgetSnapshot();
+        }
+
+        var snapshot = new WordPressWidgetSnapshot();
+
+        snapshot.Areas = await FetchAuthenticatedListAsync<WordPressWidgetArea>(
+            $"{baseUrl}/wp-json/wp/v2/widget-areas",
+            "widget areas",
+            username,
+            applicationPassword,
+            log);
+
+        snapshot.Widgets = await FetchAuthenticatedListAsync<WordPressWidget>(
+            $"{baseUrl}/wp-json/wp/v2/widgets",
+            "widgets",
+            username,
+            applicationPassword,
+            log);
+
+        snapshot.WidgetTypes = await FetchAuthenticatedListAsync<WordPressWidgetType>(
+            $"{baseUrl}/wp-json/wp/v2/widget-types",
+            "widget types",
+            username,
+            applicationPassword,
+            log);
+
+        return snapshot;
+    }
+
     public Task<List<InstalledTheme>> FetchThemesAsync(
         string baseUrl,
         string username,
@@ -1758,8 +1915,373 @@ public sealed class WooScraper : IDisposable
         return null;
     }
 
+    private async Task<List<T>> FetchWordPressContentAsync<T>(
+        string baseUrl,
+        string resource,
+        int perPage,
+        int maxPages,
+        IProgress<string>? log) where T : WordPressContentBase
+    {
+        baseUrl = CleanBaseUrl(baseUrl);
+        var all = new List<T>();
+
+        for (int page = 1; page <= maxPages; page++)
+        {
+            var url = $"{baseUrl}/wp-json/wp/v2/{resource}?per_page={perPage}&page={page}&_embed=1";
+            try
+            {
+                log?.Report($"GET {url}");
+                using var resp = await _http.GetAsync(url);
+                if (!resp.IsSuccessStatusCode)
+                {
+                    if ((int)resp.StatusCode == 404)
+                    {
+                        break;
+                    }
+                    resp.EnsureSuccessStatusCode();
+                }
+
+                var text = await resp.Content.ReadAsStringAsync();
+                if (string.IsNullOrWhiteSpace(text))
+                {
+                    break;
+                }
+
+                var items = DeserializeListWithRecovery<T>(text, $"WordPress {resource}", log);
+                if (items.Count == 0)
+                {
+                    break;
+                }
+
+                foreach (var item in items)
+                {
+                    item.Normalize();
+                }
+
+                all.AddRange(items);
+                if (items.Count < perPage)
+                {
+                    break;
+                }
+            }
+            catch (TaskCanceledException ex)
+            {
+                log?.Report($"WordPress {resource} request timed out: {ex.Message}");
+                break;
+            }
+            catch (AuthenticationException ex)
+            {
+                log?.Report($"WordPress {resource} TLS handshake failed: {ex.Message}");
+                break;
+            }
+            catch (IOException ex)
+            {
+                log?.Report($"WordPress {resource} request I/O failure: {ex.Message}");
+                break;
+            }
+            catch (HttpRequestException ex)
+            {
+                log?.Report($"WordPress {resource} request failed: {ex.Message}");
+                break;
+            }
+        }
+
+        return all;
+    }
+
+    private async Task<WordPressMenuCollection?> TryFetchMenusFromEndpointAsync(
+        string baseUrl,
+        string endpoint,
+        IProgress<string>? log)
+    {
+        var url = CombineEndpoint(baseUrl, endpoint);
+        try
+        {
+            log?.Report($"GET {url}");
+            using var resp = await _http.GetAsync(url);
+            if (!resp.IsSuccessStatusCode)
+            {
+                if ((int)resp.StatusCode == 404)
+                {
+                    return null;
+                }
+                resp.EnsureSuccessStatusCode();
+            }
+
+            var payload = await resp.Content.ReadAsStringAsync();
+            if (string.IsNullOrWhiteSpace(payload))
+            {
+                return null;
+            }
+
+            using var doc = JsonDocument.Parse(payload);
+            List<WordPressMenu> menus;
+            if (doc.RootElement.ValueKind == JsonValueKind.Array)
+            {
+                menus = await DeserializeMenusAsync(baseUrl, endpoint, doc.RootElement, log);
+            }
+            else if (doc.RootElement.ValueKind == JsonValueKind.Object
+                     && doc.RootElement.TryGetProperty("menus", out var menusProperty)
+                     && menusProperty.ValueKind == JsonValueKind.Array)
+            {
+                menus = await DeserializeMenusAsync(baseUrl, endpoint, menusProperty, log);
+            }
+            else
+            {
+                log?.Report($"Unexpected menu response shape from {endpoint}.");
+                return null;
+            }
+
+            var locations = await FetchMenuLocationsAsync(baseUrl, log);
+            return new WordPressMenuCollection
+            {
+                Menus = menus,
+                Locations = locations
+            };
+        }
+        catch (TaskCanceledException ex)
+        {
+            log?.Report($"Menus request timed out for {endpoint}: {ex.Message}");
+        }
+        catch (AuthenticationException ex)
+        {
+            log?.Report($"Menus request TLS handshake failed for {endpoint}: {ex.Message}");
+        }
+        catch (IOException ex)
+        {
+            log?.Report($"Menus request I/O failure for {endpoint}: {ex.Message}");
+        }
+        catch (HttpRequestException ex)
+        {
+            log?.Report($"Menus request failed for {endpoint}: {ex.Message}");
+        }
+        catch (JsonException ex)
+        {
+            log?.Report($"Menus response parse error for {endpoint}: {ex.Message}");
+        }
+
+        return null;
+    }
+
+    private async Task<List<WordPressMenu>> DeserializeMenusAsync(
+        string baseUrl,
+        string endpoint,
+        JsonElement array,
+        IProgress<string>? log)
+    {
+        var menus = new List<WordPressMenu>();
+        foreach (var element in array.EnumerateArray())
+        {
+            WordPressMenu? menu = null;
+            try
+            {
+                menu = element.Deserialize<WordPressMenu>(_jsonOptions);
+            }
+            catch (JsonException)
+            {
+                // ignore invalid entry
+            }
+
+            if (menu is null)
+            {
+                continue;
+            }
+
+            var detailed = await FetchMenuDetailAsync(baseUrl, endpoint, menu, log);
+            menus.Add(detailed ?? menu);
+        }
+
+        return menus;
+    }
+
+    private async Task<WordPressMenu?> FetchMenuDetailAsync(
+        string baseUrl,
+        string endpoint,
+        WordPressMenu summary,
+        IProgress<string>? log)
+    {
+        if (summary.Id > 0)
+        {
+            var detailById = await FetchMenuDetailInternalAsync(
+                CombineEndpoint(baseUrl, $"{TrimEndpoint(endpoint)}/{summary.Id}"),
+                log);
+            if (detailById is not null)
+            {
+                return MergeMenu(summary, detailById);
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(summary.Slug))
+        {
+            var detailBySlug = await FetchMenuDetailInternalAsync(
+                CombineEndpoint(baseUrl, $"{TrimEndpoint(endpoint)}/{summary.Slug}"),
+                log);
+            if (detailBySlug is not null)
+            {
+                return MergeMenu(summary, detailBySlug);
+            }
+        }
+
+        return summary;
+    }
+
+    private static WordPressMenu MergeMenu(WordPressMenu summary, WordPressMenu detail)
+    {
+        detail.Id = detail.Id == 0 ? summary.Id : detail.Id;
+        detail.Slug ??= summary.Slug;
+        detail.Name ??= summary.Name;
+        detail.Description ??= summary.Description;
+        return detail;
+    }
+
+    private async Task<WordPressMenu?> FetchMenuDetailInternalAsync(string url, IProgress<string>? log)
+    {
+        try
+        {
+            log?.Report($"GET {url}");
+            using var resp = await _http.GetAsync(url);
+            if (!resp.IsSuccessStatusCode)
+            {
+                if ((int)resp.StatusCode == 404)
+                {
+                    return null;
+                }
+                resp.EnsureSuccessStatusCode();
+            }
+
+            var text = await resp.Content.ReadAsStringAsync();
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                return null;
+            }
+
+            var menu = JsonSerializer.Deserialize<WordPressMenu>(text, _jsonOptions);
+            return menu;
+        }
+        catch (TaskCanceledException ex)
+        {
+            log?.Report($"Menu detail request timed out: {ex.Message}");
+        }
+        catch (AuthenticationException ex)
+        {
+            log?.Report($"Menu detail TLS failure: {ex.Message}");
+        }
+        catch (IOException ex)
+        {
+            log?.Report($"Menu detail I/O failure: {ex.Message}");
+        }
+        catch (HttpRequestException ex)
+        {
+            log?.Report($"Menu detail request failed: {ex.Message}");
+        }
+        catch (JsonException ex)
+        {
+            log?.Report($"Menu detail parse error: {ex.Message}");
+        }
+
+        return null;
+    }
+
+    private async Task<List<WordPressMenuLocation>> FetchMenuLocationsAsync(string baseUrl, IProgress<string>? log)
+    {
+        var url = $"{baseUrl}/wp-json/wp/v2/menu-locations";
+        try
+        {
+            log?.Report($"GET {url}");
+            using var resp = await _http.GetAsync(url);
+            if (!resp.IsSuccessStatusCode)
+            {
+                if ((int)resp.StatusCode == 404)
+                {
+                    return new List<WordPressMenuLocation>();
+                }
+                resp.EnsureSuccessStatusCode();
+            }
+
+            var text = await resp.Content.ReadAsStringAsync();
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                return new List<WordPressMenuLocation>();
+            }
+
+            using var doc = JsonDocument.Parse(text);
+            if (doc.RootElement.ValueKind == JsonValueKind.Array)
+            {
+                var list = JsonSerializer.Deserialize<List<WordPressMenuLocation>>(text, _jsonOptions);
+                return list ?? new List<WordPressMenuLocation>();
+            }
+
+            if (doc.RootElement.ValueKind == JsonValueKind.Object)
+            {
+                var locations = new List<WordPressMenuLocation>();
+                foreach (var property in doc.RootElement.EnumerateObject())
+                {
+                    try
+                    {
+                        var location = property.Value.Deserialize<WordPressMenuLocation>(_jsonOptions) ?? new WordPressMenuLocation();
+                        location.Slug ??= property.Name;
+                        locations.Add(location);
+                    }
+                    catch (JsonException)
+                    {
+                        // ignore invalid entry
+                    }
+                }
+
+                return locations;
+            }
+        }
+        catch (TaskCanceledException ex)
+        {
+            log?.Report($"Menu locations request timed out: {ex.Message}");
+        }
+        catch (AuthenticationException ex)
+        {
+            log?.Report($"Menu locations TLS failure: {ex.Message}");
+        }
+        catch (IOException ex)
+        {
+            log?.Report($"Menu locations I/O failure: {ex.Message}");
+        }
+        catch (HttpRequestException ex)
+        {
+            log?.Report($"Menu locations request failed: {ex.Message}");
+        }
+        catch (JsonException ex)
+        {
+            log?.Report($"Menu locations parse error: {ex.Message}");
+        }
+
+        return new List<WordPressMenuLocation>();
+    }
+
+    private static string CombineEndpoint(string baseUrl, string endpoint)
+    {
+        if (string.IsNullOrWhiteSpace(endpoint))
+        {
+            return baseUrl;
+        }
+
+        if (endpoint.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
+            || endpoint.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+        {
+            return endpoint;
+        }
+
+        if (!endpoint.StartsWith('/'))
+        {
+            endpoint = "/" + endpoint;
+        }
+
+        return baseUrl + endpoint;
+    }
+
+    private static string TrimEndpoint(string endpoint)
+        => endpoint.TrimEnd('/');
+
     private static string? Normalize(string? value)
         => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
 
     private List<T> DeserializeListWithRecovery<T>(string json, string entityName, IProgress<string>? log)
     {
