@@ -121,6 +121,7 @@ public sealed class ShopifyMapperTests
         Assert.Equal("Tag One, Tag Two", shopifyRow["SEO Keywords"]);
 
         var wooRow = Assert.Single(Mappers.ToWooImporterCsv(new[] { storeProduct }, Array.Empty<StoreProduct>()));
+        Assert.Equal(storeProduct.Id, wooRow["ID"]);
         Assert.Equal("Accessories", wooRow["Type"]);
         Assert.Null(wooRow["ParentId"]);
         Assert.Equal("Home, Sale", wooRow["Categories"]);

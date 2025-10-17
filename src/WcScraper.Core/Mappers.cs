@@ -175,6 +175,8 @@ public static class Mappers
         var priceVal = prices?.Price ?? prices?.RegularPrice ?? prices?.SalePrice;
         var price = AsFloatPrice(priceVal, prices?.CurrencyMinorUnit);
         var type = string.IsNullOrWhiteSpace(productType) ? "simple" : productType;
+        var isVariation = string.Equals(type, "variation", StringComparison.OrdinalIgnoreCase);
+        var identifier = !isVariation && product.Id != 0 ? product.Id : "";
         var images = string.Join(", ", product.Images.Select(i => i.Src).Where(s => !string.IsNullOrWhiteSpace(s))!);
         var categories = JoinCsv(product.Categories.Select(c => c.Name));
         var tags = JoinCsv(product.Tags.Select(t => t.Name));
@@ -182,7 +184,7 @@ public static class Mappers
 
         return new Dictionary<string, object?>
         {
-            ["ID"] = "",
+            ["ID"] = identifier,
             ["Type"] = type,
             ["ParentId"] = parentId,
             ["SKU"] = product.Sku ?? "",
