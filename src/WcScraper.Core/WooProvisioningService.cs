@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
@@ -15,7 +16,12 @@ namespace WcScraper.Core;
 
 public sealed class WooProvisioningSettings
 {
-    public WooProvisioningSettings(string baseUrl, string consumerKey, string consumerSecret)
+    public WooProvisioningSettings(
+        string baseUrl,
+        string consumerKey,
+        string consumerSecret,
+        string? wordPressUsername = null,
+        string? wordPressApplicationPassword = null)
     {
         if (string.IsNullOrWhiteSpace(baseUrl))
         {
@@ -33,11 +39,21 @@ public sealed class WooProvisioningSettings
         BaseUrl = WooScraper.CleanBaseUrl(baseUrl);
         ConsumerKey = consumerKey.Trim();
         ConsumerSecret = consumerSecret.Trim();
+        WordPressUsername = string.IsNullOrWhiteSpace(wordPressUsername) ? null : wordPressUsername.Trim();
+        WordPressApplicationPassword = string.IsNullOrWhiteSpace(wordPressApplicationPassword)
+            ? null
+            : wordPressApplicationPassword.Trim();
     }
 
     public string BaseUrl { get; }
     public string ConsumerKey { get; }
     public string ConsumerSecret { get; }
+    public string? WordPressUsername { get; }
+    public string? WordPressApplicationPassword { get; }
+
+    public bool HasWordPressCredentials
+        => !string.IsNullOrWhiteSpace(WordPressUsername)
+            && !string.IsNullOrWhiteSpace(WordPressApplicationPassword);
 }
 
 public sealed class WooProvisioningService : IDisposable
@@ -253,6 +269,13 @@ public sealed class WooProvisioningService : IDisposable
     {
         try
         {
+            if (!settings.HasWordPressCredentials)
+            {
+                progress?.Report(
+                    $"Skipping media upload for {Path.GetFileName(filePath)}: provide WordPress username and application password.");
+                return null;
+            }
+
             progress?.Report($"Uploading media {Path.GetFileName(filePath)}…");
             using var stream = File.OpenRead(filePath);
             using var content = new StreamContent(stream);
@@ -261,7 +284,7 @@ public sealed class WooProvisioningService : IDisposable
             form.Add(content, "file", Path.GetFileName(filePath));
 
             var request = new HttpRequestMessage(HttpMethod.Post, BuildUrl(baseUrl, "/wp-json/wp/v2/media"));
-            request.Headers.Authorization = CreateAuthHeader(settings);
+            request.Headers.Authorization = CreateWordPressAuthHeader(settings);
             request.Headers.Accept.ParseAdd("application/json");
             request.Content = form;
 
@@ -583,6 +606,18 @@ public sealed class WooProvisioningService : IDisposable
     private static AuthenticationHeaderValue CreateAuthHeader(WooProvisioningSettings settings)
     {
         var credentials = Convert.ToBase64String(Encoding.UTF8.GetBytes($"{settings.ConsumerKey}:{settings.ConsumerSecret}"));
+        return new AuthenticationHeaderValue("Basic", credentials);
+    }
+
+    private static AuthenticationHeaderValue CreateWordPressAuthHeader(WooProvisioningSettings settings)
+    {
+        if (!settings.HasWordPressCredentials)
+        {
+            throw new InvalidOperationException("WordPress credentials are required for WordPress REST API requests.");
+        }
+
+        var credentials = Convert.ToBase64String(
+            Encoding.UTF8.GetBytes($"{settings.WordPressUsername}:{settings.WordPressApplicationPassword}"));
         return new AuthenticationHeaderValue("Basic", credentials);
     }
 

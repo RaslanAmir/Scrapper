@@ -760,11 +760,22 @@ public sealed class MainViewModel : INotifyPropertyChanged
             return;
         }
 
+        if (string.IsNullOrWhiteSpace(WordPressUsername) || string.IsNullOrWhiteSpace(WordPressApplicationPassword))
+        {
+            Append("Enter the WordPress username and application password before provisioning.");
+            return;
+        }
+
         try
         {
             IsRunning = true;
             IProgress<string> logger = new Progress<string>(Append);
-            var settings = new WooProvisioningSettings(TargetStoreUrl, TargetConsumerKey, TargetConsumerSecret);
+            var settings = new WooProvisioningSettings(
+                TargetStoreUrl,
+                TargetConsumerKey,
+                TargetConsumerSecret,
+                WordPressUsername,
+                WordPressApplicationPassword);
             Append($"Provisioning {_lastProvisioningContext.Products.Count} products to {settings.BaseUrl}…");
             await _wooProvisioningService.ProvisionAsync(settings, _lastProvisioningContext.Products, logger);
         }
