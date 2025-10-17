@@ -101,7 +101,20 @@ public static class ShopifyConverters
     public static StoreProduct ToStoreProduct(ShopifyProduct product, ShopifySettings settings)
     {
         var firstVariant = product.Variants.FirstOrDefault();
-        var inStock = firstVariant?.InventoryQuantity is > 0;
+        var inStock = true;
+
+        if (firstVariant is not null)
+        {
+            if (firstVariant.InventoryQuantity is int quantity)
+            {
+                inStock = quantity > 0;
+            }
+            else if (firstVariant.Available is bool available)
+            {
+                inStock = available;
+            }
+        }
+
         var hasOptions = product.Options.Count > 1 || product.Variants.Count > 1;
 
         return new StoreProduct

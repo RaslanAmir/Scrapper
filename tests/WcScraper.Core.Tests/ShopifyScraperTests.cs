@@ -1,6 +1,8 @@
+using System.Collections.Generic;
 using System.Net;
 using System.Net.Http;
 using System.Text;
+using System.Text.Json;
 using WcScraper.Core.Shopify;
 using Xunit;
 
@@ -278,6 +280,61 @@ public class ShopifyScraperTests
         var product = Assert.Single(products);
         Assert.Equal("anonymous-product", product.Handle);
         Assert.Equal(2, requestCount);
+    }
+
+    [Theory]
+    [InlineData(true, true)]
+    [InlineData(false, false)]
+    [InlineData(null, true)]
+    public async Task FetchStoreProductsAsync_PublicStorefrontDeterminesStockFromAvailability(bool? available, bool expectedInStock)
+    {
+        var variant = new Dictionary<string, object?>
+        {
+            ["id"] = 111,
+            ["price"] = "12.99"
+        };
+
+        if (available.HasValue)
+        {
+            variant["available"] = available.Value;
+        }
+
+        var restPayload = JsonSerializer.Serialize(new Dictionary<string, object?>
+        {
+            ["products"] = new[]
+            {
+                new Dictionary<string, object?>
+                {
+                    ["id"] = 123,
+                    ["title"] = "Anonymous Product",
+                    ["handle"] = "anonymous-product",
+                    ["variants"] = new[] { variant }
+                }
+            }
+        });
+
+        using var handler = new StubHttpMessageHandler(request =>
+        {
+            Assert.Equal(HttpMethod.Get, request.Method);
+            Assert.Equal("/products.json", request.RequestUri!.AbsolutePath);
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(restPayload, Encoding.UTF8, "application/json")
+            };
+        });
+
+        using var httpClient = new HttpClient(handler);
+        var settings = new ShopifySettings("https://example.myshopify.com")
+        {
+            PageSize = 50,
+            MaxPages = 1
+        };
+        var scraper = new ShopifyScraper(httpClient);
+
+        var storeProducts = await scraper.FetchStoreProductsAsync(settings);
+
+        var storeProduct = Assert.Single(storeProducts);
+        Assert.Equal(expectedInStock, storeProduct.IsInStock);
     }
 
     private sealed class StubHttpMessageHandler : HttpMessageHandler

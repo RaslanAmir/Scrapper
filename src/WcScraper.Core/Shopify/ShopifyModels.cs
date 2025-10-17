@@ -33,6 +33,7 @@ public sealed class ShopifyVariant
     [JsonPropertyName("price")] public string? Price { get; set; }
     [JsonPropertyName("compare_at_price")] public string? CompareAtPrice { get; set; }
     [JsonPropertyName("inventory_quantity")] public int? InventoryQuantity { get; set; }
+    [JsonPropertyName("available")] public bool? Available { get; set; }
     [JsonPropertyName("requires_shipping")] public bool? RequiresShipping { get; set; }
     [JsonPropertyName("weight")] public double? Weight { get; set; }
     [JsonPropertyName("weight_unit")] public string? WeightUnit { get; set; }
