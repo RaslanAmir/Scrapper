@@ -58,6 +58,7 @@ public sealed class Category
     [JsonPropertyName("id")] public int Id { get; set; }
     [JsonPropertyName("name")] public string? Name { get; set; }
     [JsonPropertyName("slug")] public string? Slug { get; set; }
+    [JsonPropertyName("parent")] public int? ParentId { get; set; }
 }
 
 public sealed class ProductTag
@@ -101,6 +102,7 @@ public sealed class TermItem
     [JsonPropertyName("id")] public int Id { get; set; }
     [JsonPropertyName("name")] public string? Name { get; set; }
     [JsonPropertyName("slug")] public string? Slug { get; set; }
+    [JsonPropertyName("parent")] public int? ParentId { get; set; }
 }
 
 public sealed class InstalledPlugin

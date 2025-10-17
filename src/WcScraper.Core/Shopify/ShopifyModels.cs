@@ -204,7 +204,8 @@ public sealed class ShopifyCollectionDetails
         {
             Id = identifier,
             Name = Title,
-            Slug = slug
+            Slug = slug,
+            ParentId = null
         };
     }
 }
