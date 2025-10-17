@@ -1,3 +1,4 @@
+using WcScraper.Core;
 using WcScraper.Core.Shopify;
 using Xunit;
 
