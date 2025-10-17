@@ -351,6 +351,250 @@ public sealed class WooScraper : IDisposable
         return await FetchThemesViaAdminAsync(baseUrl, username, applicationPassword, log);
     }
 
+    public async Task<Dictionary<string, JsonElement>> FetchWordPressSettingsAsync(
+        string baseUrl,
+        string username,
+        string applicationPassword,
+        IProgress<string>? log = null)
+    {
+        baseUrl = CleanBaseUrl(baseUrl);
+        if (string.IsNullOrWhiteSpace(username) || string.IsNullOrWhiteSpace(applicationPassword))
+        {
+            log?.Report("WordPress settings request skipped: missing credentials.");
+            return new();
+        }
+
+        var result = new Dictionary<string, JsonElement>(StringComparer.OrdinalIgnoreCase);
+        var element = await TryFetchJsonAsync(baseUrl, "/wp-json/wp/v2/settings", username, applicationPassword, log, "WordPress settings");
+        if (element is not JsonElement json || json.ValueKind != JsonValueKind.Object)
+        {
+            return result;
+        }
+
+        foreach (var property in json.EnumerateObject())
+        {
+            result[property.Name] = property.Value.Clone();
+        }
+
+        return result;
+    }
+
+    public async Task<Dictionary<string, JsonElement>> FetchPluginOptionsAsync(
+        string baseUrl,
+        string username,
+        string applicationPassword,
+        InstalledPlugin plugin,
+        IProgress<string>? log = null,
+        IReadOnlyDictionary<string, JsonElement>? sharedSettings = null)
+    {
+        if (plugin is null) throw new ArgumentNullException(nameof(plugin));
+
+        baseUrl = CleanBaseUrl(baseUrl);
+        if (string.IsNullOrWhiteSpace(username) || string.IsNullOrWhiteSpace(applicationPassword))
+        {
+            log?.Report("Plugin options request skipped: missing credentials.");
+            return new();
+        }
+
+        var identifiers = EnumeratePluginIdentifiers(plugin).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        var result = new Dictionary<string, JsonElement>(StringComparer.OrdinalIgnoreCase);
+
+        if (sharedSettings is { Count: > 0 })
+        {
+            foreach (var kvp in sharedSettings)
+            {
+                if (MatchesIdentifier(kvp.Key, identifiers))
+                {
+                    result[kvp.Key] = kvp.Value.Clone();
+                }
+            }
+        }
+
+        foreach (var endpoint in BuildPluginOptionEndpoints(plugin))
+        {
+            var element = await TryFetchJsonAsync(baseUrl, endpoint, username, applicationPassword, log, $"Plugin options ({plugin.Name ?? plugin.Slug ?? plugin.PluginFile ?? "plugin"})");
+            if (element is null)
+            {
+                continue;
+            }
+
+            MergeKeyedValues(element.Value, result);
+        }
+
+        return result;
+    }
+
+    public async Task<List<string>> FetchPluginAssetManifestAsync(
+        string baseUrl,
+        string username,
+        string applicationPassword,
+        InstalledPlugin plugin,
+        IProgress<string>? log = null)
+    {
+        if (plugin is null) throw new ArgumentNullException(nameof(plugin));
+
+        baseUrl = CleanBaseUrl(baseUrl);
+        if (string.IsNullOrWhiteSpace(username) || string.IsNullOrWhiteSpace(applicationPassword))
+        {
+            log?.Report("Plugin manifest request skipped: missing credentials.");
+            return new();
+        }
+
+        foreach (var endpoint in BuildPluginManifestEndpoints(plugin))
+        {
+            var items = await TryFetchStringListAsync(baseUrl, endpoint, username, applicationPassword, log, $"Plugin manifest ({plugin.Name ?? plugin.Slug ?? plugin.PluginFile ?? "plugin"})");
+            if (items.Count > 0)
+            {
+                return items;
+            }
+        }
+
+        var slug = DeterminePluginSlug(plugin);
+        if (!string.IsNullOrWhiteSpace(slug))
+        {
+            return new List<string> { $"/wp-content/plugins/{slug}/" };
+        }
+
+        return new();
+    }
+
+    public async Task<bool> DownloadPluginArchiveAsync(
+        string baseUrl,
+        string username,
+        string applicationPassword,
+        InstalledPlugin plugin,
+        string destinationPath,
+        IProgress<string>? log = null)
+    {
+        if (plugin is null) throw new ArgumentNullException(nameof(plugin));
+
+        baseUrl = CleanBaseUrl(baseUrl);
+        if (string.IsNullOrWhiteSpace(username) || string.IsNullOrWhiteSpace(applicationPassword))
+        {
+            log?.Report("Plugin archive download skipped: missing credentials.");
+            return false;
+        }
+
+        foreach (var endpoint in BuildPluginArchiveEndpoints(plugin))
+        {
+            var success = await TryDownloadBinaryAsync(baseUrl, endpoint, username, applicationPassword, destinationPath, log, $"Plugin archive ({plugin.Name ?? plugin.Slug ?? plugin.PluginFile ?? "plugin"})");
+            if (success)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    public async Task<Dictionary<string, JsonElement>> FetchThemeOptionsAsync(
+        string baseUrl,
+        string username,
+        string applicationPassword,
+        InstalledTheme theme,
+        IProgress<string>? log = null,
+        IReadOnlyDictionary<string, JsonElement>? sharedSettings = null)
+    {
+        if (theme is null) throw new ArgumentNullException(nameof(theme));
+
+        baseUrl = CleanBaseUrl(baseUrl);
+        if (string.IsNullOrWhiteSpace(username) || string.IsNullOrWhiteSpace(applicationPassword))
+        {
+            log?.Report("Theme options request skipped: missing credentials.");
+            return new();
+        }
+
+        var identifiers = EnumerateThemeIdentifiers(theme).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        var result = new Dictionary<string, JsonElement>(StringComparer.OrdinalIgnoreCase);
+
+        if (sharedSettings is { Count: > 0 })
+        {
+            foreach (var kvp in sharedSettings)
+            {
+                if (MatchesIdentifier(kvp.Key, identifiers))
+                {
+                    result[kvp.Key] = kvp.Value.Clone();
+                }
+            }
+        }
+
+        foreach (var endpoint in BuildThemeOptionEndpoints(theme))
+        {
+            var element = await TryFetchJsonAsync(baseUrl, endpoint, username, applicationPassword, log, $"Theme options ({theme.Name ?? theme.Slug ?? theme.Stylesheet ?? "theme"})");
+            if (element is null)
+            {
+                continue;
+            }
+
+            MergeKeyedValues(element.Value, result);
+        }
+
+        return result;
+    }
+
+    public async Task<List<string>> FetchThemeAssetManifestAsync(
+        string baseUrl,
+        string username,
+        string applicationPassword,
+        InstalledTheme theme,
+        IProgress<string>? log = null)
+    {
+        if (theme is null) throw new ArgumentNullException(nameof(theme));
+
+        baseUrl = CleanBaseUrl(baseUrl);
+        if (string.IsNullOrWhiteSpace(username) || string.IsNullOrWhiteSpace(applicationPassword))
+        {
+            log?.Report("Theme manifest request skipped: missing credentials.");
+            return new();
+        }
+
+        foreach (var endpoint in BuildThemeManifestEndpoints(theme))
+        {
+            var items = await TryFetchStringListAsync(baseUrl, endpoint, username, applicationPassword, log, $"Theme manifest ({theme.Name ?? theme.Slug ?? theme.Stylesheet ?? "theme"})");
+            if (items.Count > 0)
+            {
+                return items;
+            }
+        }
+
+        var slug = DetermineThemeSlug(theme);
+        if (!string.IsNullOrWhiteSpace(slug))
+        {
+            return new List<string> { $"/wp-content/themes/{slug}/" };
+        }
+
+        return new();
+    }
+
+    public async Task<bool> DownloadThemeArchiveAsync(
+        string baseUrl,
+        string username,
+        string applicationPassword,
+        InstalledTheme theme,
+        string destinationPath,
+        IProgress<string>? log = null)
+    {
+        if (theme is null) throw new ArgumentNullException(nameof(theme));
+
+        baseUrl = CleanBaseUrl(baseUrl);
+        if (string.IsNullOrWhiteSpace(username) || string.IsNullOrWhiteSpace(applicationPassword))
+        {
+            log?.Report("Theme archive download skipped: missing credentials.");
+            return false;
+        }
+
+        foreach (var endpoint in BuildThemeArchiveEndpoints(theme))
+        {
+            var success = await TryDownloadBinaryAsync(baseUrl, endpoint, username, applicationPassword, destinationPath, log, $"Theme archive ({theme.Name ?? theme.Slug ?? theme.Stylesheet ?? "theme"})");
+            if (success)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     public async Task<List<StoreReview>> FetchStoreReviewsAsync(
         string baseUrl,
         IEnumerable<int> productIds,
@@ -1385,6 +1629,443 @@ public sealed class WooScraper : IDisposable
         }
 
         return null;
+    }
+
+    private async Task<JsonElement?> TryFetchJsonAsync(
+        string baseUrl,
+        string path,
+        string username,
+        string applicationPassword,
+        IProgress<string>? log,
+        string context)
+    {
+        var url = CombineUrl(baseUrl, path);
+        try
+        {
+            using var req = new HttpRequestMessage(HttpMethod.Get, url);
+            req.Headers.Authorization = CreateBasicAuthHeader(username, applicationPassword);
+            log?.Report($"GET {url} (authenticated)");
+            using var resp = await _http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead);
+            if (!resp.IsSuccessStatusCode)
+            {
+                if ((int)resp.StatusCode != 404)
+                {
+                    log?.Report($"{context} endpoint returned {(int)resp.StatusCode} ({resp.ReasonPhrase}).");
+                }
+                return null;
+            }
+
+            await using var stream = await resp.Content.ReadAsStreamAsync();
+            using var doc = await JsonDocument.ParseAsync(stream);
+            return doc.RootElement.Clone();
+        }
+        catch (TaskCanceledException ex)
+        {
+            log?.Report($"{context} request timed out: {ex.Message}");
+        }
+        catch (AuthenticationException ex)
+        {
+            log?.Report($"{context} request TLS handshake failed: {ex.Message}");
+        }
+        catch (IOException ex)
+        {
+            log?.Report($"{context} request I/O failure: {ex.Message}");
+        }
+        catch (HttpRequestException ex)
+        {
+            log?.Report($"{context} request failed: {ex.Message}");
+        }
+        catch (JsonException ex)
+        {
+            log?.Report($"{context} response parsing failed: {ex.Message}");
+        }
+
+        return null;
+    }
+
+    private async Task<List<string>> TryFetchStringListAsync(
+        string baseUrl,
+        string path,
+        string username,
+        string applicationPassword,
+        IProgress<string>? log,
+        string context)
+    {
+        var element = await TryFetchJsonAsync(baseUrl, path, username, applicationPassword, log, context);
+        if (element is not JsonElement json)
+        {
+            return new();
+        }
+
+        var items = ExtractStringList(json);
+        return items;
+    }
+
+    private async Task<bool> TryDownloadBinaryAsync(
+        string baseUrl,
+        string path,
+        string username,
+        string applicationPassword,
+        string destinationPath,
+        IProgress<string>? log,
+        string context)
+    {
+        var url = CombineUrl(baseUrl, path);
+        try
+        {
+            using var req = new HttpRequestMessage(HttpMethod.Get, url);
+            req.Headers.Authorization = CreateBasicAuthHeader(username, applicationPassword);
+            log?.Report($"GET {url} (authenticated)");
+            using var resp = await _http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead);
+            if (!resp.IsSuccessStatusCode)
+            {
+                if ((int)resp.StatusCode != 404)
+                {
+                    log?.Report($"{context} endpoint returned {(int)resp.StatusCode} ({resp.ReasonPhrase}).");
+                }
+                return false;
+            }
+
+            Directory.CreateDirectory(Path.GetDirectoryName(destinationPath)!);
+            await using var source = await resp.Content.ReadAsStreamAsync();
+            await using var target = new FileStream(destinationPath, FileMode.Create, FileAccess.Write, FileShare.None);
+            await source.CopyToAsync(target);
+            log?.Report($"{context} downloaded to {destinationPath}.");
+            return true;
+        }
+        catch (TaskCanceledException ex)
+        {
+            log?.Report($"{context} download timed out: {ex.Message}");
+        }
+        catch (AuthenticationException ex)
+        {
+            log?.Report($"{context} download TLS handshake failed: {ex.Message}");
+        }
+        catch (IOException ex)
+        {
+            log?.Report($"{context} download I/O failure: {ex.Message}");
+        }
+        catch (HttpRequestException ex)
+        {
+            log?.Report($"{context} download failed: {ex.Message}");
+        }
+
+        return false;
+    }
+
+    private static void MergeKeyedValues(JsonElement element, Dictionary<string, JsonElement> destination)
+    {
+        if (element.ValueKind != JsonValueKind.Object)
+        {
+            return;
+        }
+
+        foreach (var property in element.EnumerateObject())
+        {
+            destination[property.Name] = property.Value.Clone();
+        }
+    }
+
+    private static IEnumerable<string> EnumeratePluginIdentifiers(InstalledPlugin plugin)
+    {
+        if (!string.IsNullOrWhiteSpace(plugin.Slug))
+        {
+            yield return plugin.Slug!;
+        }
+
+        if (!string.IsNullOrWhiteSpace(plugin.PluginFile))
+        {
+            var pluginFile = plugin.PluginFile!;
+            yield return pluginFile;
+
+            var slash = pluginFile.IndexOf('/');
+            if (slash > 0)
+            {
+                yield return pluginFile[..slash];
+            }
+
+            var segments = pluginFile.Split('/', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            var last = segments.LastOrDefault();
+            if (!string.IsNullOrWhiteSpace(last))
+            {
+                if (last.EndsWith(".php", StringComparison.OrdinalIgnoreCase))
+                {
+                    yield return last[..^4];
+                }
+                else
+                {
+                    yield return last;
+                }
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(plugin.Name))
+        {
+            yield return plugin.Name!;
+        }
+    }
+
+    private static IEnumerable<string> EnumerateThemeIdentifiers(InstalledTheme theme)
+    {
+        if (!string.IsNullOrWhiteSpace(theme.Slug))
+        {
+            yield return theme.Slug!;
+        }
+        if (!string.IsNullOrWhiteSpace(theme.Stylesheet))
+        {
+            yield return theme.Stylesheet!;
+        }
+        if (!string.IsNullOrWhiteSpace(theme.Template))
+        {
+            yield return theme.Template!;
+        }
+        if (!string.IsNullOrWhiteSpace(theme.Name))
+        {
+            yield return theme.Name!;
+        }
+    }
+
+    private static bool MatchesIdentifier(string key, IEnumerable<string> identifiers)
+    {
+        foreach (var identifier in identifiers)
+        {
+            if (string.IsNullOrWhiteSpace(identifier))
+            {
+                continue;
+            }
+
+            if (key.Contains(identifier, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static IEnumerable<string> BuildPluginOptionEndpoints(InstalledPlugin plugin)
+    {
+        var slug = DeterminePluginSlug(plugin);
+        if (!string.IsNullOrWhiteSpace(slug))
+        {
+            var esc = Uri.EscapeDataString(slug);
+            yield return $"/wp-json/wc-scraper/v1/plugins/{esc}/options";
+            yield return $"/wp-json/wc-scraper/v1/plugin-options?slug={esc}";
+            yield return $"/?rest_route=/wc-scraper/v1/plugin-options&slug={esc}";
+            yield return $"/wp-json/{slug}/v1/options";
+            yield return $"/wp-json/{slug}/v1/settings";
+        }
+
+        if (!string.IsNullOrWhiteSpace(plugin.PluginFile))
+        {
+            var segments = plugin.PluginFile.Split('/', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            if (segments.Length > 0)
+            {
+                var fileStem = segments.Last();
+                if (fileStem.EndsWith(".php", StringComparison.OrdinalIgnoreCase))
+                {
+                    fileStem = fileStem[..^4];
+                }
+
+                if (!string.IsNullOrWhiteSpace(fileStem))
+                {
+                    yield return $"/wp-json/{fileStem}/v1/options";
+                    yield return $"/wp-json/{fileStem}/v1/settings";
+                }
+            }
+        }
+    }
+
+    private static IEnumerable<string> BuildPluginManifestEndpoints(InstalledPlugin plugin)
+    {
+        var slug = DeterminePluginSlug(plugin);
+        if (!string.IsNullOrWhiteSpace(slug))
+        {
+            var esc = Uri.EscapeDataString(slug);
+            yield return $"/wp-json/wc-scraper/v1/plugins/{esc}/manifest";
+            yield return $"/wp-json/wc-scraper/v1/plugin-manifest?slug={esc}";
+            yield return $"/?rest_route=/wc-scraper/v1/plugin-manifest&slug={esc}";
+        }
+    }
+
+    private static IEnumerable<string> BuildPluginArchiveEndpoints(InstalledPlugin plugin)
+    {
+        var slug = DeterminePluginSlug(plugin);
+        if (!string.IsNullOrWhiteSpace(slug))
+        {
+            var esc = Uri.EscapeDataString(slug);
+            yield return $"/wp-json/wc-scraper/v1/plugins/{esc}/archive";
+            yield return $"/wp-json/wc-scraper/v1/plugin-archive?slug={esc}";
+            yield return $"/?rest_route=/wc-scraper/v1/plugin-archive&slug={esc}";
+        }
+
+        if (!string.IsNullOrWhiteSpace(plugin.Update?.Package))
+        {
+            yield return plugin.Update.Package!;
+        }
+    }
+
+    private static IEnumerable<string> BuildThemeOptionEndpoints(InstalledTheme theme)
+    {
+        var slug = DetermineThemeSlug(theme);
+        if (!string.IsNullOrWhiteSpace(slug))
+        {
+            var esc = Uri.EscapeDataString(slug);
+            yield return $"/wp-json/wc-scraper/v1/themes/{esc}/options";
+            yield return $"/wp-json/wc-scraper/v1/theme-options?slug={esc}";
+            yield return $"/?rest_route=/wc-scraper/v1/theme-options&slug={esc}";
+            yield return $"/wp-json/{slug}/v1/options";
+            yield return $"/wp-json/{slug}/v1/settings";
+        }
+
+        if (!string.IsNullOrWhiteSpace(theme.Stylesheet))
+        {
+            yield return $"/wp-json/{theme.Stylesheet}/v1/options";
+            yield return $"/wp-json/{theme.Stylesheet}/v1/settings";
+        }
+    }
+
+    private static IEnumerable<string> BuildThemeManifestEndpoints(InstalledTheme theme)
+    {
+        var slug = DetermineThemeSlug(theme);
+        if (!string.IsNullOrWhiteSpace(slug))
+        {
+            var esc = Uri.EscapeDataString(slug);
+            yield return $"/wp-json/wc-scraper/v1/themes/{esc}/manifest";
+            yield return $"/wp-json/wc-scraper/v1/theme-manifest?slug={esc}";
+            yield return $"/?rest_route=/wc-scraper/v1/theme-manifest&slug={esc}";
+        }
+    }
+
+    private static IEnumerable<string> BuildThemeArchiveEndpoints(InstalledTheme theme)
+    {
+        var slug = DetermineThemeSlug(theme);
+        if (!string.IsNullOrWhiteSpace(slug))
+        {
+            var esc = Uri.EscapeDataString(slug);
+            yield return $"/wp-json/wc-scraper/v1/themes/{esc}/archive";
+            yield return $"/wp-json/wc-scraper/v1/theme-archive?slug={esc}";
+            yield return $"/?rest_route=/wc-scraper/v1/theme-archive&slug={esc}";
+        }
+    }
+
+    private static string? DeterminePluginSlug(InstalledPlugin plugin)
+    {
+        if (!string.IsNullOrWhiteSpace(plugin.Slug))
+        {
+            return plugin.Slug;
+        }
+
+        if (!string.IsNullOrWhiteSpace(plugin.PluginFile))
+        {
+            var pluginFile = plugin.PluginFile;
+            var slash = pluginFile.IndexOf('/');
+            if (slash > 0)
+            {
+                return pluginFile[..slash];
+            }
+
+            if (pluginFile.EndsWith(".php", StringComparison.OrdinalIgnoreCase))
+            {
+                return pluginFile[..^4];
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(plugin.Name))
+        {
+            return plugin.Name;
+        }
+
+        return null;
+    }
+
+    private static string? DetermineThemeSlug(InstalledTheme theme)
+    {
+        if (!string.IsNullOrWhiteSpace(theme.Slug))
+        {
+            return theme.Slug;
+        }
+
+        if (!string.IsNullOrWhiteSpace(theme.Stylesheet))
+        {
+            return theme.Stylesheet;
+        }
+
+        if (!string.IsNullOrWhiteSpace(theme.Template))
+        {
+            return theme.Template;
+        }
+
+        if (!string.IsNullOrWhiteSpace(theme.Name))
+        {
+            return theme.Name;
+        }
+
+        return null;
+    }
+
+    private static string CombineUrl(string baseUrl, string pathOrUrl)
+    {
+        if (string.IsNullOrWhiteSpace(pathOrUrl))
+        {
+            return baseUrl;
+        }
+
+        if (Uri.TryCreate(pathOrUrl, UriKind.Absolute, out var absolute))
+        {
+            return absolute.ToString();
+        }
+
+        if (pathOrUrl.StartsWith('?'))
+        {
+            return baseUrl + pathOrUrl;
+        }
+
+        return baseUrl.TrimEnd('/') + "/" + pathOrUrl.TrimStart('/');
+    }
+
+    private static List<string> ExtractStringList(JsonElement element)
+    {
+        var items = new List<string>();
+
+        void AddIfValid(JsonElement candidate)
+        {
+            if (candidate.ValueKind == JsonValueKind.String)
+            {
+                var value = candidate.GetString();
+                if (!string.IsNullOrWhiteSpace(value))
+                {
+                    items.Add(value);
+                }
+            }
+        }
+
+        if (element.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in element.EnumerateArray())
+            {
+                AddIfValid(item);
+            }
+        }
+        else if (element.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var propertyName in new[] { "files", "paths", "items" })
+            {
+                if (element.TryGetProperty(propertyName, out var property) && property.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var item in property.EnumerateArray())
+                    {
+                        AddIfValid(item);
+                    }
+                }
+            }
+        }
+
+        return items
+            .Where(s => !string.IsNullOrWhiteSpace(s))
+            .Select(s => s.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
     }
 
     private async Task<List<InstalledPlugin>> FetchPluginsViaAdminAsync(

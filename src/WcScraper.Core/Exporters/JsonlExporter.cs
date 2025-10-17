@@ -30,7 +30,9 @@ public static class JsonlExporter
                 ["update_channel"] = p.UpdateChannel,
                 ["auto_update"] = p.AutoUpdate,
                 ["update_available_version"] = p.Update?.NewVersion,
-                ["update_package"] = p.Update?.Package
+                ["update_package"] = p.Update?.Package,
+                ["option_keys"] = p.OptionKeys,
+                ["asset_paths"] = p.AssetPaths
             });
 
         Write(path, rows);
@@ -50,7 +52,9 @@ public static class JsonlExporter
                 ["update_channel"] = t.UpdateChannel,
                 ["auto_update"] = t.AutoUpdate,
                 ["update_available_version"] = t.Update?.NewVersion,
-                ["update_package"] = t.Update?.Package
+                ["update_package"] = t.Update?.Package,
+                ["option_keys"] = t.OptionKeys,
+                ["asset_paths"] = t.AssetPaths
             });
 
         Write(path, rows);

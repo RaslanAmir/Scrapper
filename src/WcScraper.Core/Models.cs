@@ -110,6 +110,8 @@ public sealed class InstalledPlugin
     [JsonPropertyName("autoupdate")] public bool? AutoUpdate { get; set; }
     [JsonPropertyName("update_channel")] public string? UpdateChannel { get; set; }
     [JsonPropertyName("update")] public PluginUpdateInfo? Update { get; set; }
+    [JsonPropertyName("option_keys")] public List<string> OptionKeys { get; set; } = new();
+    [JsonPropertyName("asset_paths")] public List<string> AssetPaths { get; set; } = new();
 
     public void Normalize()
     {
@@ -129,6 +131,20 @@ public sealed class InstalledPlugin
         if (!string.IsNullOrWhiteSpace(Status))
         {
             Status = Status?.Trim();
+        }
+
+        if (string.IsNullOrWhiteSpace(Slug) && !string.IsNullOrWhiteSpace(PluginFile))
+        {
+            var normalized = PluginFile;
+            var slash = normalized.IndexOf('/');
+            if (slash > 0)
+            {
+                normalized = normalized[..slash];
+            }
+            if (!string.IsNullOrWhiteSpace(normalized))
+            {
+                Slug = normalized.Trim();
+            }
         }
     }
 }
@@ -151,6 +167,8 @@ public sealed class InstalledTheme
     [JsonPropertyName("autoupdate")] public bool? AutoUpdate { get; set; }
     [JsonPropertyName("update_channel")] public string? UpdateChannel { get; set; }
     [JsonPropertyName("update")] public ThemeUpdateInfo? Update { get; set; }
+    [JsonPropertyName("option_keys")] public List<string> OptionKeys { get; set; } = new();
+    [JsonPropertyName("asset_paths")] public List<string> AssetPaths { get; set; } = new();
 
     public void Normalize()
     {
@@ -170,6 +188,11 @@ public sealed class InstalledTheme
         if (!string.IsNullOrWhiteSpace(Status))
         {
             Status = Status?.Trim();
+        }
+
+        if (string.IsNullOrWhiteSpace(Slug) && !string.IsNullOrWhiteSpace(Stylesheet))
+        {
+            Slug = Stylesheet?.Trim();
         }
     }
 }
