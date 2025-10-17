@@ -84,7 +84,8 @@ columns for each variant row.
 
 The WooCommerce importer export now emits a parent row that preserves the product's original type (`simple`, `variable`, etc.)
 plus additional rows for every captured variation. Parents retain catalog taxonomy, descriptions, and SEO metadata while
-variations surface granular inventory and attribute data alongside local image paths.
+variations surface granular inventory and attribute data alongside local image paths. When WooCommerce omits media or taxonomy
+details on the variation payloads the exporter borrows the information from the parent row so the CSV stays importer-ready.
 
 ```
 ID, Type, ParentId, SKU, Name, Published, Is featured?, Visibility in catalog, Short description,
@@ -92,8 +93,9 @@ Description, SEO Title, SEO Description, SEO Keywords, Tax status, Regular price
 Price, Currency, In stock?, Stock status, Categories, Tags, Images, Image File Paths, Attributes, Position
 ```
 
-Variation rows set `Type` to `variation`, populate `ParentId`, and flatten attribute pairs (e.g. `Color: Blue | Size: Large`)
-so the WooCommerce CSV importer can rebuild configurable products with their pricing and stock intact.
+Variation rows immediately follow their parent, set `Type` to `variation`, and populate `ParentId`, `SKU`, and all pricing
+columns. Attribute pairs (e.g. `Color: Blue | Size: Large`) are flattened into the `Attributes` column and local image paths
+are preserved so the WooCommerce CSV importer can rebuild configurable products with their pricing and stock intact.
 
 ## Running tests
 

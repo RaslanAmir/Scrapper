@@ -822,7 +822,11 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
             if (ExportWoo)
             {
-                var rows = Mappers.ToWooImporterCsv(prods, variations).ToList();
+                var parentIds = new HashSet<int>(prods.Select(p => p.Id));
+                var wooVariations = variations
+                    .Where(v => v is not null && (v.ParentId is null || parentIds.Contains(v.ParentId.Value)))
+                    .ToList();
+                var rows = Mappers.ToWooImporterCsv(prods, wooVariations).ToList();
                 var path = Path.Combine(storeOutputFolder, $"{storeId}_{timestamp}_woocommerce_products.csv");
                 CsvExporter.Write(path, rows);
                 Append($"Wrote {path}");

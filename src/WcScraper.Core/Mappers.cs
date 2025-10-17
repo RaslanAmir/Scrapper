@@ -122,90 +122,144 @@ public static class Mappers
         IEnumerable<StoreProduct> parents,
         IEnumerable<StoreProduct> variations)
     {
-        var parentList = parents.ToList();
-        var variationList = variations.ToList();
-        var variationLookup = variationList
-            .Where(v => v.ParentId is not null)
+        var parentList = parents?.Where(p => p is not null).Select(p => p!).ToList() ?? new List<StoreProduct>();
+        var variationList = variations?.Where(v => v is not null).Select(v => v!).ToList() ?? new List<StoreProduct>();
+
+        var parentLookup = parentList
+            .Where(p => p.Id > 0)
+            .ToDictionary(p => p.Id, p => p);
+
+        var groupedVariations = variationList
+            .Where(v => v.ParentId is int id && id > 0)
             .GroupBy(v => v.ParentId!.Value)
             .ToDictionary(g => g.Key, g => g.ToList());
-        var processedVariationIds = new HashSet<int>();
-        var parentIds = new HashSet<int>(parentList.Select(p => p.Id));
+
+        var remainingVariations = new List<StoreProduct>(variationList);
 
         foreach (var parent in parentList)
         {
-            yield return BuildWooRow(parent, parent.ParentId, parent.Type);
+            var hasChildren = groupedVariations.TryGetValue(parent.Id, out var children) && children.Count > 0;
+            var parentType = !string.IsNullOrWhiteSpace(parent.Type)
+                ? parent.Type
+                : hasChildren ? "variable" : "simple";
 
-            if (!variationLookup.TryGetValue(parent.Id, out var children))
+            yield return BuildWooRow(parent, parentType, parent.ParentId, null);
+
+            if (!hasChildren)
             {
                 continue;
             }
 
             foreach (var child in children)
             {
-                if (child.Id != 0)
-                {
-                    processedVariationIds.Add(child.Id);
-                }
-
-                yield return BuildWooRow(child, child.ParentId, child.Type ?? "variation");
+                remainingVariations.Remove(child);
+                var parentId = child.ParentId ?? parent.Id;
+                var variationType = string.IsNullOrWhiteSpace(child.Type) ? "variation" : child.Type!;
+                yield return BuildWooRow(child, variationType, parentId, parent);
             }
         }
 
-        foreach (var orphan in variationList)
+        foreach (var leftover in remainingVariations)
         {
-            if (orphan.Id != 0 && processedVariationIds.Contains(orphan.Id))
+            StoreProduct? fallbackParent = null;
+            if (leftover.ParentId is int parentId && parentLookup.TryGetValue(parentId, out var parent))
             {
-                continue;
+                fallbackParent = parent;
             }
 
-            if (orphan.ParentId is not null && parentIds.Contains(orphan.ParentId.Value))
-            {
-                continue;
-            }
+            var type = string.IsNullOrWhiteSpace(leftover.Type)
+                ? (leftover.ParentId is null ? "simple" : "variation")
+                : leftover.Type!;
 
-            yield return BuildWooRow(orphan, orphan.ParentId, orphan.Type ?? "variation");
+            yield return BuildWooRow(leftover, type, leftover.ParentId, fallbackParent);
         }
     }
 
-    private static Dictionary<string, object?> BuildWooRow(StoreProduct product, int? parentId, string? productType)
+    private static Dictionary<string, object?> BuildWooRow(
+        StoreProduct product,
+        string? productType,
+        int? parentId,
+        StoreProduct? fallback)
     {
-        var prices = product.Prices;
-        var regular = AsFloatPrice(prices?.RegularPrice, prices?.CurrencyMinorUnit);
-        var sale = AsFloatPrice(prices?.SalePrice, prices?.CurrencyMinorUnit);
-        var priceVal = prices?.Price ?? prices?.RegularPrice ?? prices?.SalePrice;
-        var price = AsFloatPrice(priceVal, prices?.CurrencyMinorUnit);
-        var type = string.IsNullOrWhiteSpace(productType) ? "simple" : productType;
-        var images = string.Join(", ", product.Images.Select(i => i.Src).Where(s => !string.IsNullOrWhiteSpace(s))!);
-        var categories = JoinCsv(product.Categories.Select(c => c.Name));
-        var tags = JoinCsv(product.Tags.Select(t => t.Name));
-        var attributes = BuildAttributesString(product.Attributes);
+        var priceInfo = product.Prices ?? fallback?.Prices;
+        var regularRaw = product.Prices?.RegularPrice ?? fallback?.Prices?.RegularPrice;
+        var saleRaw = product.Prices?.SalePrice ?? fallback?.Prices?.SalePrice;
+        var priceRaw = product.Prices?.Price
+            ?? product.Prices?.RegularPrice
+            ?? product.Prices?.SalePrice
+            ?? fallback?.Prices?.Price
+            ?? fallback?.Prices?.RegularPrice
+            ?? fallback?.Prices?.SalePrice;
+
+        var regular = AsFloatPrice(regularRaw, priceInfo?.CurrencyMinorUnit);
+        var sale = AsFloatPrice(saleRaw, priceInfo?.CurrencyMinorUnit);
+        var price = AsFloatPrice(priceRaw, priceInfo?.CurrencyMinorUnit);
+
+        var resolvedType = string.IsNullOrWhiteSpace(productType) ? "simple" : productType;
+
+        var categoriesSource = product.Categories.Count > 0
+            ? product.Categories
+            : fallback?.Categories ?? Enumerable.Empty<Category>();
+        var tagsSource = product.Tags.Count > 0
+            ? product.Tags
+            : fallback?.Tags ?? Enumerable.Empty<ProductTag>();
+        var imagesSource = product.Images.Count > 0
+            ? product.Images
+            : fallback?.Images ?? Enumerable.Empty<ProductImage>();
+        var attributesSource = product.Attributes.Count > 0
+            ? product.Attributes
+            : fallback?.Attributes ?? Enumerable.Empty<VariationAttribute>();
+
+        var categories = JoinCsv(categoriesSource.Select(c => c.Name));
+        var tags = JoinCsv(tagsSource.Select(t => t.Name));
+        var images = JoinCsv(imagesSource.Select(i => i.Src));
+        var attributes = BuildAttributesString(attributesSource);
+
+        var imageFilePaths = string.IsNullOrWhiteSpace(product.ImageFilePaths)
+            ? fallback?.ImageFilePaths ?? ""
+            : product.ImageFilePaths;
+
+        var shortDescription = FirstNonEmpty(
+            product.ShortDescription,
+            product.Summary,
+            fallback?.ShortDescription,
+            fallback?.Summary) ?? "";
+
+        var description = FirstNonEmpty(product.Description, fallback?.Description) ?? "";
+
+        var seoTitle = FirstNonEmpty(product.MetaTitle, fallback?.MetaTitle) ?? "";
+        var seoDescription = FirstNonEmpty(product.MetaDescription, fallback?.MetaDescription) ?? "";
+        var seoKeywords = FirstNonEmpty(product.MetaKeywords, fallback?.MetaKeywords) ?? "";
+
+        var stockStatus = FirstNonEmpty(product.StockStatus, fallback?.StockStatus) ?? "";
+        var inStock = (product.IsInStock ?? fallback?.IsInStock) == true ? "1" : "0";
 
         return new Dictionary<string, object?>
         {
             ["ID"] = "",
-            ["Type"] = type,
+            ["Type"] = resolvedType,
             ["ParentId"] = parentId,
-            ["SKU"] = product.Sku ?? "",
-            ["Name"] = product.Name ?? "",
+            ["SKU"] = string.IsNullOrWhiteSpace(product.Sku) ? fallback?.Sku ?? "" : product.Sku,
+            ["Name"] = FirstNonEmpty(product.Name, fallback?.Name) ?? "",
             ["Published"] = 1,
             ["Is featured?"] = 0,
             ["Visibility in catalog"] = "visible",
-            ["Short description"] = FirstNonEmpty(product.ShortDescription, product.Summary) ?? "",
-            ["Description"] = product.Description ?? "",
-            ["SEO Title"] = product.MetaTitle ?? "",
-            ["SEO Description"] = product.MetaDescription ?? "",
-            ["SEO Keywords"] = product.MetaKeywords ?? "",
+            ["Short description"] = shortDescription,
+            ["Description"] = description,
+            ["SEO Title"] = seoTitle,
+            ["SEO Description"] = seoDescription,
+            ["SEO Keywords"] = seoKeywords,
             ["Tax status"] = "taxable",
             ["Regular price"] = regular,
             ["Sale price"] = sale,
             ["Price"] = price,
-            ["Currency"] = prices?.CurrencyCode ?? "",
-            ["In stock?"] = product.IsInStock == true ? "1" : "0",
-            ["Stock status"] = product.StockStatus ?? "",
+            ["Currency"] = priceInfo?.CurrencyCode ?? "",
+            ["In stock?"] = inStock,
+            ["Stock status"] = stockStatus,
             ["Categories"] = categories,
             ["Tags"] = tags,
             ["Images"] = images,
-            ["Image File Paths"] = product.ImageFilePaths ?? "",
+            ["Image File Paths"] = imageFilePaths,
             ["Attributes"] = attributes,
             ["Position"] = 0
         };
