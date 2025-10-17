@@ -88,9 +88,56 @@ public class WooProvisioningServiceTests
         Assert.Contains(handler.Calls, call => call.Method == HttpMethod.Post && call.Path == "/wp-json/wc/v3/products");
     }
 
+    [Fact]
+    public async Task ProvisionAsync_CreatesCategoryHierarchyBeforeChildren()
+    {
+        var handler = new RecordingHandler();
+        using var httpClient = new HttpClient(handler);
+        var service = new WooProvisioningService(httpClient);
+        var settings = new WooProvisioningSettings("https://target.example", "ck", "cs");
+
+        var product = new StoreProduct
+        {
+            Id = 42,
+            Name = "Child Product",
+            Categories =
+            {
+                new Category { Id = 200, Name = "Child", Slug = "child", ParentId = 100 },
+                new Category { Id = 100, Name = "Parent", Slug = "parent" }
+            }
+        };
+
+        await service.ProvisionAsync(settings, new[] { product });
+
+        var categoryPosts = handler.Calls
+            .Where(call => call.Method == HttpMethod.Post && call.Path == "/wp-json/wc/v3/products/categories")
+            .ToList();
+
+        Assert.Equal(2, categoryPosts.Count);
+
+        using (var parentDoc = JsonDocument.Parse(categoryPosts[0].Content))
+        {
+            var root = parentDoc.RootElement;
+            Assert.Equal("parent", root.GetProperty("slug").GetString());
+            Assert.False(root.TryGetProperty("parent", out _));
+        }
+
+        using (var childDoc = JsonDocument.Parse(categoryPosts[1].Content))
+        {
+            var root = childDoc.RootElement;
+            Assert.Equal("child", root.GetProperty("slug").GetString());
+            var parentId = handler.GetCreatedCategoryId("parent");
+            Assert.NotNull(parentId);
+            Assert.Equal(parentId.Value, root.GetProperty("parent").GetInt32());
+        }
+    }
+
     private sealed class RecordingHandler : HttpMessageHandler
     {
         public List<(HttpMethod Method, string Path, string Query, string? Content)> Calls { get; } = new();
+
+        private readonly Dictionary<string, int> _createdCategoryIds = new(StringComparer.OrdinalIgnoreCase);
+        private int _nextCategoryId = 500;
 
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
@@ -105,6 +152,11 @@ public class WooProvisioningServiceTests
             }
 
             if (request.Method == HttpMethod.Get && path == "/wp-json/wc/v3/products" && query.Contains("slug=parent-product", StringComparison.Ordinal))
+            {
+                return Task.FromResult(JsonResponse("[]"));
+            }
+
+            if (request.Method == HttpMethod.Get && path == "/wp-json/wc/v3/products" && query.Contains("slug=child-product", StringComparison.Ordinal))
             {
                 return Task.FromResult(JsonResponse("[]"));
             }
@@ -129,6 +181,30 @@ public class WooProvisioningServiceTests
                 return Task.FromResult(JsonResponse("{\"id\":100,\"name\":\"Blue\",\"slug\":\"blue\"}"));
             }
 
+            if (request.Method == HttpMethod.Get && path == "/wp-json/wc/v3/products/categories")
+            {
+                return Task.FromResult(JsonResponse("[]"));
+            }
+
+            if (request.Method == HttpMethod.Post && path == "/wp-json/wc/v3/products/categories")
+            {
+                if (string.IsNullOrWhiteSpace(content))
+                {
+                    throw new InvalidOperationException("Category payload was empty.");
+                }
+
+                using var doc = JsonDocument.Parse(content);
+                var slug = doc.RootElement.GetProperty("slug").GetString();
+                if (string.IsNullOrWhiteSpace(slug))
+                {
+                    throw new InvalidOperationException("Category slug missing in payload.");
+                }
+
+                var id = ++_nextCategoryId;
+                _createdCategoryIds[slug!] = id;
+                return Task.FromResult(JsonResponse($"{{\"id\":{id},\"slug\":\"{slug}\",\"name\":\"{slug}\"}}"));
+            }
+
             if (request.Method == HttpMethod.Post && path == "/wp-json/wc/v3/products")
             {
                 return Task.FromResult(JsonResponse("{\"id\":200,\"sku\":\"PARENT-SKU\",\"slug\":\"parent-product\"}"));
@@ -145,6 +221,11 @@ public class WooProvisioningServiceTests
             }
 
             throw new InvalidOperationException($"Unexpected request: {request.Method} {request.RequestUri}");
+        }
+
+        public int? GetCreatedCategoryId(string slug)
+        {
+            return _createdCategoryIds.TryGetValue(slug, out var id) ? id : null;
         }
 
         private static HttpResponseMessage JsonResponse(string json)

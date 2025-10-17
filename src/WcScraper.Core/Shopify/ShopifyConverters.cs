@@ -90,7 +90,8 @@ public static class ShopifyConverters
                 Name = collection.Title,
                 Slug = string.IsNullOrWhiteSpace(collection.Handle)
                     ? $"collection-{index++}"
-                    : collection.Handle
+                    : collection.Handle,
+                ParentId = null
             };
         }
     }
@@ -153,7 +154,8 @@ public static class ShopifyConverters
             {
                 Id = Math.Abs(product.ProductType.GetHashCode()),
                 Name = product.ProductType,
-                Slug = fallbackSlug
+                Slug = fallbackSlug,
+                ParentId = null
             });
         }
 

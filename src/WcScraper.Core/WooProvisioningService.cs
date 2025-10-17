@@ -193,7 +193,12 @@ public sealed class WooProvisioningService : IDisposable
         if (productList.Count > 0)
         {
             progress?.Report($"Preparing taxonomies for {productList.Count} products…");
-            var categorySeeds = CollectTaxonomySeeds(productList.SelectMany(p => p.Categories ?? Enumerable.Empty<Category>()), c => c.Name, c => c.Slug);
+            var categorySeeds = CollectTaxonomySeeds(
+                productList.SelectMany(p => p.Categories ?? Enumerable.Empty<Category>()),
+                c => c.Name,
+                c => c.Slug,
+                c => c.Id,
+                c => c.ParentId);
             var tagSeeds = CollectTaxonomySeeds(productList.SelectMany(p => p.Tags ?? Enumerable.Empty<ProductTag>()), t => t.Name, t => t.Slug);
             var attributeSeeds = CollectAttributeSeeds(productList.Concat(variationList));
 
@@ -3078,10 +3083,22 @@ public sealed class WooProvisioningService : IDisposable
         CancellationToken cancellationToken)
     {
         var result = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-        foreach (var seed in seeds)
+        var orderedSeeds = resource.Equals("categories", StringComparison.OrdinalIgnoreCase)
+            ? OrderTaxonomySeedsByHierarchy(seeds)
+            : seeds;
+
+        foreach (var seed in orderedSeeds)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var id = await EnsureTaxonomyAsync(baseUrl, settings, resource, seed, progress, cancellationToken);
+            int? parentId = null;
+            if (!string.IsNullOrWhiteSpace(seed.ParentKey)
+                && resource.Equals("categories", StringComparison.OrdinalIgnoreCase)
+                && result.TryGetValue(seed.ParentKey, out var mappedParent))
+            {
+                parentId = mappedParent;
+            }
+
+            var id = await EnsureTaxonomyAsync(baseUrl, settings, resource, seed, parentId, progress, cancellationToken);
             result[seed.Key] = id;
         }
 
@@ -3093,6 +3110,7 @@ public sealed class WooProvisioningService : IDisposable
         WooProvisioningSettings settings,
         string resource,
         TaxonomySeed seed,
+        int? parentId,
         IProgress<string>? progress,
         CancellationToken cancellationToken)
     {
@@ -3108,6 +3126,11 @@ public sealed class WooProvisioningService : IDisposable
             ["name"] = seed.Name,
             ["slug"] = seed.Slug
         };
+
+        if (parentId is > 0)
+        {
+            payload["parent"] = parentId.Value;
+        }
 
         try
         {
@@ -3565,9 +3588,16 @@ public sealed class WooProvisioningService : IDisposable
         return seeds;
     }
 
-    private static List<TaxonomySeed> CollectTaxonomySeeds<T>(IEnumerable<T> items, Func<T, string?> getName, Func<T, string?> getSlug)
+    private static List<TaxonomySeed> CollectTaxonomySeeds<T>(
+        IEnumerable<T> items,
+        Func<T, string?> getName,
+        Func<T, string?> getSlug,
+        Func<T, int?>? getId = null,
+        Func<T, int?>? getParentId = null)
     {
         var result = new Dictionary<string, TaxonomySeed>(StringComparer.OrdinalIgnoreCase);
+        var idLookup = new Dictionary<int, string>();
+        var pendingParents = new Dictionary<string, int>();
         foreach (var item in items)
         {
             var name = getName(item);
@@ -3588,9 +3618,79 @@ public sealed class WooProvisioningService : IDisposable
                 seed = new TaxonomySeed(normalizedSlug, name ?? slug ?? normalizedSlug, normalizedSlug);
                 result[normalizedSlug] = seed;
             }
+
+            if (getId is not null)
+            {
+                var id = getId(item);
+                if (id is > 0)
+                {
+                    idLookup[id.Value] = seed.Key;
+                }
+            }
+
+            if (getParentId is not null)
+            {
+                var parentId = getParentId(item);
+                if (parentId is > 0 && !pendingParents.ContainsKey(seed.Key))
+                {
+                    pendingParents[seed.Key] = parentId.Value;
+                }
+            }
+        }
+
+        foreach (var kvp in pendingParents)
+        {
+            if (idLookup.TryGetValue(kvp.Value, out var parentKey) && result.TryGetValue(kvp.Key, out var seed))
+            {
+                seed.ParentKey = parentKey;
+            }
         }
 
         return result.Values.ToList();
+    }
+
+    private static List<TaxonomySeed> OrderTaxonomySeedsByHierarchy(List<TaxonomySeed> seeds)
+    {
+        if (seeds.Count <= 1)
+        {
+            return seeds;
+        }
+
+        var byKey = seeds.ToDictionary(s => s.Key, s => s, StringComparer.OrdinalIgnoreCase);
+        var depthCache = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+
+        int ComputeDepth(TaxonomySeed seed, HashSet<string> path)
+        {
+            if (depthCache.TryGetValue(seed.Key, out var cached))
+            {
+                return cached;
+            }
+
+            if (string.IsNullOrWhiteSpace(seed.ParentKey) || !byKey.TryGetValue(seed.ParentKey, out var parent))
+            {
+                depthCache[seed.Key] = 0;
+                return 0;
+            }
+
+            if (!path.Add(seed.Key))
+            {
+                depthCache[seed.Key] = 0;
+                return 0;
+            }
+
+            var depth = 1 + ComputeDepth(parent, path);
+            path.Remove(seed.Key);
+            depthCache[seed.Key] = depth;
+            return depth;
+        }
+
+        int GetDepth(TaxonomySeed seed)
+            => ComputeDepth(seed, new HashSet<string>(StringComparer.OrdinalIgnoreCase));
+
+        return seeds
+            .OrderBy(GetDepth)
+            .ThenBy(seed => seed.Key, StringComparer.OrdinalIgnoreCase)
+            .ToList();
     }
 
     private static string? NormalizeAttributeKey(VariationAttribute attribute)
@@ -3696,7 +3796,20 @@ public sealed class WooProvisioningService : IDisposable
         public HttpStatusCode StatusCode { get; }
     }
 
-    private sealed record TaxonomySeed(string Key, string Name, string Slug);
+    private sealed class TaxonomySeed
+    {
+        public TaxonomySeed(string key, string name, string slug)
+        {
+            Key = key;
+            Name = name;
+            Slug = slug;
+        }
+
+        public string Key { get; }
+        public string Name { get; }
+        public string Slug { get; }
+        public string? ParentKey { get; set; }
+    }
 
     private sealed class AttributeSeed
     {
