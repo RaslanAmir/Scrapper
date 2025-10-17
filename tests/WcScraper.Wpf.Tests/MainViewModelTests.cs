@@ -403,7 +403,7 @@ public class MainViewModelTests
             "slug": "sample",
             "permalink": "https://example.com/store/product/sample",
             "sku": "SKU-1",
-            "type": "simple",
+            "type": "variable",
             "meta_title": "Sample Title",
             "meta_description": "Sample Description",
             "meta_keywords": "sample,keywords",
@@ -416,7 +416,7 @@ public class MainViewModelTests
             "stock_status": "instock",
             "average_rating": 4.5,
             "review_count": 3,
-            "has_options": false,
+            "has_options": true,
             "categories": [
               { "id": 1, "name": "Cat", "slug": "cat" }
             ],
@@ -426,6 +426,32 @@ public class MainViewModelTests
             "images": [
               { "id": 10, "src": "https://example.com/assets/sample-one.png", "alt": "Front" },
               { "id": 11, "src": "https://example.com/assets/sample-two.jpg?size=large", "alt": "Back" }
+            ]
+          }
+        ]
+        """;
+
+        const string variationResponse = """
+        [
+          {
+            "id": 201,
+            "name": "Sample - Blue",
+            "slug": "sample-blue",
+            "sku": "SKU-1-BLU",
+            "type": "variation",
+            "parent": 101,
+            "prices": {
+              "currency_code": "USD",
+              "price": "21.99",
+              "regular_price": "21.99"
+            },
+            "is_in_stock": true,
+            "stock_status": "instock",
+            "attributes": [
+              { "name": "Color", "taxonomy": "pa_color", "option": "Blue" }
+            ],
+            "images": [
+              { "id": 12, "src": "https://example.com/assets/sample-blue.png", "alt": "Blue" }
             ]
           }
         ]
@@ -451,6 +477,15 @@ public class MainViewModelTests
                 };
             }
 
+            if (path.EndsWith("/wp-json/wc/store/v1/products", StringComparison.Ordinal) &&
+                request.RequestUri!.Query.Contains("type=variation", StringComparison.Ordinal))
+            {
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(variationResponse, Encoding.UTF8, "application/json")
+                };
+            }
+
             if (path.EndsWith("/wp-json/wc/store/v1/products", StringComparison.Ordinal))
             {
                 return new HttpResponseMessage(HttpStatusCode.OK)
@@ -459,7 +494,9 @@ public class MainViewModelTests
                 };
             }
 
-            if (path.EndsWith("sample-one.png", StringComparison.Ordinal) || path.EndsWith("sample-two.jpg", StringComparison.Ordinal))
+            if (path.EndsWith("sample-one.png", StringComparison.Ordinal) ||
+                path.EndsWith("sample-two.jpg", StringComparison.Ordinal) ||
+                path.EndsWith("sample-blue.png", StringComparison.Ordinal))
             {
                 return new HttpResponseMessage(HttpStatusCode.OK)
                 {
@@ -583,6 +620,24 @@ public class MainViewModelTests
             CaptureTimestamp(wooCsv[0], "_woocommerce_products");
 
             Assert.Single(timestamps);
+
+            var contextField = typeof(MainViewModel)
+                .GetField("_lastProvisioningContext", BindingFlags.NonPublic | BindingFlags.Instance);
+            Assert.NotNull(contextField);
+            var context = contextField!.GetValue(viewModel);
+            Assert.NotNull(context);
+            var variationsProperty = context!.GetType().GetProperty("Variations", BindingFlags.Public | BindingFlags.Instance);
+            Assert.NotNull(variationsProperty);
+            var storedVariations = (IEnumerable<StoreProduct>)variationsProperty!.GetValue(context)!;
+            var storedVariation = Assert.Single(storedVariations);
+            Assert.Equal("SKU-1-BLU", storedVariation.Sku);
+            Assert.False(string.IsNullOrWhiteSpace(storedVariation.ImageFilePaths));
+            Assert.StartsWith("images/", storedVariation.ImageFilePaths, StringComparison.Ordinal);
+            Assert.Single(storedVariation.LocalImageFilePaths);
+            var variationImageFull = Path.Combine(storeFolder, storedVariation.ImageFilePaths!.Replace('/', Path.DirectorySeparatorChar));
+            Assert.True(File.Exists(variationImageFull));
+            Assert.Equal(Path.GetFullPath(variationImageFull), Path.GetFullPath(storedVariation.LocalImageFilePaths[0]));
+            Assert.Contains(viewModel.Logs, message => message.Contains("Found 1 variations", StringComparison.Ordinal));
         }
         finally
         {
