@@ -97,6 +97,7 @@ public sealed class WooProvisioningService : IDisposable
     public async Task ProvisionAsync(
         WooProvisioningSettings settings,
         IEnumerable<StoreProduct> products,
+        IEnumerable<ProvisioningVariableProduct>? variableProducts = null,
         IEnumerable<StoreProduct>? variations = null,
         StoreConfiguration? configuration = null,
         IEnumerable<WooCustomer>? customers = null,
@@ -111,7 +112,42 @@ public sealed class WooProvisioningService : IDisposable
         if (products is null) throw new ArgumentNullException(nameof(products));
 
         var productList = products.Where(p => p is not null).ToList();
-        var variationList = variations?.Where(v => v is not null).ToList() ?? new List<StoreProduct>();
+        var variableProductList = SanitizeVariableProducts(variableProducts);
+        var variationList = new List<StoreProduct>();
+        var seenVariations = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        void AddVariation(StoreProduct? candidate)
+        {
+            if (candidate is null)
+            {
+                return;
+            }
+
+            var identity = BuildVariationIdentity(candidate);
+            if (identity is not null && !seenVariations.Add(identity))
+            {
+                return;
+            }
+
+            variationList.Add(candidate);
+        }
+
+        foreach (var group in variableProductList)
+        {
+            foreach (var variation in group.Variations)
+            {
+                AddVariation(variation);
+            }
+        }
+
+        if (variations is not null)
+        {
+            foreach (var variation in variations)
+            {
+                AddVariation(variation);
+            }
+        }
+
         var customerList = customers?.Where(c => c is not null).ToList() ?? new List<WooCustomer>();
         var couponList = coupons?.Where(c => c is not null).ToList() ?? new List<WooCoupon>();
         var orderList = orders?.Where(o => o is not null).ToList() ?? new List<WooOrder>();
@@ -182,6 +218,14 @@ public sealed class WooProvisioningService : IDisposable
                 .Select(v => v.ParentId)
                 .Where(id => id.HasValue && id.Value > 0)
                 .Select(id => id!.Value));
+            foreach (var group in variableProductList)
+            {
+                if (group.Parent.Id > 0)
+                {
+                    variableParentIds.Add(group.Parent.Id);
+                }
+            }
+
             var productLookup = productList
                 .Where(p => p.Id > 0)
                 .ToDictionary(p => p.Id, p => p);
@@ -213,6 +257,7 @@ public sealed class WooProvisioningService : IDisposable
                     settings,
                     productLookup,
                     variationList,
+                    variableProductList,
                     attributeMap,
                     mediaCache,
                     productIdMap,
@@ -1466,28 +1511,27 @@ public sealed class WooProvisioningService : IDisposable
         WooProvisioningSettings settings,
         IReadOnlyDictionary<int, StoreProduct> productLookup,
         List<StoreProduct> variations,
+        List<ProvisioningVariableProduct> variableProducts,
         IReadOnlyDictionary<string, int> attributeMap,
         Dictionary<string, int> mediaCache,
         Dictionary<int, int> productIdMap,
         IProgress<string>? progress,
         CancellationToken cancellationToken)
     {
-        var grouped = variations
-            .Where(v => v?.ParentId is int id && id > 0)
-            .GroupBy(v => v.ParentId!.Value, v => v);
+        var grouped = BuildVariationGroups(productLookup, variableProducts, variations);
 
         foreach (var group in grouped)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (!productIdMap.TryGetValue(group.Key, out var mappedParentId))
+            if (!productIdMap.TryGetValue(group.ParentId, out var mappedParentId))
             {
-                progress?.Report($"Skipping {group.Count()} variations for parent {group.Key}: parent was not provisioned.");
+                progress?.Report($"Skipping {group.Variations.Count} variations for parent {group.ParentId}: parent was not provisioned.");
                 continue;
             }
 
-            productLookup.TryGetValue(group.Key, out var parentProduct);
-            var parentLabel = BuildParentLabel(parentProduct, group.Key);
-            progress?.Report($"Provisioning {group.Count()} variations for '{parentLabel}' (ID {mappedParentId}).");
+            var parentProduct = group.Parent ?? (productLookup.TryGetValue(group.ParentId, out var existing) ? existing : null);
+            var parentLabel = BuildParentLabel(parentProduct, group.ParentId);
+            progress?.Report($"Provisioning {group.Variations.Count} variations for '{parentLabel}' (ID {mappedParentId}).");
 
             var existing = await FetchExistingVariationsAsync(baseUrl, settings, mappedParentId, cancellationToken);
             var existingBySku = new Dictionary<string, WooVariationResponse>(StringComparer.OrdinalIgnoreCase);
@@ -1506,7 +1550,7 @@ public sealed class WooProvisioningService : IDisposable
                 }
             }
 
-            foreach (var variation in group)
+            foreach (var variation in group.Variations)
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 var attributePayload = BuildVariationAttributePayload(variation, attributeMap);
@@ -1610,6 +1654,130 @@ public sealed class WooProvisioningService : IDisposable
         return result;
     }
 
+    private static List<ProvisioningVariableProduct> SanitizeVariableProducts(IEnumerable<ProvisioningVariableProduct>? variableProducts)
+    {
+        var result = new List<ProvisioningVariableProduct>();
+        if (variableProducts is null)
+        {
+            return result;
+        }
+
+        foreach (var group in variableProducts)
+        {
+            if (group is null || group.Parent is null)
+            {
+                continue;
+            }
+
+            var sanitized = group.Variations?
+                .Where(v => v is not null)
+                .Select(v => v!)
+                .ToList() ?? new List<StoreProduct>();
+
+            result.Add(new ProvisioningVariableProduct(group.Parent, sanitized));
+        }
+
+        return result;
+    }
+
+    private static List<VariationProvisionGroup> BuildVariationGroups(
+        IReadOnlyDictionary<int, StoreProduct> productLookup,
+        List<ProvisioningVariableProduct> variableProducts,
+        List<StoreProduct> variations)
+    {
+        var result = new List<VariationProvisionGroup>();
+        if (variableProducts.Count > 0)
+        {
+            foreach (var group in variableProducts)
+            {
+                var sanitized = group.Variations
+                    .Where(v => v is not null && v.ParentId is int id && id > 0)
+                    .Select(v => v!)
+                    .ToList();
+
+                if (sanitized.Count == 0)
+                {
+                    continue;
+                }
+
+                var parentId = group.Parent.Id > 0
+                    ? group.Parent.Id
+                    : sanitized[0].ParentId!.Value;
+
+                result.Add(new VariationProvisionGroup(parentId, group.Parent, sanitized));
+            }
+
+            return result;
+        }
+
+        var grouped = variations
+            .Where(v => v?.ParentId is int id && id > 0)
+            .GroupBy(v => v.ParentId!.Value, v => v);
+
+        foreach (var group in grouped)
+        {
+            var list = group
+                .Where(v => v is not null)
+                .Select(v => v!)
+                .ToList();
+
+            if (list.Count == 0)
+            {
+                continue;
+            }
+
+            productLookup.TryGetValue(group.Key, out var parent);
+            result.Add(new VariationProvisionGroup(group.Key, parent, list));
+        }
+
+        return result;
+    }
+
+    private static string? BuildVariationIdentity(StoreProduct variation)
+    {
+        if (variation is null)
+        {
+            return null;
+        }
+
+        var parentId = variation.ParentId ?? 0;
+
+        if (variation.Id > 0)
+        {
+            return $"id:{parentId}:{variation.Id}";
+        }
+
+        if (!string.IsNullOrWhiteSpace(variation.Sku))
+        {
+            return $"sku:{parentId}:{variation.Sku!.Trim()}";
+        }
+
+        if (parentId <= 0)
+        {
+            return null;
+        }
+
+        if (variation.Attributes is null || variation.Attributes.Count == 0)
+        {
+            return null;
+        }
+
+        var parts = new List<string>();
+        foreach (var attribute in variation.Attributes)
+        {
+            var key = NormalizeAttributeKey(attribute);
+            var value = ResolveAttributeValue(attribute);
+            if (key is null || string.IsNullOrWhiteSpace(value))
+            {
+                continue;
+            }
+
+            parts.Add($"{key}:{value.Trim()}");
+        }
+
+        return parts.Count == 0 ? null : $"attr:{parentId}:{string.Join('|', parts)}";
+    }
+
     private async Task<Dictionary<string, object?>> BuildVariationPayloadAsync(
         string baseUrl,
         WooProvisioningSettings settings,
@@ -1640,6 +1808,22 @@ public sealed class WooProvisioningService : IDisposable
         }
 
         return payload;
+    }
+
+    private sealed class VariationProvisionGroup
+    {
+        public VariationProvisionGroup(int parentId, StoreProduct? parent, List<StoreProduct> variations)
+        {
+            ParentId = parentId;
+            Parent = parent;
+            Variations = variations;
+        }
+
+        public int ParentId { get; }
+
+        public StoreProduct? Parent { get; }
+
+        public List<StoreProduct> Variations { get; }
     }
 
     private static string? ResolveVariationPrice(StoreProduct variation, StoreProduct? parent)

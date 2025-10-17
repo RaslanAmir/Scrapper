@@ -58,11 +58,17 @@ public class WooProvisioningServiceTests
         await service.ProvisionAsync(
             settings,
             new[] { parent },
-            variations: new[] { variation },
+            variableProducts: new[] { new ProvisioningVariableProduct(parent, new[] { variation }) },
             progress: new Progress<string>(logs.Add));
 
         Assert.Contains(logs, message => message.Contains("Provisioning 1 variations", StringComparison.Ordinal));
         Assert.Contains(logs, message => message.Contains("Creating variation 'PARENT-SKU-BLU'", StringComparison.Ordinal));
+
+        var productCall = handler.Calls.Single(call => call.Method == HttpMethod.Post && call.Path == "/wp-json/wc/v3/products");
+        using (var doc = JsonDocument.Parse(productCall.Content))
+        {
+            Assert.Equal("variable", doc.RootElement.GetProperty("type").GetString());
+        }
 
         var variationCall = handler.Calls.Single(call => call.Method == HttpMethod.Post && call.Path == "/wp-json/wc/v3/products/200/variations");
         using (var doc = JsonDocument.Parse(variationCall.Content))
