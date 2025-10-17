@@ -86,6 +86,7 @@ public sealed class WooProvisioningService : IDisposable
     public async Task ProvisionAsync(
         WooProvisioningSettings settings,
         IEnumerable<StoreProduct> products,
+        StoreConfiguration? configuration = null,
         IProgress<string>? progress = null,
         CancellationToken cancellationToken = default)
     {
@@ -100,6 +101,11 @@ public sealed class WooProvisioningService : IDisposable
         }
 
         var baseUrl = settings.BaseUrl;
+
+        if (configuration is not null)
+        {
+            await ApplyStoreConfigurationAsync(baseUrl, settings, configuration, progress, cancellationToken);
+        }
 
         progress?.Report($"Preparing taxonomies for {productList.Count} products…");
         var categorySeeds = CollectTaxonomySeeds(productList.SelectMany(p => p.Categories ?? Enumerable.Empty<Category>()), c => c.Name, c => c.Slug);
@@ -318,6 +324,252 @@ public sealed class WooProvisioningService : IDisposable
         }
 
         return null;
+    }
+
+    private async Task ApplyStoreConfigurationAsync(
+        string baseUrl,
+        WooProvisioningSettings settings,
+        StoreConfiguration configuration,
+        IProgress<string>? progress,
+        CancellationToken cancellationToken)
+    {
+        if (configuration.StoreSettings is { Count: > 0 })
+        {
+            await ApplyStoreSettingsAsync(baseUrl, settings, configuration.StoreSettings, progress, cancellationToken);
+        }
+
+        if (configuration.ShippingZones is { Count: > 0 })
+        {
+            await ApplyShippingZonesAsync(baseUrl, settings, configuration.ShippingZones, progress, cancellationToken);
+        }
+
+        if (configuration.PaymentGateways is { Count: > 0 })
+        {
+            await ApplyPaymentGatewaysAsync(baseUrl, settings, configuration.PaymentGateways, progress, cancellationToken);
+        }
+    }
+
+    private async Task ApplyStoreSettingsAsync(
+        string baseUrl,
+        WooProvisioningSettings settings,
+        List<WooStoreSetting> storeSettings,
+        IProgress<string>? progress,
+        CancellationToken cancellationToken)
+    {
+        var grouped = storeSettings
+            .Where(s => !string.IsNullOrWhiteSpace(s.Id) && !string.IsNullOrWhiteSpace(s.GroupId))
+            .GroupBy(s => s.GroupId!, StringComparer.OrdinalIgnoreCase);
+
+        foreach (var group in grouped)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var payload = group
+                .Select(setting => new SettingUpdateRequest
+                {
+                    Id = setting.Id!,
+                    Value = setting.Value is JsonElement element ? ConvertSettingValue(element) : null
+                })
+                .Where(item => !string.IsNullOrWhiteSpace(item.Id))
+                .ToList();
+
+            if (payload.Count == 0)
+            {
+                continue;
+            }
+
+            var path = $"/wp-json/wc/v3/settings/{Uri.EscapeDataString(group.Key)}";
+            progress?.Report($"Applying settings group '{group.Key}' ({payload.Count} fields)…");
+            await PutAsync<List<WooStoreSetting>>(baseUrl, settings, path, payload, cancellationToken);
+        }
+    }
+
+    private async Task ApplyShippingZonesAsync(
+        string baseUrl,
+        WooProvisioningSettings settings,
+        List<ShippingZoneSetting> zones,
+        IProgress<string>? progress,
+        CancellationToken cancellationToken)
+    {
+        foreach (var zone in zones)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (zone.Id <= 0)
+            {
+                continue;
+            }
+
+            var zoneLabel = zone.Name ?? zone.Id.ToString(CultureInfo.InvariantCulture);
+            var zonePayload = new Dictionary<string, object?>();
+            AddIfValue(zonePayload, "name", zone.Name);
+            AddIfValue(zonePayload, "order", zone.Order);
+            if (zonePayload.Count > 0)
+            {
+                progress?.Report($"Updating shipping zone '{zoneLabel}'…");
+                await PutAsync<ShippingZoneSetting>(baseUrl, settings, $"/wp-json/wc/v3/shipping/zones/{zone.Id}", zonePayload, cancellationToken);
+            }
+
+            if (zone.Locations is { Count: > 0 })
+            {
+                progress?.Report($"Updating shipping zone '{zoneLabel}' locations…");
+                await PutAsync<List<ShippingZoneLocation>>(baseUrl, settings, $"/wp-json/wc/v3/shipping/zones/{zone.Id}/locations", zone.Locations, cancellationToken);
+            }
+
+            if (zone.Methods is { Count: > 0 })
+            {
+                foreach (var method in zone.Methods)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (method is null)
+                    {
+                        continue;
+                    }
+
+                    var methodLabel = method.Title
+                        ?? method.MethodTitle
+                        ?? method.Id
+                        ?? method.MethodId
+                        ?? method.InstanceId.ToString(CultureInfo.InvariantCulture);
+
+                    var methodPayload = new Dictionary<string, object?>();
+                    AddIfValue(methodPayload, "title", method.Title);
+                    AddIfValue(methodPayload, "order", method.Order);
+                    AddIfValue(methodPayload, "enabled", method.Enabled);
+                    var methodSettings = BuildSettingsValueDictionary(method.Settings);
+                    if (methodSettings is not null && methodSettings.Count > 0)
+                    {
+                        methodPayload["settings"] = methodSettings;
+                    }
+
+                    if (method.InstanceId <= 0 && string.IsNullOrWhiteSpace(method.Id) && string.IsNullOrWhiteSpace(method.MethodId))
+                    {
+                        continue;
+                    }
+
+                    if (method.InstanceId > 0 && methodPayload.Count > 0)
+                    {
+                        progress?.Report($"Updating shipping method '{methodLabel}' in zone '{zoneLabel}'…");
+                        try
+                        {
+                            await PutAsync<ShippingZoneMethodSetting>(baseUrl, settings, $"/wp-json/wc/v3/shipping/zones/{zone.Id}/methods/{method.InstanceId}", methodPayload, cancellationToken);
+                            continue;
+                        }
+                        catch (WooProvisioningException ex) when (ex.StatusCode == HttpStatusCode.NotFound)
+                        {
+                            // Fall back to creation when the instance is missing on the target.
+                        }
+                    }
+
+                    if (!string.IsNullOrWhiteSpace(method.MethodId ?? method.Id))
+                    {
+                        var createPayload = new Dictionary<string, object?>
+                        {
+                            ["method_id"] = method.MethodId ?? method.Id
+                        };
+                        foreach (var kvp in methodPayload)
+                        {
+                            createPayload[kvp.Key] = kvp.Value;
+                        }
+
+                        progress?.Report($"Creating shipping method '{methodLabel}' in zone '{zoneLabel}'…");
+                        await PostAsync<ShippingZoneMethodSetting>(baseUrl, settings, $"/wp-json/wc/v3/shipping/zones/{zone.Id}/methods", createPayload, cancellationToken);
+                    }
+                }
+            }
+        }
+    }
+
+    private async Task ApplyPaymentGatewaysAsync(
+        string baseUrl,
+        WooProvisioningSettings settings,
+        List<PaymentGatewaySetting> gateways,
+        IProgress<string>? progress,
+        CancellationToken cancellationToken)
+    {
+        foreach (var gateway in gateways)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (gateway is null || string.IsNullOrWhiteSpace(gateway.Id))
+            {
+                continue;
+            }
+
+            var payload = new Dictionary<string, object?>();
+            AddIfValue(payload, "title", gateway.Title);
+            AddIfValue(payload, "description", gateway.Description);
+            AddIfValue(payload, "order", gateway.Order);
+            AddIfValue(payload, "enabled", gateway.Enabled);
+
+            var settingsPayload = BuildSettingsValueDictionary(gateway.Settings);
+            if (settingsPayload is not null && settingsPayload.Count > 0)
+            {
+                payload["settings"] = settingsPayload;
+            }
+
+            if (payload.Count == 0)
+            {
+                continue;
+            }
+
+            var label = gateway.Title ?? gateway.MethodTitle ?? gateway.Id;
+            progress?.Report($"Updating payment gateway '{label}'…");
+            await PutAsync<PaymentGatewaySetting>(baseUrl, settings, $"/wp-json/wc/v3/payment_gateways/{gateway.Id}", payload, cancellationToken);
+        }
+    }
+
+    private Dictionary<string, object?>? BuildSettingsValueDictionary(Dictionary<string, WooStoreSetting>? settings)
+    {
+        if (settings is null || settings.Count == 0)
+        {
+            return null;
+        }
+
+        var result = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
+        foreach (var kvp in settings)
+        {
+            if (string.IsNullOrWhiteSpace(kvp.Key) || kvp.Value is null)
+            {
+                continue;
+            }
+
+            var value = kvp.Value.Value is JsonElement element ? ConvertSettingValue(element) : null;
+            result[kvp.Key] = new Dictionary<string, object?>
+            {
+                ["value"] = value
+            };
+        }
+
+        return result.Count > 0 ? result : null;
+    }
+
+    private object? ConvertSettingValue(JsonElement element)
+    {
+        switch (element.ValueKind)
+        {
+            case JsonValueKind.String:
+                return element.GetString();
+            case JsonValueKind.Number:
+                if (element.TryGetInt64(out var l))
+                {
+                    return l;
+                }
+                if (element.TryGetDecimal(out var dec))
+                {
+                    return dec;
+                }
+                break;
+            case JsonValueKind.True:
+                return true;
+            case JsonValueKind.False:
+                return false;
+            case JsonValueKind.Null:
+            case JsonValueKind.Undefined:
+                return null;
+            case JsonValueKind.Array:
+            case JsonValueKind.Object:
+                return JsonSerializer.Deserialize<object>(element.GetRawText(), _readOptions);
+        }
+
+        return element.GetRawText();
     }
 
     private async Task<Dictionary<string, int>> EnsureTaxonomiesAsync(
@@ -619,6 +871,12 @@ public sealed class WooProvisioningService : IDisposable
         }
 
         dict[key] = value;
+    }
+
+    private sealed class SettingUpdateRequest
+    {
+        [JsonPropertyName("id")] public string? Id { get; set; }
+        [JsonPropertyName("value")] public object? Value { get; set; }
     }
 
     private static string? ResolvePrice(PriceInfo? price)

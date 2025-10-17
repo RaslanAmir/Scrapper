@@ -402,6 +402,99 @@ public sealed class WooScraper : IDisposable
         return all;
     }
 
+    public async Task<List<WooStoreSetting>> FetchStoreSettingsAsync(
+        string baseUrl,
+        string username,
+        string applicationPassword,
+        IProgress<string>? log = null)
+    {
+        baseUrl = CleanBaseUrl(baseUrl);
+        if (string.IsNullOrWhiteSpace(username) || string.IsNullOrWhiteSpace(applicationPassword))
+        {
+            log?.Report("Store settings request skipped: missing credentials.");
+            return new();
+        }
+
+        var groupsUrl = $"{baseUrl}/wp-json/wc/v3/settings";
+        var groups = await FetchAuthenticatedListAsync<WooSettingGroup>(groupsUrl, "store settings groups", username, applicationPassword, log);
+        if (groups.Count == 0)
+        {
+            return new();
+        }
+
+        var all = new List<WooStoreSetting>();
+        foreach (var group in groups.Where(g => !string.IsNullOrWhiteSpace(g.Id)))
+        {
+            var url = $"{baseUrl}/wp-json/wc/v3/settings/{group.Id}";
+            var entries = await FetchAuthenticatedListAsync<WooStoreSetting>(url, $"settings group '{group.Id}'", username, applicationPassword, log);
+            foreach (var entry in entries)
+            {
+                entry.GroupId ??= group.Id;
+            }
+            all.AddRange(entries);
+        }
+
+        return all;
+    }
+
+    public async Task<List<ShippingZoneSetting>> FetchShippingZonesAsync(
+        string baseUrl,
+        string username,
+        string applicationPassword,
+        IProgress<string>? log = null)
+    {
+        baseUrl = CleanBaseUrl(baseUrl);
+        if (string.IsNullOrWhiteSpace(username) || string.IsNullOrWhiteSpace(applicationPassword))
+        {
+            log?.Report("Shipping zones request skipped: missing credentials.");
+            return new();
+        }
+
+        var zonesUrl = $"{baseUrl}/wp-json/wc/v3/shipping/zones";
+        var zones = await FetchAuthenticatedListAsync<ShippingZoneSetting>(zonesUrl, "shipping zones", username, applicationPassword, log);
+        if (zones.Count == 0)
+        {
+            return zones;
+        }
+
+        foreach (var zone in zones)
+        {
+            if (zone.Id <= 0)
+            {
+                continue;
+            }
+
+            var locationsUrl = $"{baseUrl}/wp-json/wc/v3/shipping/zones/{zone.Id}/locations";
+            var locations = await FetchAuthenticatedListAsync<ShippingZoneLocation>(locationsUrl, $"shipping zone {zone.Id} locations", username, applicationPassword, log);
+            zone.Locations.Clear();
+            zone.Locations.AddRange(locations);
+
+            var methodsUrl = $"{baseUrl}/wp-json/wc/v3/shipping/zones/{zone.Id}/methods";
+            var methods = await FetchAuthenticatedListAsync<ShippingZoneMethodSetting>(methodsUrl, $"shipping zone {zone.Id} methods", username, applicationPassword, log);
+            zone.Methods.Clear();
+            zone.Methods.AddRange(methods);
+        }
+
+        return zones;
+    }
+
+    public async Task<List<PaymentGatewaySetting>> FetchPaymentGatewaysAsync(
+        string baseUrl,
+        string username,
+        string applicationPassword,
+        IProgress<string>? log = null)
+    {
+        baseUrl = CleanBaseUrl(baseUrl);
+        if (string.IsNullOrWhiteSpace(username) || string.IsNullOrWhiteSpace(applicationPassword))
+        {
+            log?.Report("Payment gateways request skipped: missing credentials.");
+            return new();
+        }
+
+        var url = $"{baseUrl}/wp-json/wc/v3/payment_gateways";
+        return await FetchAuthenticatedListAsync<PaymentGatewaySetting>(url, "payment gateways", username, applicationPassword, log);
+    }
+
     public async Task<List<StoreProduct>> FetchWpProductsBasicAsync(
         string baseUrl,
         int perPage = 100,
@@ -1404,10 +1497,70 @@ public sealed class WooScraper : IDisposable
         }
     }
 
+    private async Task<List<T>> FetchAuthenticatedListAsync<T>(
+        string url,
+        string entityName,
+        string username,
+        string applicationPassword,
+        IProgress<string>? log)
+    {
+        try
+        {
+            using var req = new HttpRequestMessage(HttpMethod.Get, url);
+            req.Headers.Authorization = CreateBasicAuthHeader(username, applicationPassword);
+            log?.Report($"GET {url} (authenticated)");
+            using var resp = await _http.SendAsync(req);
+            if (!resp.IsSuccessStatusCode)
+            {
+                if ((int)resp.StatusCode == 404)
+                {
+                    log?.Report($"{entityName} endpoint returned 404.");
+                }
+                else
+                {
+                    log?.Report($"{entityName} request failed: {(int)resp.StatusCode} ({resp.ReasonPhrase}).");
+                }
+                return new();
+            }
+
+            var text = await resp.Content.ReadAsStringAsync();
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                return new();
+            }
+
+            return DeserializeListWithRecovery<T>(text, entityName, log);
+        }
+        catch (TaskCanceledException ex)
+        {
+            log?.Report($"{entityName} request timed out: {ex.Message}");
+        }
+        catch (AuthenticationException ex)
+        {
+            log?.Report($"{entityName} TLS handshake failed: {ex.Message}");
+        }
+        catch (IOException ex)
+        {
+            log?.Report($"{entityName} request I/O failure: {ex.Message}");
+        }
+        catch (HttpRequestException ex)
+        {
+            log?.Report($"{entityName} request failed: {ex.Message}");
+        }
+
+        return new();
+    }
+
     private static AuthenticationHeaderValue CreateBasicAuthHeader(string username, string password)
     {
         var token = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes($"{username}:{password}"));
         return new AuthenticationHeaderValue("Basic", token);
+    }
+
+    private sealed class WooSettingGroup
+    {
+        [JsonPropertyName("id")] public string? Id { get; set; }
+        [JsonPropertyName("label")] public string? Label { get; set; }
     }
 
     private static List<InstalledPlugin> ParsePluginsFromHtml(string html)
