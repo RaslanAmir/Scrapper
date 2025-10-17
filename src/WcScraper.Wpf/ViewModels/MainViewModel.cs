@@ -3,6 +3,7 @@ using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Net.Http;
@@ -527,6 +528,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         }
 
         var baseName = SanitizeForPath(product.Name ?? product.Slug ?? $"product-{product.Id}");
+        var uniquePrefix = $"{baseName}-{product.Id.ToString(CultureInfo.InvariantCulture)}";
         var relativePaths = new List<string>();
         var index = 1;
 
@@ -550,7 +552,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 extension = ".jpg";
             }
 
-            var fileName = $"{baseName}-{index}{extension}";
+            var fileName = $"{uniquePrefix}-{index}{extension}";
             var absolutePath = Path.Combine(imagesFolder, fileName);
             var relativePath = Path.Combine("images", fileName).Replace(Path.DirectorySeparatorChar, '/');
 
