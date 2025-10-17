@@ -181,6 +181,67 @@ public sealed class ThemeUpdateInfo
     [JsonPropertyName("package")] public string? Package { get; set; }
 }
 
+public sealed class WooStoreSetting
+{
+    [JsonPropertyName("id")] public string? Id { get; set; }
+    [JsonPropertyName("group_id")] public string? GroupId { get; set; }
+    [JsonPropertyName("label")] public string? Label { get; set; }
+    [JsonPropertyName("description")] public string? Description { get; set; }
+    [JsonPropertyName("value")] public JsonElement? Value { get; set; }
+    [JsonPropertyName("default")] public JsonElement? Default { get; set; }
+    [JsonPropertyName("type")] public string? Type { get; set; }
+    [JsonPropertyName("tip")] public string? Tip { get; set; }
+    [JsonPropertyName("placeholder")] public string? Placeholder { get; set; }
+    [JsonPropertyName("options")] public Dictionary<string, JsonElement>? Options { get; set; }
+}
+
+public sealed class ShippingZoneSetting
+{
+    [JsonPropertyName("id")] public int Id { get; set; }
+    [JsonPropertyName("name")] public string? Name { get; set; }
+    [JsonPropertyName("order")] public int Order { get; set; }
+    [JsonPropertyName("locations")] public List<ShippingZoneLocation> Locations { get; set; } = new();
+    [JsonPropertyName("methods")] public List<ShippingZoneMethodSetting> Methods { get; set; } = new();
+}
+
+public sealed class ShippingZoneLocation
+{
+    [JsonPropertyName("code")] public string? Code { get; set; }
+    [JsonPropertyName("type")] public string? Type { get; set; }
+}
+
+public sealed class ShippingZoneMethodSetting
+{
+    [JsonPropertyName("id")] public string? Id { get; set; }
+    [JsonPropertyName("instance_id")] public int InstanceId { get; set; }
+    [JsonPropertyName("method_id")] public string? MethodId { get; set; }
+    [JsonPropertyName("title")] public string? Title { get; set; }
+    [JsonPropertyName("order")] public int? Order { get; set; }
+    [JsonPropertyName("enabled")] public bool? Enabled { get; set; }
+    [JsonPropertyName("method_title")] public string? MethodTitle { get; set; }
+    [JsonPropertyName("method_description")] public string? MethodDescription { get; set; }
+    [JsonPropertyName("settings")] public Dictionary<string, WooStoreSetting>? Settings { get; set; }
+}
+
+public sealed class PaymentGatewaySetting
+{
+    [JsonPropertyName("id")] public string? Id { get; set; }
+    [JsonPropertyName("title")] public string? Title { get; set; }
+    [JsonPropertyName("description")] public string? Description { get; set; }
+    [JsonPropertyName("order")] public int? Order { get; set; }
+    [JsonPropertyName("enabled")] public bool? Enabled { get; set; }
+    [JsonPropertyName("method_title")] public string? MethodTitle { get; set; }
+    [JsonPropertyName("method_description")] public string? MethodDescription { get; set; }
+    [JsonPropertyName("settings")] public Dictionary<string, WooStoreSetting>? Settings { get; set; }
+}
+
+public sealed class StoreConfiguration
+{
+    [JsonPropertyName("store_settings")] public List<WooStoreSetting> StoreSettings { get; set; } = new();
+    [JsonPropertyName("shipping_zones")] public List<ShippingZoneSetting> ShippingZones { get; set; } = new();
+    [JsonPropertyName("payment_gateways")] public List<PaymentGatewaySetting> PaymentGateways { get; set; } = new();
+}
+
 // Export rows
 public sealed class GenericRow
 {

@@ -8,6 +8,7 @@ using System.Linq;
 using System.Net.Http;
 using System.Runtime.CompilerServices;
 using System.Text;
+using System.Text.Json;
 using System.Threading.Tasks;
 using WcScraper.Core;
 using WcScraper.Core.Exporters;
@@ -36,6 +37,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private bool _expPluginsJsonl = false;
     private bool _expThemesCsv = false;
     private bool _expThemesJsonl = false;
+    private bool _expStoreConfiguration = false;
+    private bool _importStoreConfiguration = false;
     private PlatformMode _selectedPlatform = PlatformMode.WooCommerce;
     private string _shopifyStoreUrl = "";
     private string _shopifyAdminAccessToken = "";
@@ -48,6 +51,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private string _targetConsumerKey = "";
     private string _targetConsumerSecret = "";
     private ProvisioningContext? _lastProvisioningContext;
+    private readonly JsonSerializerOptions _configurationWriteOptions = new() { WriteIndented = true };
 
     public MainViewModel(IDialogService dialogs)
         : this(dialogs, new WooScraper(), new ShopifyScraper(), new HttpClient())
@@ -92,6 +96,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public bool ExportPluginsJsonl { get => _expPluginsJsonl; set { _expPluginsJsonl = value; OnPropertyChanged(); } }
     public bool ExportThemesCsv { get => _expThemesCsv; set { _expThemesCsv = value; OnPropertyChanged(); } }
     public bool ExportThemesJsonl { get => _expThemesJsonl; set { _expThemesJsonl = value; OnPropertyChanged(); } }
+    public bool ExportStoreConfiguration { get => _expStoreConfiguration; set { _expStoreConfiguration = value; OnPropertyChanged(); } }
     public bool IsRunning
     {
         get => _isRunning;
@@ -157,6 +162,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public string TargetStoreUrl { get => _targetStoreUrl; set { _targetStoreUrl = value; OnPropertyChanged(); } }
     public string TargetConsumerKey { get => _targetConsumerKey; set { _targetConsumerKey = value; OnPropertyChanged(); } }
     public string TargetConsumerSecret { get => _targetConsumerSecret; set { _targetConsumerSecret = value; OnPropertyChanged(); } }
+    public bool ImportStoreConfiguration { get => _importStoreConfiguration; set { _importStoreConfiguration = value; OnPropertyChanged(); } }
     public bool CanReplicate => _lastProvisioningContext is { Products.Count: > 0 };
 
     // Selectable terms for filters
@@ -343,6 +349,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
             List<InstalledTheme> themes = new();
             bool attemptedPluginFetch = false;
             bool attemptedThemeFetch = false;
+            StoreConfiguration? configuration = null;
 
             if (SelectedPlatform == PlatformMode.WooCommerce)
             {
@@ -447,6 +454,30 @@ public sealed class MainViewModel : INotifyPropertyChanged
                         Append(themes.Count > 0
                             ? $"Found {themes.Count} themes."
                             : "No themes returned by the authenticated endpoint.");
+                    }
+                }
+            }
+
+            if (SelectedPlatform == PlatformMode.WooCommerce && ExportStoreConfiguration)
+            {
+                if (string.IsNullOrWhiteSpace(WordPressUsername) || string.IsNullOrWhiteSpace(WordPressApplicationPassword))
+                {
+                    Append("Skipping store configuration export: provide WordPress username and application password.");
+                }
+                else
+                {
+                    Append("Capturing store configuration…");
+                    configuration = await FetchStoreConfigurationAsync(targetUrl, WordPressUsername, WordPressApplicationPassword, logger);
+                    if (configuration is not null && HasConfigurationData(configuration))
+                    {
+                        var configPath = Path.Combine(storeOutputFolder, $"{storeId}_{timestamp}_configuration.json");
+                        var json = JsonSerializer.Serialize(configuration, _configurationWriteOptions);
+                        await File.WriteAllTextAsync(configPath, json, Encoding.UTF8);
+                        Append($"Wrote {configPath}");
+                    }
+                    else
+                    {
+                        Append("No store configuration data was captured.");
                     }
                 }
             }
@@ -635,7 +666,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 }
             }
 
-            SetProvisioningContext(prods);
+            SetProvisioningContext(prods, configuration);
 
             Append("All done.");
         }
@@ -647,6 +678,57 @@ public sealed class MainViewModel : INotifyPropertyChanged
         {
             IsRunning = false;
         }
+    }
+
+    private async Task<StoreConfiguration> FetchStoreConfigurationAsync(
+        string baseUrl,
+        string username,
+        string applicationPassword,
+        IProgress<string> logger)
+    {
+        var configuration = new StoreConfiguration();
+
+        var settings = await _wooScraper.FetchStoreSettingsAsync(baseUrl, username, applicationPassword, logger);
+        if (settings.Count > 0)
+        {
+            configuration.StoreSettings.AddRange(settings);
+            logger.Report($"Captured {settings.Count} store settings entries.");
+        }
+        else
+        {
+            logger.Report("No store settings returned or endpoint unavailable.");
+        }
+
+        var zones = await _wooScraper.FetchShippingZonesAsync(baseUrl, username, applicationPassword, logger);
+        if (zones.Count > 0)
+        {
+            configuration.ShippingZones.AddRange(zones);
+            logger.Report($"Captured {zones.Count} shipping zones.");
+        }
+        else
+        {
+            logger.Report("No shipping zones returned or endpoint unavailable.");
+        }
+
+        var gateways = await _wooScraper.FetchPaymentGatewaysAsync(baseUrl, username, applicationPassword, logger);
+        if (gateways.Count > 0)
+        {
+            configuration.PaymentGateways.AddRange(gateways);
+            logger.Report($"Captured {gateways.Count} payment gateways.");
+        }
+        else
+        {
+            logger.Report("No payment gateways returned or endpoint unavailable.");
+        }
+
+        return configuration;
+    }
+
+    private static bool HasConfigurationData(StoreConfiguration configuration)
+    {
+        return configuration.StoreSettings.Count > 0
+            || configuration.ShippingZones.Count > 0
+            || configuration.PaymentGateways.Count > 0;
     }
 
     private async Task<string?> DownloadProductImagesAsync(StoreProduct product, string imagesFolder, IProgress<string>? logger)
@@ -715,9 +797,9 @@ public sealed class MainViewModel : INotifyPropertyChanged
         App.Current?.Dispatcher.Invoke(() => Logs.Add(message));
     }
 
-    private void SetProvisioningContext(List<StoreProduct> products)
+    private void SetProvisioningContext(List<StoreProduct> products, StoreConfiguration? configuration)
     {
-        _lastProvisioningContext = new ProvisioningContext(products);
+        _lastProvisioningContext = new ProvisioningContext(products, configuration);
         OnPropertyChanged(nameof(CanReplicate));
         ReplicateCommand.RaiseCanExecuteChanged();
     }
@@ -766,7 +848,22 @@ public sealed class MainViewModel : INotifyPropertyChanged
             IProgress<string> logger = new Progress<string>(Append);
             var settings = new WooProvisioningSettings(TargetStoreUrl, TargetConsumerKey, TargetConsumerSecret);
             Append($"Provisioning {_lastProvisioningContext.Products.Count} products to {settings.BaseUrl}…");
-            await _wooProvisioningService.ProvisionAsync(settings, _lastProvisioningContext.Products, logger);
+            StoreConfiguration? configuration = null;
+            if (ImportStoreConfiguration)
+            {
+                configuration = _lastProvisioningContext.Configuration;
+                if (configuration is null || !HasConfigurationData(configuration))
+                {
+                    Append("No stored configuration available. Run an export with configuration enabled if you wish to replicate settings.");
+                    configuration = null;
+                }
+                else
+                {
+                    Append("Applying captured store configuration before provisioning products…");
+                }
+            }
+
+            await _wooProvisioningService.ProvisionAsync(settings, _lastProvisioningContext.Products, configuration, logger);
         }
         catch (Exception ex)
         {
@@ -780,12 +877,14 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
     private sealed class ProvisioningContext
     {
-        public ProvisioningContext(List<StoreProduct> products)
+        public ProvisioningContext(List<StoreProduct> products, StoreConfiguration? configuration)
         {
             Products = products;
+            Configuration = configuration;
         }
 
         public List<StoreProduct> Products { get; }
+        public StoreConfiguration? Configuration { get; }
     }
 
     private ShopifySettings BuildShopifySettings(string baseUrl)
