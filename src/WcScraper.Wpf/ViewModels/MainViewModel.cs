@@ -684,41 +684,16 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
             if (SelectedPlatform == PlatformMode.WooCommerce)
             {
-                if (customers.Count > 0)
-                {
-                    var path = Path.Combine(storeOutputFolder, $"{storeId}_{timestamp}_customers.json");
-                    var json = JsonSerializer.Serialize(customers, _artifactWriteOptions);
-                    await File.WriteAllTextAsync(path, json, Encoding.UTF8);
-                    Append($"Wrote {path}");
-                }
-                else if (attemptedCustomerFetch)
-                {
-                    Append("Customers export skipped (no customer data).");
-                }
-
-                if (coupons.Count > 0)
-                {
-                    var path = Path.Combine(storeOutputFolder, $"{storeId}_{timestamp}_coupons.json");
-                    var json = JsonSerializer.Serialize(coupons, _artifactWriteOptions);
-                    await File.WriteAllTextAsync(path, json, Encoding.UTF8);
-                    Append($"Wrote {path}");
-                }
-                else if (attemptedCouponFetch)
-                {
-                    Append("Coupons export skipped (no coupon data).");
-                }
-
-                if (orders.Count > 0)
-                {
-                    var path = Path.Combine(storeOutputFolder, $"{storeId}_{timestamp}_orders.json");
-                    var json = JsonSerializer.Serialize(orders, _artifactWriteOptions);
-                    await File.WriteAllTextAsync(path, json, Encoding.UTF8);
-                    Append($"Wrote {path}");
-                }
-                else if (attemptedOrderFetch)
-                {
-                    Append("Orders export skipped (no order data).");
-                }
+                await ExportWooCommerceArtifactsAsync(
+                    storeOutputFolder,
+                    storeId,
+                    timestamp,
+                    customers,
+                    coupons,
+                    orders,
+                    attemptedCustomerFetch,
+                    attemptedCouponFetch,
+                    attemptedOrderFetch);
             }
 
             if (ExportShopify)
@@ -1069,6 +1044,54 @@ public sealed class MainViewModel : INotifyPropertyChanged
         }
 
         return relativePaths.Count > 0 ? string.Join(", ", relativePaths) : null;
+    }
+
+    private async Task ExportWooCommerceArtifactsAsync(
+        string storeOutputFolder,
+        string storeId,
+        string timestamp,
+        IReadOnlyList<WooCustomer> customers,
+        IReadOnlyList<WooCoupon> coupons,
+        IReadOnlyList<WooOrder> orders,
+        bool attemptedCustomerFetch,
+        bool attemptedCouponFetch,
+        bool attemptedOrderFetch)
+    {
+        if (customers.Count > 0)
+        {
+            var path = Path.Combine(storeOutputFolder, $"{storeId}_{timestamp}_customers.json");
+            var json = JsonSerializer.Serialize(customers, _artifactWriteOptions);
+            await File.WriteAllTextAsync(path, json, Encoding.UTF8);
+            Append($"Wrote {path}");
+        }
+        else if (attemptedCustomerFetch)
+        {
+            Append("Customers export skipped (no customer data).");
+        }
+
+        if (coupons.Count > 0)
+        {
+            var path = Path.Combine(storeOutputFolder, $"{storeId}_{timestamp}_coupons.json");
+            var json = JsonSerializer.Serialize(coupons, _artifactWriteOptions);
+            await File.WriteAllTextAsync(path, json, Encoding.UTF8);
+            Append($"Wrote {path}");
+        }
+        else if (attemptedCouponFetch)
+        {
+            Append("Coupons export skipped (no coupon data).");
+        }
+
+        if (orders.Count > 0)
+        {
+            var path = Path.Combine(storeOutputFolder, $"{storeId}_{timestamp}_orders.json");
+            var json = JsonSerializer.Serialize(orders, _artifactWriteOptions);
+            await File.WriteAllTextAsync(path, json, Encoding.UTF8);
+            Append($"Wrote {path}");
+        }
+        else if (attemptedOrderFetch)
+        {
+            Append("Orders export skipped (no order data).");
+        }
     }
 
     private void Append(string message)
