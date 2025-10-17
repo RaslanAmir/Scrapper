@@ -120,6 +120,8 @@ public sealed class WooProvisioningService : IDisposable
         var customerIdMap = new Dictionary<int, int>();
         var couponIdMap = new Dictionary<int, int>();
         var couponCodeMap = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        var categoryTaxonomyMap = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        var categoryIdMap = new Dictionary<int, int>();
 
         if (productList.Count > 0)
         {
@@ -128,7 +130,7 @@ public sealed class WooProvisioningService : IDisposable
             var tagSeeds = CollectTaxonomySeeds(productList.SelectMany(p => p.Tags ?? Enumerable.Empty<ProductTag>()), t => t.Name, t => t.Slug);
             var attributeSeeds = CollectAttributeSeeds(productList);
 
-            var categoryMap = await EnsureTaxonomiesAsync(baseUrl, settings, "categories", categorySeeds, progress, cancellationToken);
+            categoryTaxonomyMap = await EnsureTaxonomiesAsync(baseUrl, settings, "categories", categorySeeds, progress, cancellationToken);
             var tagMap = await EnsureTaxonomiesAsync(baseUrl, settings, "tags", tagSeeds, progress, cancellationToken);
             var attributeMap = await EnsureAttributesAsync(baseUrl, settings, attributeSeeds, progress, cancellationToken);
 
@@ -138,12 +140,14 @@ public sealed class WooProvisioningService : IDisposable
             foreach (var product in productList)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                var ensuredId = await EnsureProductAsync(baseUrl, settings, product, categoryMap, tagMap, attributeMap, mediaCache, progress, cancellationToken);
+                var ensuredId = await EnsureProductAsync(baseUrl, settings, product, categoryTaxonomyMap, tagMap, attributeMap, mediaCache, progress, cancellationToken);
                 if (product.Id > 0)
                 {
                     productIdMap[product.Id] = ensuredId;
                 }
             }
+
+            categoryIdMap = BuildCategoryIdMap(productList, categoryTaxonomyMap);
         }
 
         if (customerList.Count > 0)
@@ -153,7 +157,7 @@ public sealed class WooProvisioningService : IDisposable
 
         if (couponList.Count > 0)
         {
-            await EnsureCouponsAsync(baseUrl, settings, couponList, productIdMap, couponIdMap, progress, cancellationToken);
+            await EnsureCouponsAsync(baseUrl, settings, couponList, productIdMap, categoryIdMap, couponIdMap, progress, cancellationToken);
             foreach (var coupon in couponList)
             {
                 if (!string.IsNullOrWhiteSpace(coupon.Code) && coupon.Id > 0 && couponIdMap.TryGetValue(coupon.Id, out var mapped))
@@ -511,6 +515,7 @@ public sealed class WooProvisioningService : IDisposable
         WooProvisioningSettings settings,
         List<WooCoupon> coupons,
         IReadOnlyDictionary<int, int> productMap,
+        IReadOnlyDictionary<int, int> categoryMap,
         Dictionary<int, int> couponMap,
         IProgress<string>? progress,
         CancellationToken cancellationToken)
@@ -519,7 +524,7 @@ public sealed class WooProvisioningService : IDisposable
         {
             cancellationToken.ThrowIfCancellationRequested();
             var identifier = GetCouponIdentifier(coupon);
-            var payload = BuildCouponPayload(coupon, productMap);
+            var payload = BuildCouponPayload(coupon, productMap, categoryMap);
             if (payload.Count == 0)
             {
                 progress?.Report($"Skipping coupon '{identifier}': no importable fields.");
@@ -594,7 +599,8 @@ public sealed class WooProvisioningService : IDisposable
 
     private static Dictionary<string, object?> BuildCouponPayload(
         WooCoupon coupon,
-        IReadOnlyDictionary<int, int> productMap)
+        IReadOnlyDictionary<int, int> productMap,
+        IReadOnlyDictionary<int, int> categoryMap)
     {
         var payload = new Dictionary<string, object?>();
         AddIfValue(payload, "code", coupon.Code);
@@ -624,14 +630,16 @@ public sealed class WooProvisioningService : IDisposable
             payload["excluded_product_ids"] = excluded;
         }
 
-        if (coupon.ProductCategories.Count > 0)
+        var categoryIds = MapIds(coupon.ProductCategories, categoryMap);
+        if (categoryIds.Count > 0)
         {
-            payload["product_categories"] = coupon.ProductCategories;
+            payload["product_categories"] = categoryIds;
         }
 
-        if (coupon.ExcludedProductCategories.Count > 0)
+        var excludedCategories = MapIds(coupon.ExcludedProductCategories, categoryMap);
+        if (excludedCategories.Count > 0)
         {
-            payload["excluded_product_categories"] = coupon.ExcludedProductCategories;
+            payload["excluded_product_categories"] = excludedCategories;
         }
 
         if (coupon.EmailRestrictions.Count > 0)
@@ -1835,6 +1843,28 @@ public sealed class WooProvisioningService : IDisposable
         }
 
         return null;
+    }
+
+    private static Dictionary<int, int> BuildCategoryIdMap(IEnumerable<StoreProduct> products, IReadOnlyDictionary<string, int> taxonomyMap)
+    {
+        var result = new Dictionary<int, int>();
+        foreach (var category in products
+                     .Where(p => p is not null)
+                     .SelectMany(p => p.Categories ?? Enumerable.Empty<Category>()))
+        {
+            if (category is null || category.Id <= 0)
+            {
+                continue;
+            }
+
+            var key = BuildTaxonomyKey(category.Slug, category.Name);
+            if (key is not null && taxonomyMap.TryGetValue(key, out var mappedId))
+            {
+                result[category.Id] = mappedId;
+            }
+        }
+
+        return result;
     }
 
     private static List<Dictionary<string, object?>> BuildTaxonomyReferences<T>(IEnumerable<T>? items, IReadOnlyDictionary<string, int> map)
