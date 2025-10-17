@@ -2,6 +2,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Security.Authentication;
@@ -737,6 +738,252 @@ public sealed class WooScraper : IDisposable
 
         var url = $"{baseUrl}/wp-json/wc/v3/payment_gateways";
         return await FetchAuthenticatedListAsync<PaymentGatewaySetting>(url, "payment gateways", username, applicationPassword, log);
+    }
+
+    public async Task<List<WooCustomer>> FetchCustomersAsync(
+        string baseUrl,
+        string username,
+        string applicationPassword,
+        IProgress<string>? log = null,
+        int perPage = 100,
+        int maxPages = 100)
+    {
+        baseUrl = CleanBaseUrl(baseUrl);
+        if (string.IsNullOrWhiteSpace(username) || string.IsNullOrWhiteSpace(applicationPassword))
+        {
+            log?.Report("Customers request skipped: missing credentials.");
+            return new();
+        }
+
+        var all = new List<WooCustomer>();
+
+        for (int page = 1; page <= maxPages; page++)
+        {
+            var url = $"{baseUrl}/wp-json/wc/v3/customers?per_page={perPage}&page={page}&orderby=id&order=asc";
+            try
+            {
+                using var req = new HttpRequestMessage(HttpMethod.Get, url);
+                req.Headers.Authorization = CreateBasicAuthHeader(username, applicationPassword);
+                log?.Report($"GET {url} (authenticated)");
+                using var resp = await _http.SendAsync(req);
+                if (!resp.IsSuccessStatusCode)
+                {
+                    if (resp.StatusCode == HttpStatusCode.NotFound)
+                    {
+                        log?.Report("Customers endpoint returned 404.");
+                    }
+                    else
+                    {
+                        log?.Report($"Customers request failed: {(int)resp.StatusCode} ({resp.ReasonPhrase}).");
+                    }
+                    break;
+                }
+
+                var text = await resp.Content.ReadAsStringAsync();
+                if (string.IsNullOrWhiteSpace(text))
+                {
+                    break;
+                }
+
+                var items = DeserializeListWithRecovery<WooCustomer>(text, "customers", log);
+                if (items.Count == 0)
+                {
+                    break;
+                }
+
+                all.AddRange(items);
+                if (items.Count < perPage)
+                {
+                    break;
+                }
+            }
+            catch (TaskCanceledException ex)
+            {
+                log?.Report($"Customers request timed out: {ex.Message}");
+                break;
+            }
+            catch (AuthenticationException ex)
+            {
+                log?.Report($"Customers request TLS handshake failed: {ex.Message}");
+                break;
+            }
+            catch (IOException ex)
+            {
+                log?.Report($"Customers request I/O failure: {ex.Message}");
+                break;
+            }
+            catch (HttpRequestException ex)
+            {
+                log?.Report($"Customers request failed: {ex.Message}");
+                break;
+            }
+        }
+
+        return all;
+    }
+
+    public async Task<List<WooOrder>> FetchOrdersAsync(
+        string baseUrl,
+        string username,
+        string applicationPassword,
+        IProgress<string>? log = null,
+        int perPage = 100,
+        int maxPages = 100)
+    {
+        baseUrl = CleanBaseUrl(baseUrl);
+        if (string.IsNullOrWhiteSpace(username) || string.IsNullOrWhiteSpace(applicationPassword))
+        {
+            log?.Report("Orders request skipped: missing credentials.");
+            return new();
+        }
+
+        var all = new List<WooOrder>();
+
+        for (int page = 1; page <= maxPages; page++)
+        {
+            var url = $"{baseUrl}/wp-json/wc/v3/orders?per_page={perPage}&page={page}&orderby=id&order=asc";
+            try
+            {
+                using var req = new HttpRequestMessage(HttpMethod.Get, url);
+                req.Headers.Authorization = CreateBasicAuthHeader(username, applicationPassword);
+                log?.Report($"GET {url} (authenticated)");
+                using var resp = await _http.SendAsync(req);
+                if (!resp.IsSuccessStatusCode)
+                {
+                    if (resp.StatusCode == HttpStatusCode.NotFound)
+                    {
+                        log?.Report("Orders endpoint returned 404.");
+                    }
+                    else
+                    {
+                        log?.Report($"Orders request failed: {(int)resp.StatusCode} ({resp.ReasonPhrase}).");
+                    }
+                    break;
+                }
+
+                var text = await resp.Content.ReadAsStringAsync();
+                if (string.IsNullOrWhiteSpace(text))
+                {
+                    break;
+                }
+
+                var items = DeserializeListWithRecovery<WooOrder>(text, "orders", log);
+                if (items.Count == 0)
+                {
+                    break;
+                }
+
+                all.AddRange(items);
+                if (items.Count < perPage)
+                {
+                    break;
+                }
+            }
+            catch (TaskCanceledException ex)
+            {
+                log?.Report($"Orders request timed out: {ex.Message}");
+                break;
+            }
+            catch (AuthenticationException ex)
+            {
+                log?.Report($"Orders request TLS handshake failed: {ex.Message}");
+                break;
+            }
+            catch (IOException ex)
+            {
+                log?.Report($"Orders request I/O failure: {ex.Message}");
+                break;
+            }
+            catch (HttpRequestException ex)
+            {
+                log?.Report($"Orders request failed: {ex.Message}");
+                break;
+            }
+        }
+
+        return all;
+    }
+
+    public async Task<List<WooCoupon>> FetchCouponsAsync(
+        string baseUrl,
+        string username,
+        string applicationPassword,
+        IProgress<string>? log = null,
+        int perPage = 100,
+        int maxPages = 100)
+    {
+        baseUrl = CleanBaseUrl(baseUrl);
+        if (string.IsNullOrWhiteSpace(username) || string.IsNullOrWhiteSpace(applicationPassword))
+        {
+            log?.Report("Coupons request skipped: missing credentials.");
+            return new();
+        }
+
+        var all = new List<WooCoupon>();
+
+        for (int page = 1; page <= maxPages; page++)
+        {
+            var url = $"{baseUrl}/wp-json/wc/v3/coupons?per_page={perPage}&page={page}&orderby=id&order=asc";
+            try
+            {
+                using var req = new HttpRequestMessage(HttpMethod.Get, url);
+                req.Headers.Authorization = CreateBasicAuthHeader(username, applicationPassword);
+                log?.Report($"GET {url} (authenticated)");
+                using var resp = await _http.SendAsync(req);
+                if (!resp.IsSuccessStatusCode)
+                {
+                    if (resp.StatusCode == HttpStatusCode.NotFound)
+                    {
+                        log?.Report("Coupons endpoint returned 404.");
+                    }
+                    else
+                    {
+                        log?.Report($"Coupons request failed: {(int)resp.StatusCode} ({resp.ReasonPhrase}).");
+                    }
+                    break;
+                }
+
+                var text = await resp.Content.ReadAsStringAsync();
+                if (string.IsNullOrWhiteSpace(text))
+                {
+                    break;
+                }
+
+                var items = DeserializeListWithRecovery<WooCoupon>(text, "coupons", log);
+                if (items.Count == 0)
+                {
+                    break;
+                }
+
+                all.AddRange(items);
+                if (items.Count < perPage)
+                {
+                    break;
+                }
+            }
+            catch (TaskCanceledException ex)
+            {
+                log?.Report($"Coupons request timed out: {ex.Message}");
+                break;
+            }
+            catch (AuthenticationException ex)
+            {
+                log?.Report($"Coupons request TLS handshake failed: {ex.Message}");
+                break;
+            }
+            catch (IOException ex)
+            {
+                log?.Report($"Coupons request I/O failure: {ex.Message}");
+                break;
+            }
+            catch (HttpRequestException ex)
+            {
+                log?.Report($"Coupons request failed: {ex.Message}");
+                break;
+            }
+        }
+
+        return all;
     }
 
     public async Task<List<StoreProduct>> FetchWpProductsBasicAsync(

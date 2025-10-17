@@ -335,6 +335,182 @@ public sealed class StoreMetaData
     }
 }
 
+public sealed class WooAddress
+{
+    [JsonPropertyName("first_name")] public string? FirstName { get; set; }
+    [JsonPropertyName("last_name")] public string? LastName { get; set; }
+    [JsonPropertyName("company")] public string? Company { get; set; }
+    [JsonPropertyName("address_1")] public string? Address1 { get; set; }
+    [JsonPropertyName("address_2")] public string? Address2 { get; set; }
+    [JsonPropertyName("city")] public string? City { get; set; }
+    [JsonPropertyName("state")] public string? State { get; set; }
+    [JsonPropertyName("postcode")] public string? Postcode { get; set; }
+    [JsonPropertyName("country")] public string? Country { get; set; }
+    [JsonPropertyName("email")] public string? Email { get; set; }
+    [JsonPropertyName("phone")] public string? Phone { get; set; }
+}
+
+public sealed class WooCustomer
+{
+    [JsonPropertyName("id")] public int Id { get; set; }
+    [JsonPropertyName("email")] public string? Email { get; set; }
+    [JsonPropertyName("first_name")] public string? FirstName { get; set; }
+    [JsonPropertyName("last_name")] public string? LastName { get; set; }
+    [JsonPropertyName("username")] public string? Username { get; set; }
+    [JsonPropertyName("billing")] public WooAddress? Billing { get; set; }
+    [JsonPropertyName("shipping")] public WooAddress? Shipping { get; set; }
+    [JsonPropertyName("is_paying_customer")] public bool? IsPayingCustomer { get; set; }
+    [JsonPropertyName("date_created")] public string? DateCreated { get; set; }
+    [JsonPropertyName("date_created_gmt")] public string? DateCreatedGmt { get; set; }
+    [JsonPropertyName("date_modified")] public string? DateModified { get; set; }
+    [JsonPropertyName("date_modified_gmt")] public string? DateModifiedGmt { get; set; }
+    [JsonPropertyName("meta_data")] public List<StoreMetaData> MetaData { get; set; } = new();
+}
+
+public sealed class WooCoupon
+{
+    [JsonPropertyName("id")] public int Id { get; set; }
+    [JsonPropertyName("code")] public string? Code { get; set; }
+    [JsonPropertyName("amount")] public string? Amount { get; set; }
+    [JsonPropertyName("status")] public string? Status { get; set; }
+    [JsonPropertyName("discount_type")] public string? DiscountType { get; set; }
+    [JsonPropertyName("description")] public string? Description { get; set; }
+    [JsonPropertyName("date_created")] public string? DateCreated { get; set; }
+    [JsonPropertyName("date_created_gmt")] public string? DateCreatedGmt { get; set; }
+    [JsonPropertyName("date_modified")] public string? DateModified { get; set; }
+    [JsonPropertyName("date_modified_gmt")] public string? DateModifiedGmt { get; set; }
+    [JsonPropertyName("date_expires")] public string? DateExpires { get; set; }
+    [JsonPropertyName("date_expires_gmt")] public string? DateExpiresGmt { get; set; }
+    [JsonPropertyName("usage_count")] public int UsageCount { get; set; }
+    [JsonPropertyName("individual_use")] public bool? IndividualUse { get; set; }
+    [JsonPropertyName("product_ids")] public List<int> ProductIds { get; set; } = new();
+    [JsonPropertyName("excluded_product_ids")] public List<int> ExcludedProductIds { get; set; } = new();
+    [JsonPropertyName("usage_limit")] public int? UsageLimit { get; set; }
+    [JsonPropertyName("usage_limit_per_user")] public int? UsageLimitPerUser { get; set; }
+    [JsonPropertyName("limit_usage_to_x_items")] public int? LimitUsageToItems { get; set; }
+    [JsonPropertyName("free_shipping")] public bool? FreeShipping { get; set; }
+    [JsonPropertyName("product_categories")] public List<int> ProductCategories { get; set; } = new();
+    [JsonPropertyName("excluded_product_categories")] public List<int> ExcludedProductCategories { get; set; } = new();
+    [JsonPropertyName("exclude_sale_items")] public bool? ExcludeSaleItems { get; set; }
+    [JsonPropertyName("minimum_amount")] public string? MinimumAmount { get; set; }
+    [JsonPropertyName("maximum_amount")] public string? MaximumAmount { get; set; }
+    [JsonPropertyName("email_restrictions")] public List<string> EmailRestrictions { get; set; } = new();
+    [JsonPropertyName("meta_data")] public List<StoreMetaData> MetaData { get; set; } = new();
+}
+
+public sealed class WooOrder
+{
+    [JsonPropertyName("id")] public int Id { get; set; }
+    [JsonPropertyName("number")] public string? Number { get; set; }
+    [JsonPropertyName("status")] public string? Status { get; set; }
+    [JsonPropertyName("currency")] public string? Currency { get; set; }
+    [JsonPropertyName("customer_id")] public int? CustomerId { get; set; }
+    [JsonPropertyName("order_key")] public string? OrderKey { get; set; }
+    [JsonPropertyName("billing")] public WooAddress? Billing { get; set; }
+    [JsonPropertyName("shipping")] public WooAddress? Shipping { get; set; }
+    [JsonPropertyName("payment_method")] public string? PaymentMethod { get; set; }
+    [JsonPropertyName("payment_method_title")] public string? PaymentMethodTitle { get; set; }
+    [JsonPropertyName("transaction_id")] public string? TransactionId { get; set; }
+    [JsonPropertyName("customer_note")] public string? CustomerNote { get; set; }
+    [JsonPropertyName("date_created")] public string? DateCreated { get; set; }
+    [JsonPropertyName("date_created_gmt")] public string? DateCreatedGmt { get; set; }
+    [JsonPropertyName("date_modified")] public string? DateModified { get; set; }
+    [JsonPropertyName("date_modified_gmt")] public string? DateModifiedGmt { get; set; }
+    [JsonPropertyName("date_completed")] public string? DateCompleted { get; set; }
+    [JsonPropertyName("date_completed_gmt")] public string? DateCompletedGmt { get; set; }
+    [JsonPropertyName("date_paid")] public string? DatePaid { get; set; }
+    [JsonPropertyName("date_paid_gmt")] public string? DatePaidGmt { get; set; }
+    [JsonPropertyName("discount_total")] public string? DiscountTotal { get; set; }
+    [JsonPropertyName("discount_tax")] public string? DiscountTax { get; set; }
+    [JsonPropertyName("shipping_total")] public string? ShippingTotal { get; set; }
+    [JsonPropertyName("shipping_tax")] public string? ShippingTax { get; set; }
+    [JsonPropertyName("cart_tax")] public string? CartTax { get; set; }
+    [JsonPropertyName("total")] public string? Total { get; set; }
+    [JsonPropertyName("total_tax")] public string? TotalTax { get; set; }
+    [JsonPropertyName("line_items")] public List<WooOrderLineItem> LineItems { get; set; } = new();
+    [JsonPropertyName("shipping_lines")] public List<WooOrderShippingLine> ShippingLines { get; set; } = new();
+    [JsonPropertyName("coupon_lines")] public List<WooOrderCouponLine> CouponLines { get; set; } = new();
+    [JsonPropertyName("fee_lines")] public List<WooOrderFeeLine> FeeLines { get; set; } = new();
+    [JsonPropertyName("tax_lines")] public List<WooOrderTaxLine> TaxLines { get; set; } = new();
+    [JsonPropertyName("meta_data")] public List<StoreMetaData> MetaData { get; set; } = new();
+}
+
+public sealed class WooOrderLineItem
+{
+    [JsonPropertyName("id")] public int Id { get; set; }
+    [JsonPropertyName("name")] public string? Name { get; set; }
+    [JsonPropertyName("product_id")] public int? ProductId { get; set; }
+    [JsonPropertyName("variation_id")] public int? VariationId { get; set; }
+    [JsonPropertyName("quantity")] public int Quantity { get; set; }
+    [JsonPropertyName("subtotal")] public string? Subtotal { get; set; }
+    [JsonPropertyName("subtotal_tax")] public string? SubtotalTax { get; set; }
+    [JsonPropertyName("total")] public string? Total { get; set; }
+    [JsonPropertyName("total_tax")] public string? TotalTax { get; set; }
+    [JsonPropertyName("price")] public string? Price { get; set; }
+    [JsonPropertyName("sku")] public string? Sku { get; set; }
+    [JsonPropertyName("meta_data")] public List<StoreMetaData> MetaData { get; set; } = new();
+}
+
+public sealed class WooOrderShippingLine
+{
+    [JsonPropertyName("id")] public int Id { get; set; }
+    [JsonPropertyName("method_title")] public string? MethodTitle { get; set; }
+    [JsonPropertyName("method_id")] public string? MethodId { get; set; }
+    [JsonPropertyName("total")] public string? Total { get; set; }
+    [JsonPropertyName("total_tax")] public string? TotalTax { get; set; }
+    [JsonPropertyName("meta_data")] public List<StoreMetaData> MetaData { get; set; } = new();
+}
+
+public sealed class WooOrderCouponLine
+{
+    [JsonPropertyName("id")] public int Id { get; set; }
+    [JsonPropertyName("code")] public string? Code { get; set; }
+    [JsonPropertyName("discount")] public string? Discount { get; set; }
+    [JsonPropertyName("discount_tax")] public string? DiscountTax { get; set; }
+    [JsonPropertyName("meta_data")] public List<StoreMetaData> MetaData { get; set; } = new();
+}
+
+public sealed class WooOrderFeeLine
+{
+    [JsonPropertyName("id")] public int Id { get; set; }
+    [JsonPropertyName("name")] public string? Name { get; set; }
+    [JsonPropertyName("tax_class")] public string? TaxClass { get; set; }
+    [JsonPropertyName("tax_status")] public string? TaxStatus { get; set; }
+    [JsonPropertyName("total")] public string? Total { get; set; }
+    [JsonPropertyName("total_tax")] public string? TotalTax { get; set; }
+    [JsonPropertyName("meta_data")] public List<StoreMetaData> MetaData { get; set; } = new();
+}
+
+public sealed class WooOrderTaxLine
+{
+    [JsonPropertyName("id")] public int Id { get; set; }
+    [JsonPropertyName("rate_code")] public string? RateCode { get; set; }
+    [JsonPropertyName("rate_id")] public int? RateId { get; set; }
+    [JsonPropertyName("label")] public string? Label { get; set; }
+    [JsonPropertyName("compound")] public bool? Compound { get; set; }
+    [JsonPropertyName("tax_total")] public string? TaxTotal { get; set; }
+    [JsonPropertyName("shipping_tax_total")] public string? ShippingTaxTotal { get; set; }
+    [JsonPropertyName("meta_data")] public List<StoreMetaData> MetaData { get; set; } = new();
+}
+
+public sealed class WooSubscription
+{
+    [JsonPropertyName("id")] public int Id { get; set; }
+    [JsonPropertyName("number")] public string? Number { get; set; }
+    [JsonPropertyName("status")] public string? Status { get; set; }
+    [JsonPropertyName("customer_id")] public int? CustomerId { get; set; }
+    [JsonPropertyName("billing")] public WooAddress? Billing { get; set; }
+    [JsonPropertyName("shipping")] public WooAddress? Shipping { get; set; }
+    [JsonPropertyName("payment_method")] public string? PaymentMethod { get; set; }
+    [JsonPropertyName("payment_method_title")] public string? PaymentMethodTitle { get; set; }
+    [JsonPropertyName("start_date")] public string? StartDate { get; set; }
+    [JsonPropertyName("trial_end_date")] public string? TrialEndDate { get; set; }
+    [JsonPropertyName("next_payment_date")] public string? NextPaymentDate { get; set; }
+    [JsonPropertyName("end_date")] public string? EndDate { get; set; }
+    [JsonPropertyName("line_items")] public List<WooOrderLineItem> LineItems { get; set; } = new();
+    [JsonPropertyName("meta_data")] public List<StoreMetaData> MetaData { get; set; } = new();
+}
+
 public sealed class ShopifyRow
 {
     public string? Handle { get; set; }

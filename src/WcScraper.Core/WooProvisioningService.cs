@@ -87,6 +87,10 @@ public sealed class WooProvisioningService : IDisposable
         WooProvisioningSettings settings,
         IEnumerable<StoreProduct> products,
         StoreConfiguration? configuration = null,
+        IEnumerable<WooCustomer>? customers = null,
+        IEnumerable<WooCoupon>? coupons = null,
+        IEnumerable<WooOrder>? orders = null,
+        IEnumerable<WooSubscription>? subscriptions = null,
         IProgress<string>? progress = null,
         CancellationToken cancellationToken = default)
     {
@@ -94,9 +98,14 @@ public sealed class WooProvisioningService : IDisposable
         if (products is null) throw new ArgumentNullException(nameof(products));
 
         var productList = products.Where(p => p is not null).ToList();
-        if (productList.Count == 0)
+        var customerList = customers?.Where(c => c is not null).ToList() ?? new List<WooCustomer>();
+        var couponList = coupons?.Where(c => c is not null).ToList() ?? new List<WooCoupon>();
+        var orderList = orders?.Where(o => o is not null).ToList() ?? new List<WooOrder>();
+        var subscriptionList = subscriptions?.Where(s => s is not null).ToList() ?? new List<WooSubscription>();
+
+        if (productList.Count == 0 && customerList.Count == 0 && couponList.Count == 0 && orderList.Count == 0 && subscriptionList.Count == 0)
         {
-            progress?.Report("No products to provision.");
+            progress?.Report("No artifacts to provision.");
             return;
         }
 
@@ -107,22 +116,61 @@ public sealed class WooProvisioningService : IDisposable
             await ApplyStoreConfigurationAsync(baseUrl, settings, configuration, progress, cancellationToken);
         }
 
-        progress?.Report($"Preparing taxonomies for {productList.Count} products…");
-        var categorySeeds = CollectTaxonomySeeds(productList.SelectMany(p => p.Categories ?? Enumerable.Empty<Category>()), c => c.Name, c => c.Slug);
-        var tagSeeds = CollectTaxonomySeeds(productList.SelectMany(p => p.Tags ?? Enumerable.Empty<ProductTag>()), t => t.Name, t => t.Slug);
-        var attributeSeeds = CollectAttributeSeeds(productList);
+        var productIdMap = new Dictionary<int, int>();
+        var customerIdMap = new Dictionary<int, int>();
+        var couponIdMap = new Dictionary<int, int>();
+        var couponCodeMap = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
 
-        var categoryMap = await EnsureTaxonomiesAsync(baseUrl, settings, "categories", categorySeeds, progress, cancellationToken);
-        var tagMap = await EnsureTaxonomiesAsync(baseUrl, settings, "tags", tagSeeds, progress, cancellationToken);
-        var attributeMap = await EnsureAttributesAsync(baseUrl, settings, attributeSeeds, progress, cancellationToken);
-
-        progress?.Report("Provisioning products…");
-        var mediaCache = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-
-        foreach (var product in productList)
+        if (productList.Count > 0)
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            await EnsureProductAsync(baseUrl, settings, product, categoryMap, tagMap, attributeMap, mediaCache, progress, cancellationToken);
+            progress?.Report($"Preparing taxonomies for {productList.Count} products…");
+            var categorySeeds = CollectTaxonomySeeds(productList.SelectMany(p => p.Categories ?? Enumerable.Empty<Category>()), c => c.Name, c => c.Slug);
+            var tagSeeds = CollectTaxonomySeeds(productList.SelectMany(p => p.Tags ?? Enumerable.Empty<ProductTag>()), t => t.Name, t => t.Slug);
+            var attributeSeeds = CollectAttributeSeeds(productList);
+
+            var categoryMap = await EnsureTaxonomiesAsync(baseUrl, settings, "categories", categorySeeds, progress, cancellationToken);
+            var tagMap = await EnsureTaxonomiesAsync(baseUrl, settings, "tags", tagSeeds, progress, cancellationToken);
+            var attributeMap = await EnsureAttributesAsync(baseUrl, settings, attributeSeeds, progress, cancellationToken);
+
+            progress?.Report("Provisioning products…");
+            var mediaCache = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var product in productList)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var ensuredId = await EnsureProductAsync(baseUrl, settings, product, categoryMap, tagMap, attributeMap, mediaCache, progress, cancellationToken);
+                if (product.Id > 0)
+                {
+                    productIdMap[product.Id] = ensuredId;
+                }
+            }
+        }
+
+        if (customerList.Count > 0)
+        {
+            await EnsureCustomersAsync(baseUrl, settings, customerList, customerIdMap, progress, cancellationToken);
+        }
+
+        if (couponList.Count > 0)
+        {
+            await EnsureCouponsAsync(baseUrl, settings, couponList, productIdMap, couponIdMap, progress, cancellationToken);
+            foreach (var coupon in couponList)
+            {
+                if (!string.IsNullOrWhiteSpace(coupon.Code) && coupon.Id > 0 && couponIdMap.TryGetValue(coupon.Id, out var mapped))
+                {
+                    couponCodeMap[coupon.Code!] = mapped;
+                }
+            }
+        }
+
+        if (orderList.Count > 0)
+        {
+            await EnsureOrdersAsync(baseUrl, settings, orderList, productIdMap, customerIdMap, couponCodeMap, progress, cancellationToken);
+        }
+
+        if (subscriptionList.Count > 0)
+        {
+            progress?.Report($"Skipping {subscriptionList.Count} subscriptions (provisioning not implemented).");
         }
 
         progress?.Report("Provisioning complete.");
@@ -269,7 +317,7 @@ public sealed class WooProvisioningService : IDisposable
         }
     }
 
-    private async Task EnsureProductAsync(
+    private async Task<int> EnsureProductAsync(
         string baseUrl,
         WooProvisioningSettings settings,
         StoreProduct product,
@@ -322,13 +370,713 @@ public sealed class WooProvisioningService : IDisposable
         if (existing is not null)
         {
             progress?.Report($"Updating product '{product.Name ?? product.Slug ?? product.Id.ToString()}' (ID {existing.Id}).");
-            await PutAsync<WooProductSummary>(baseUrl, settings, $"/wp-json/wc/v3/products/{existing.Id}", payload, cancellationToken);
+            var updated = await PutAsync<WooProductSummary>(baseUrl, settings, $"/wp-json/wc/v3/products/{existing.Id}", payload, cancellationToken);
+            return updated.Id;
         }
-        else
+
+        progress?.Report($"Creating product '{product.Name ?? product.Slug ?? product.Id.ToString()}'.");
+        var created = await PostAsync<WooProductSummary>(baseUrl, settings, "/wp-json/wc/v3/products", payload, cancellationToken);
+        return created.Id;
+    }
+
+    private async Task EnsureCustomersAsync(
+        string baseUrl,
+        WooProvisioningSettings settings,
+        List<WooCustomer> customers,
+        Dictionary<int, int> customerMap,
+        IProgress<string>? progress,
+        CancellationToken cancellationToken)
+    {
+        foreach (var customer in customers)
         {
-            progress?.Report($"Creating product '{product.Name ?? product.Slug ?? product.Id.ToString()}'.");
-            await PostAsync<WooProductSummary>(baseUrl, settings, "/wp-json/wc/v3/products", payload, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            var identifier = GetCustomerIdentifier(customer);
+            var payload = BuildCustomerPayload(customer);
+            if (payload.Count == 0)
+            {
+                progress?.Report($"Skipping customer '{identifier}': no importable fields.");
+                continue;
+            }
+
+            var existing = await FindCustomerAsync(baseUrl, settings, customer, cancellationToken);
+            if (existing is not null)
+            {
+                progress?.Report($"Updating customer '{identifier}' (ID {existing.Id}).");
+                var updated = await PutAsync<WooCustomer>(baseUrl, settings, $"/wp-json/wc/v3/customers/{existing.Id}", payload, cancellationToken);
+                if (customer.Id > 0)
+                {
+                    customerMap[customer.Id] = updated.Id;
+                }
+                continue;
+            }
+
+            progress?.Report($"Creating customer '{identifier}'.");
+            try
+            {
+                var created = await PostAsync<WooCustomer>(baseUrl, settings, "/wp-json/wc/v3/customers", payload, cancellationToken);
+                if (customer.Id > 0)
+                {
+                    customerMap[customer.Id] = created.Id;
+                }
+            }
+            catch (WooProvisioningException ex) when (ex.StatusCode == HttpStatusCode.BadRequest || ex.StatusCode == HttpStatusCode.Conflict)
+            {
+                progress?.Report($"Customer '{identifier}' may already exist ({(int)ex.StatusCode}). Retrying fetch.");
+                existing = await FindCustomerAsync(baseUrl, settings, customer, cancellationToken);
+                if (existing is not null)
+                {
+                    if (customer.Id > 0)
+                    {
+                        customerMap[customer.Id] = existing.Id;
+                    }
+                    await PutAsync<WooCustomer>(baseUrl, settings, $"/wp-json/wc/v3/customers/{existing.Id}", payload, cancellationToken);
+                }
+                else
+                {
+                    throw;
+                }
+            }
         }
+    }
+
+    private async Task<WooCustomer?> FindCustomerAsync(
+        string baseUrl,
+        WooProvisioningSettings settings,
+        WooCustomer customer,
+        CancellationToken cancellationToken)
+    {
+        if (!string.IsNullOrWhiteSpace(customer.Email))
+        {
+            var list = await GetAsync<List<WooCustomer>>(baseUrl, settings, $"/wp-json/wc/v3/customers?per_page=1&email={Uri.EscapeDataString(customer.Email)}", cancellationToken);
+            if (list is { Count: > 0 })
+            {
+                return list[0];
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(customer.Username))
+        {
+            var list = await GetAsync<List<WooCustomer>>(baseUrl, settings, $"/wp-json/wc/v3/customers?per_page=1&search={Uri.EscapeDataString(customer.Username)}", cancellationToken);
+            if (list is { Count: > 0 })
+            {
+                return list.FirstOrDefault(c => string.Equals(c.Username, customer.Username, StringComparison.OrdinalIgnoreCase));
+            }
+        }
+
+        return null;
+    }
+
+    private static string GetCustomerIdentifier(WooCustomer customer)
+    {
+        if (!string.IsNullOrWhiteSpace(customer.Email))
+        {
+            return customer.Email!;
+        }
+
+        if (!string.IsNullOrWhiteSpace(customer.Username))
+        {
+            return customer.Username!;
+        }
+
+        return customer.Id > 0 ? customer.Id.ToString(CultureInfo.InvariantCulture) : "customer";
+    }
+
+    private static Dictionary<string, object?> BuildCustomerPayload(WooCustomer customer)
+    {
+        var payload = new Dictionary<string, object?>();
+        AddIfValue(payload, "email", customer.Email);
+        AddIfValue(payload, "first_name", customer.FirstName);
+        AddIfValue(payload, "last_name", customer.LastName);
+        AddIfValue(payload, "username", customer.Username);
+        if (customer.Billing is not null)
+        {
+            payload["billing"] = customer.Billing;
+        }
+        if (customer.Shipping is not null)
+        {
+            payload["shipping"] = customer.Shipping;
+        }
+
+        var meta = BuildMetaDataPayload(customer.MetaData);
+        if (meta.Count > 0)
+        {
+            payload["meta_data"] = meta;
+        }
+
+        return payload;
+    }
+
+    private async Task EnsureCouponsAsync(
+        string baseUrl,
+        WooProvisioningSettings settings,
+        List<WooCoupon> coupons,
+        IReadOnlyDictionary<int, int> productMap,
+        Dictionary<int, int> couponMap,
+        IProgress<string>? progress,
+        CancellationToken cancellationToken)
+    {
+        foreach (var coupon in coupons)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var identifier = GetCouponIdentifier(coupon);
+            var payload = BuildCouponPayload(coupon, productMap);
+            if (payload.Count == 0)
+            {
+                progress?.Report($"Skipping coupon '{identifier}': no importable fields.");
+                continue;
+            }
+
+            var existing = await FindCouponAsync(baseUrl, settings, coupon, cancellationToken);
+            if (existing is not null)
+            {
+                progress?.Report($"Updating coupon '{identifier}' (ID {existing.Id}).");
+                var updated = await PutAsync<WooCoupon>(baseUrl, settings, $"/wp-json/wc/v3/coupons/{existing.Id}", payload, cancellationToken);
+                if (coupon.Id > 0)
+                {
+                    couponMap[coupon.Id] = updated.Id;
+                }
+                continue;
+            }
+
+            progress?.Report($"Creating coupon '{identifier}'.");
+            try
+            {
+                var created = await PostAsync<WooCoupon>(baseUrl, settings, "/wp-json/wc/v3/coupons", payload, cancellationToken);
+                if (coupon.Id > 0)
+                {
+                    couponMap[coupon.Id] = created.Id;
+                }
+            }
+            catch (WooProvisioningException ex) when (ex.StatusCode == HttpStatusCode.BadRequest || ex.StatusCode == HttpStatusCode.Conflict)
+            {
+                progress?.Report($"Coupon '{identifier}' may already exist ({(int)ex.StatusCode}). Retrying fetch.");
+                existing = await FindCouponAsync(baseUrl, settings, coupon, cancellationToken);
+                if (existing is not null)
+                {
+                    if (coupon.Id > 0)
+                    {
+                        couponMap[coupon.Id] = existing.Id;
+                    }
+                    await PutAsync<WooCoupon>(baseUrl, settings, $"/wp-json/wc/v3/coupons/{existing.Id}", payload, cancellationToken);
+                }
+                else
+                {
+                    throw;
+                }
+            }
+        }
+    }
+
+    private async Task<WooCoupon?> FindCouponAsync(
+        string baseUrl,
+        WooProvisioningSettings settings,
+        WooCoupon coupon,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(coupon.Code))
+        {
+            return null;
+        }
+
+        var list = await GetAsync<List<WooCoupon>>(baseUrl, settings, $"/wp-json/wc/v3/coupons?per_page=1&code={Uri.EscapeDataString(coupon.Code)}", cancellationToken);
+        if (list is { Count: > 0 })
+        {
+            return list[0];
+        }
+
+        return null;
+    }
+
+    private static string GetCouponIdentifier(WooCoupon coupon)
+        => !string.IsNullOrWhiteSpace(coupon.Code)
+            ? coupon.Code!
+            : (coupon.Id > 0 ? coupon.Id.ToString(CultureInfo.InvariantCulture) : "coupon");
+
+    private static Dictionary<string, object?> BuildCouponPayload(
+        WooCoupon coupon,
+        IReadOnlyDictionary<int, int> productMap)
+    {
+        var payload = new Dictionary<string, object?>();
+        AddIfValue(payload, "code", coupon.Code);
+        AddIfValue(payload, "amount", coupon.Amount);
+        AddIfValue(payload, "discount_type", coupon.DiscountType);
+        AddIfValue(payload, "description", coupon.Description);
+        AddIfValue(payload, "individual_use", coupon.IndividualUse);
+        AddIfValue(payload, "usage_limit", coupon.UsageLimit);
+        AddIfValue(payload, "usage_limit_per_user", coupon.UsageLimitPerUser);
+        AddIfValue(payload, "limit_usage_to_x_items", coupon.LimitUsageToItems);
+        AddIfValue(payload, "free_shipping", coupon.FreeShipping);
+        AddIfValue(payload, "exclude_sale_items", coupon.ExcludeSaleItems);
+        AddIfValue(payload, "minimum_amount", coupon.MinimumAmount);
+        AddIfValue(payload, "maximum_amount", coupon.MaximumAmount);
+        AddIfValue(payload, "date_expires", coupon.DateExpires);
+        AddIfValue(payload, "date_expires_gmt", coupon.DateExpiresGmt);
+
+        var productIds = MapIds(coupon.ProductIds, productMap);
+        if (productIds.Count > 0)
+        {
+            payload["product_ids"] = productIds;
+        }
+
+        var excluded = MapIds(coupon.ExcludedProductIds, productMap);
+        if (excluded.Count > 0)
+        {
+            payload["excluded_product_ids"] = excluded;
+        }
+
+        if (coupon.ProductCategories.Count > 0)
+        {
+            payload["product_categories"] = coupon.ProductCategories;
+        }
+
+        if (coupon.ExcludedProductCategories.Count > 0)
+        {
+            payload["excluded_product_categories"] = coupon.ExcludedProductCategories;
+        }
+
+        if (coupon.EmailRestrictions.Count > 0)
+        {
+            payload["email_restrictions"] = coupon.EmailRestrictions;
+        }
+
+        var meta = BuildMetaDataPayload(coupon.MetaData);
+        if (meta.Count > 0)
+        {
+            payload["meta_data"] = meta;
+        }
+
+        return payload;
+    }
+
+    private async Task EnsureOrdersAsync(
+        string baseUrl,
+        WooProvisioningSettings settings,
+        List<WooOrder> orders,
+        IReadOnlyDictionary<int, int> productMap,
+        IReadOnlyDictionary<int, int> customerMap,
+        IReadOnlyDictionary<string, int> couponCodeMap,
+        IProgress<string>? progress,
+        CancellationToken cancellationToken)
+    {
+        foreach (var order in orders)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var identifier = GetOrderIdentifier(order);
+            var lineItems = BuildOrderLineItems(order.LineItems, productMap);
+            if (lineItems.Count == 0)
+            {
+                progress?.Report($"Skipping order '{identifier}': no line items could be mapped.");
+                continue;
+            }
+
+            var payload = BuildOrderPayload(order, productMap, customerMap, couponCodeMap, lineItems);
+            progress?.Report($"Creating order '{identifier}'.");
+            try
+            {
+                await PostAsync<WooOrder>(baseUrl, settings, "/wp-json/wc/v3/orders", payload, cancellationToken);
+            }
+            catch (WooProvisioningException ex) when (ex.StatusCode == HttpStatusCode.BadRequest || ex.StatusCode == HttpStatusCode.Conflict)
+            {
+                progress?.Report($"Order '{identifier}' may already exist ({(int)ex.StatusCode}). Retrying fetch.");
+                var existing = await FindOrderAsync(baseUrl, settings, order, cancellationToken);
+                if (existing is not null)
+                {
+                    progress?.Report($"Order '{identifier}' already present as ID {existing.Id}. Skipping creation.");
+                }
+                else
+                {
+                    throw;
+                }
+            }
+        }
+    }
+
+    private async Task<WooOrder?> FindOrderAsync(
+        string baseUrl,
+        WooProvisioningSettings settings,
+        WooOrder order,
+        CancellationToken cancellationToken)
+    {
+        if (!string.IsNullOrWhiteSpace(order.Number))
+        {
+            var list = await GetAsync<List<WooOrder>>(baseUrl, settings, $"/wp-json/wc/v3/orders?per_page=1&search={Uri.EscapeDataString(order.Number)}", cancellationToken);
+            if (list is { Count: > 0 })
+            {
+                var match = list.FirstOrDefault(o => string.Equals(o.Number, order.Number, StringComparison.OrdinalIgnoreCase));
+                if (match is not null)
+                {
+                    return match;
+                }
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(order.OrderKey))
+        {
+            var list = await GetAsync<List<WooOrder>>(baseUrl, settings, $"/wp-json/wc/v3/orders?per_page=1&search={Uri.EscapeDataString(order.OrderKey)}", cancellationToken);
+            if (list is { Count: > 0 })
+            {
+                var match = list.FirstOrDefault(o => string.Equals(o.OrderKey, order.OrderKey, StringComparison.OrdinalIgnoreCase));
+                if (match is not null)
+                {
+                    return match;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private static string GetOrderIdentifier(WooOrder order)
+    {
+        if (!string.IsNullOrWhiteSpace(order.Number))
+        {
+            return order.Number!;
+        }
+
+        if (!string.IsNullOrWhiteSpace(order.OrderKey))
+        {
+            return order.OrderKey!;
+        }
+
+        return order.Id > 0 ? order.Id.ToString(CultureInfo.InvariantCulture) : "order";
+    }
+
+    private Dictionary<string, object?> BuildOrderPayload(
+        WooOrder order,
+        IReadOnlyDictionary<int, int> productMap,
+        IReadOnlyDictionary<int, int> customerMap,
+        IReadOnlyDictionary<string, int> couponCodeMap,
+        List<Dictionary<string, object?>> lineItems)
+    {
+        var payload = new Dictionary<string, object?>();
+        AddIfValue(payload, "status", order.Status);
+        AddIfValue(payload, "currency", order.Currency);
+
+        var mappedCustomer = MapId(order.CustomerId, customerMap);
+        if (mappedCustomer.HasValue)
+        {
+            payload["customer_id"] = mappedCustomer.Value;
+        }
+
+        if (order.Billing is not null)
+        {
+            payload["billing"] = order.Billing;
+        }
+
+        if (order.Shipping is not null)
+        {
+            payload["shipping"] = order.Shipping;
+        }
+
+        AddIfValue(payload, "payment_method", order.PaymentMethod);
+        AddIfValue(payload, "payment_method_title", order.PaymentMethodTitle);
+        AddIfValue(payload, "transaction_id", order.TransactionId);
+        AddIfValue(payload, "customer_note", order.CustomerNote);
+        AddIfValue(payload, "date_created", order.DateCreated);
+        AddIfValue(payload, "date_created_gmt", order.DateCreatedGmt);
+        AddIfValue(payload, "date_paid", order.DatePaid);
+        AddIfValue(payload, "date_paid_gmt", order.DatePaidGmt);
+        AddIfValue(payload, "date_completed", order.DateCompleted);
+        AddIfValue(payload, "date_completed_gmt", order.DateCompletedGmt);
+        AddIfValue(payload, "discount_total", order.DiscountTotal);
+        AddIfValue(payload, "discount_tax", order.DiscountTax);
+        AddIfValue(payload, "shipping_total", order.ShippingTotal);
+        AddIfValue(payload, "shipping_tax", order.ShippingTax);
+        AddIfValue(payload, "cart_tax", order.CartTax);
+        AddIfValue(payload, "total", order.Total);
+        AddIfValue(payload, "total_tax", order.TotalTax);
+        payload["set_paid"] = DetermineIsPaid(order);
+
+        if (lineItems.Count > 0)
+        {
+            payload["line_items"] = lineItems;
+        }
+
+        var couponLines = BuildOrderCouponLines(order.CouponLines, couponCodeMap);
+        if (couponLines.Count > 0)
+        {
+            payload["coupon_lines"] = couponLines;
+        }
+
+        var shippingLines = BuildShippingLines(order.ShippingLines);
+        if (shippingLines.Count > 0)
+        {
+            payload["shipping_lines"] = shippingLines;
+        }
+
+        var feeLines = BuildFeeLines(order.FeeLines);
+        if (feeLines.Count > 0)
+        {
+            payload["fee_lines"] = feeLines;
+        }
+
+        var taxLines = BuildTaxLines(order.TaxLines);
+        if (taxLines.Count > 0)
+        {
+            payload["tax_lines"] = taxLines;
+        }
+
+        var meta = BuildMetaDataPayload(order.MetaData);
+        if (meta.Count > 0)
+        {
+            payload["meta_data"] = meta;
+        }
+
+        return payload;
+    }
+
+    private static List<Dictionary<string, object?>> BuildOrderLineItems(
+        IEnumerable<WooOrderLineItem> items,
+        IReadOnlyDictionary<int, int> productMap)
+    {
+        var result = new List<Dictionary<string, object?>>();
+        foreach (var item in items ?? Enumerable.Empty<WooOrderLineItem>())
+        {
+            if (item is null)
+            {
+                continue;
+            }
+
+            var entry = new Dictionary<string, object?>();
+            AddIfValue(entry, "name", item.Name);
+            var mappedProduct = MapId(item.ProductId, productMap);
+            if (mappedProduct.HasValue)
+            {
+                entry["product_id"] = mappedProduct.Value;
+            }
+            var mappedVariation = MapId(item.VariationId, productMap);
+            if (mappedVariation.HasValue)
+            {
+                entry["variation_id"] = mappedVariation.Value;
+            }
+            if (item.Quantity > 0)
+            {
+                entry["quantity"] = item.Quantity;
+            }
+            AddIfValue(entry, "subtotal", item.Subtotal);
+            AddIfValue(entry, "subtotal_tax", item.SubtotalTax);
+            AddIfValue(entry, "total", item.Total);
+            AddIfValue(entry, "total_tax", item.TotalTax);
+            AddIfValue(entry, "price", item.Price);
+            AddIfValue(entry, "sku", item.Sku);
+
+            var meta = BuildMetaDataPayload(item.MetaData);
+            if (meta.Count > 0)
+            {
+                entry["meta_data"] = meta;
+            }
+
+            if (entry.Count > 0)
+            {
+                result.Add(entry);
+            }
+        }
+
+        return result;
+    }
+
+    private static List<Dictionary<string, object?>> BuildOrderCouponLines(
+        IEnumerable<WooOrderCouponLine> coupons,
+        IReadOnlyDictionary<string, int> couponCodeMap)
+    {
+        var result = new List<Dictionary<string, object?>>();
+        foreach (var coupon in coupons ?? Enumerable.Empty<WooOrderCouponLine>())
+        {
+            if (coupon is null)
+            {
+                continue;
+            }
+
+            var entry = new Dictionary<string, object?>();
+            AddIfValue(entry, "code", coupon.Code);
+            AddIfValue(entry, "discount", coupon.Discount);
+            AddIfValue(entry, "discount_tax", coupon.DiscountTax);
+
+            if (!string.IsNullOrWhiteSpace(coupon.Code) && couponCodeMap.TryGetValue(coupon.Code, out var mappedCoupon))
+            {
+                entry["coupon_id"] = mappedCoupon;
+            }
+
+            var meta = BuildMetaDataPayload(coupon.MetaData);
+            if (meta.Count > 0)
+            {
+                entry["meta_data"] = meta;
+            }
+
+            if (entry.Count > 0)
+            {
+                result.Add(entry);
+            }
+        }
+
+        return result;
+    }
+
+    private static List<Dictionary<string, object?>> BuildShippingLines(IEnumerable<WooOrderShippingLine> lines)
+    {
+        var result = new List<Dictionary<string, object?>>();
+        foreach (var line in lines ?? Enumerable.Empty<WooOrderShippingLine>())
+        {
+            if (line is null)
+            {
+                continue;
+            }
+
+            var entry = new Dictionary<string, object?>();
+            AddIfValue(entry, "method_title", line.MethodTitle);
+            AddIfValue(entry, "method_id", line.MethodId);
+            AddIfValue(entry, "total", line.Total);
+            AddIfValue(entry, "total_tax", line.TotalTax);
+
+            var meta = BuildMetaDataPayload(line.MetaData);
+            if (meta.Count > 0)
+            {
+                entry["meta_data"] = meta;
+            }
+
+            if (entry.Count > 0)
+            {
+                result.Add(entry);
+            }
+        }
+
+        return result;
+    }
+
+    private static List<Dictionary<string, object?>> BuildFeeLines(IEnumerable<WooOrderFeeLine> lines)
+    {
+        var result = new List<Dictionary<string, object?>>();
+        foreach (var line in lines ?? Enumerable.Empty<WooOrderFeeLine>())
+        {
+            if (line is null)
+            {
+                continue;
+            }
+
+            var entry = new Dictionary<string, object?>();
+            AddIfValue(entry, "name", line.Name);
+            AddIfValue(entry, "tax_class", line.TaxClass);
+            AddIfValue(entry, "tax_status", line.TaxStatus);
+            AddIfValue(entry, "total", line.Total);
+            AddIfValue(entry, "total_tax", line.TotalTax);
+
+            var meta = BuildMetaDataPayload(line.MetaData);
+            if (meta.Count > 0)
+            {
+                entry["meta_data"] = meta;
+            }
+
+            if (entry.Count > 0)
+            {
+                result.Add(entry);
+            }
+        }
+
+        return result;
+    }
+
+    private static List<Dictionary<string, object?>> BuildTaxLines(IEnumerable<WooOrderTaxLine> lines)
+    {
+        var result = new List<Dictionary<string, object?>>();
+        foreach (var line in lines ?? Enumerable.Empty<WooOrderTaxLine>())
+        {
+            if (line is null)
+            {
+                continue;
+            }
+
+            var entry = new Dictionary<string, object?>();
+            AddIfValue(entry, "rate_code", line.RateCode);
+            AddIfValue(entry, "rate_id", line.RateId);
+            AddIfValue(entry, "label", line.Label);
+            AddIfValue(entry, "compound", line.Compound);
+            AddIfValue(entry, "tax_total", line.TaxTotal);
+            AddIfValue(entry, "shipping_tax_total", line.ShippingTaxTotal);
+
+            var meta = BuildMetaDataPayload(line.MetaData);
+            if (meta.Count > 0)
+            {
+                entry["meta_data"] = meta;
+            }
+
+            if (entry.Count > 0)
+            {
+                result.Add(entry);
+            }
+        }
+
+        return result;
+    }
+
+    private static bool DetermineIsPaid(WooOrder order)
+    {
+        if (!string.IsNullOrWhiteSpace(order.DatePaid) || !string.IsNullOrWhiteSpace(order.DatePaidGmt))
+        {
+            return true;
+        }
+
+        var status = order.Status?.Trim().ToLowerInvariant();
+        return status is "completed" or "processing" or "on-hold";
+    }
+
+    private static List<Dictionary<string, object?>> BuildMetaDataPayload(IEnumerable<StoreMetaData>? metaData)
+    {
+        var result = new List<Dictionary<string, object?>>();
+        if (metaData is null)
+        {
+            return result;
+        }
+
+        foreach (var meta in metaData)
+        {
+            if (meta is null || string.IsNullOrWhiteSpace(meta.Key))
+            {
+                continue;
+            }
+
+            var value = meta.ValueAsString();
+            if (value is null)
+            {
+                continue;
+            }
+
+            result.Add(new Dictionary<string, object?>
+            {
+                ["key"] = meta.Key!,
+                ["value"] = value
+            });
+        }
+
+        return result;
+    }
+
+    private static List<int> MapIds(IEnumerable<int>? source, IReadOnlyDictionary<int, int> map)
+    {
+        var result = new List<int>();
+        if (source is null)
+        {
+            return result;
+        }
+
+        foreach (var id in source)
+        {
+            if (map.TryGetValue(id, out var mapped))
+            {
+                result.Add(mapped);
+            }
+        }
+
+        return result;
+    }
+
+    private static int? MapId(int? sourceId, IReadOnlyDictionary<int, int> map)
+    {
+        if (sourceId is int value && value > 0 && map.TryGetValue(value, out var mapped))
+        {
+            return mapped;
+        }
+
+        return null;
     }
 
     private async Task<List<Dictionary<string, object?>>> BuildImagePayloadAsync(

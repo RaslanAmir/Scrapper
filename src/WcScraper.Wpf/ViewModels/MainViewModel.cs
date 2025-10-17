@@ -351,6 +351,13 @@ public sealed class MainViewModel : INotifyPropertyChanged
             bool attemptedPluginFetch = false;
             bool attemptedThemeFetch = false;
             StoreConfiguration? configuration = null;
+            List<WooCustomer> customers = new();
+            List<WooOrder> orders = new();
+            List<WooCoupon> coupons = new();
+            List<WooSubscription> subscriptions = new();
+            bool attemptedCustomerFetch = false;
+            bool attemptedOrderFetch = false;
+            bool attemptedCouponFetch = false;
 
             if (SelectedPlatform == PlatformMode.WooCommerce)
             {
@@ -460,6 +467,37 @@ public sealed class MainViewModel : INotifyPropertyChanged
                             ? $"Found {themes.Count} themes."
                             : "No themes returned by the authenticated endpoint.");
                     }
+                }
+            }
+
+            if (SelectedPlatform == PlatformMode.WooCommerce)
+            {
+                if (string.IsNullOrWhiteSpace(WordPressUsername) || string.IsNullOrWhiteSpace(WordPressApplicationPassword))
+                {
+                    Append("Skipping customer/coupon/order exports: provide WordPress username and application password.");
+                }
+                else
+                {
+                    attemptedCustomerFetch = true;
+                    Append("Fetching customers…");
+                    customers = await _wooScraper.FetchCustomersAsync(targetUrl, WordPressUsername, WordPressApplicationPassword, logger);
+                    Append(customers.Count > 0
+                        ? $"Found {customers.Count} customers."
+                        : "No customers returned by the authenticated endpoint.");
+
+                    attemptedCouponFetch = true;
+                    Append("Fetching coupons…");
+                    coupons = await _wooScraper.FetchCouponsAsync(targetUrl, WordPressUsername, WordPressApplicationPassword, logger);
+                    Append(coupons.Count > 0
+                        ? $"Found {coupons.Count} coupons."
+                        : "No coupons returned by the authenticated endpoint.");
+
+                    attemptedOrderFetch = true;
+                    Append("Fetching orders…");
+                    orders = await _wooScraper.FetchOrdersAsync(targetUrl, WordPressUsername, WordPressApplicationPassword, logger);
+                    Append(orders.Count > 0
+                        ? $"Found {orders.Count} orders."
+                        : "No orders returned by the authenticated endpoint.");
                 }
             }
 
@@ -695,7 +733,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 }
             }
 
-            SetProvisioningContext(prods, configuration, pluginBundles, themeBundles);
+            SetProvisioningContext(prods, configuration, pluginBundles, themeBundles, customers, coupons, orders, subscriptions);
 
             Append("All done.");
         }
@@ -1003,9 +1041,13 @@ public sealed class MainViewModel : INotifyPropertyChanged
         List<StoreProduct> products,
         StoreConfiguration? configuration,
         List<ExtensionArtifact> pluginBundles,
-        List<ExtensionArtifact> themeBundles)
+        List<ExtensionArtifact> themeBundles,
+        List<WooCustomer> customers,
+        List<WooCoupon> coupons,
+        List<WooOrder> orders,
+        List<WooSubscription> subscriptions)
     {
-        _lastProvisioningContext = new ProvisioningContext(products, configuration, pluginBundles, themeBundles);
+        _lastProvisioningContext = new ProvisioningContext(products, configuration, pluginBundles, themeBundles, customers, coupons, orders, subscriptions);
         OnPropertyChanged(nameof(CanReplicate));
         ReplicateCommand.RaiseCanExecuteChanged();
     }
@@ -1081,7 +1123,15 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 await _wooProvisioningService.UploadThemesAsync(settings, _lastProvisioningContext.ThemeBundles, logger);
             }
 
-            await _wooProvisioningService.ProvisionAsync(settings, _lastProvisioningContext.Products, configuration, logger);
+            await _wooProvisioningService.ProvisionAsync(
+                settings,
+                _lastProvisioningContext.Products,
+                configuration,
+                _lastProvisioningContext.Customers,
+                _lastProvisioningContext.Coupons,
+                _lastProvisioningContext.Orders,
+                subscriptions: _lastProvisioningContext.Subscriptions,
+                progress: logger);
         }
         catch (Exception ex)
         {
@@ -1099,18 +1149,30 @@ public sealed class MainViewModel : INotifyPropertyChanged
             List<StoreProduct> products,
             StoreConfiguration? configuration,
             List<ExtensionArtifact> pluginBundles,
-            List<ExtensionArtifact> themeBundles)
+            List<ExtensionArtifact> themeBundles,
+            List<WooCustomer> customers,
+            List<WooCoupon> coupons,
+            List<WooOrder> orders,
+            List<WooSubscription> subscriptions)
         {
             Products = products;
             Configuration = configuration;
             PluginBundles = pluginBundles;
             ThemeBundles = themeBundles;
+            Customers = customers;
+            Coupons = coupons;
+            Orders = orders;
+            Subscriptions = subscriptions;
         }
 
         public List<StoreProduct> Products { get; }
         public StoreConfiguration? Configuration { get; }
         public List<ExtensionArtifact> PluginBundles { get; }
         public List<ExtensionArtifact> ThemeBundles { get; }
+        public List<WooCustomer> Customers { get; }
+        public List<WooCoupon> Coupons { get; }
+        public List<WooOrder> Orders { get; }
+        public List<WooSubscription> Subscriptions { get; }
     }
 
     private ShopifySettings BuildShopifySettings(string baseUrl)
@@ -1209,3 +1271,41 @@ public enum PlatformMode
     WooCommerce,
     Shopify
 }
+            if (SelectedPlatform == PlatformMode.WooCommerce)
+            {
+                if (customers.Count > 0)
+                {
+                    var path = Path.Combine(storeOutputFolder, $"{storeId}_{timestamp}_customers.json");
+                    var json = JsonSerializer.Serialize(customers, _artifactWriteOptions);
+                    await File.WriteAllTextAsync(path, json, Encoding.UTF8);
+                    Append($"Wrote {path}");
+                }
+                else if (attemptedCustomerFetch)
+                {
+                    Append("Customers export skipped (no customer data).");
+                }
+
+                if (coupons.Count > 0)
+                {
+                    var path = Path.Combine(storeOutputFolder, $"{storeId}_{timestamp}_coupons.json");
+                    var json = JsonSerializer.Serialize(coupons, _artifactWriteOptions);
+                    await File.WriteAllTextAsync(path, json, Encoding.UTF8);
+                    Append($"Wrote {path}");
+                }
+                else if (attemptedCouponFetch)
+                {
+                    Append("Coupons export skipped (no coupon data).");
+                }
+
+                if (orders.Count > 0)
+                {
+                    var path = Path.Combine(storeOutputFolder, $"{storeId}_{timestamp}_orders.json");
+                    var json = JsonSerializer.Serialize(orders, _artifactWriteOptions);
+                    await File.WriteAllTextAsync(path, json, Encoding.UTF8);
+                    Append($"Wrote {path}");
+                }
+                else if (attemptedOrderFetch)
+                {
+                    Append("Orders export skipped (no order data).");
+                }
+            }
