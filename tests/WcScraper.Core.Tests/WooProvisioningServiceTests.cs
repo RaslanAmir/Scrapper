@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
@@ -200,9 +201,58 @@ public class WooProvisioningServiceTests
         }
     }
 
+    [Fact]
+    public async Task ProvisionAsync_LocalImageUploads_UsesWordPressCredentials()
+    {
+        var handler = new RecordingHandler();
+        using var httpClient = new HttpClient(handler);
+        var service = new WooProvisioningService(httpClient);
+        var settings = new WooProvisioningSettings(
+            "https://target.example",
+            "ck",
+            "cs",
+            wordpressUsername: "wpuser",
+            wordpressApplicationPassword: "app-pass");
+
+        var tempFile = Path.Combine(Path.GetTempPath(), Guid.NewGuid() + ".jpg");
+        await File.WriteAllTextAsync(tempFile, "test image content");
+
+        try
+        {
+            var product = new StoreProduct
+            {
+                Id = 777,
+                Name = "Local Image Product",
+                Slug = "local-image-product",
+                Sku = "LOCAL-IMAGE-SKU"
+            };
+            product.LocalImageFilePaths.Add(tempFile);
+
+            await service.ProvisionAsync(settings, new[] { product });
+
+            var mediaCall = handler.Calls.Single(call => call.Method == HttpMethod.Post && call.Path == "/wp-json/wp/v2/media");
+            var expectedAuth = "Basic " + Convert.ToBase64String(Encoding.UTF8.GetBytes("wpuser:app-pass"));
+            Assert.Equal(expectedAuth, mediaCall.Authorization);
+
+            var productCall = handler.Calls.Single(call => call.Method == HttpMethod.Post && call.Path == "/wp-json/wc/v3/products");
+            Assert.NotNull(productCall.Content);
+            using var doc = JsonDocument.Parse(productCall.Content!);
+            var images = doc.RootElement.GetProperty("images").EnumerateArray().ToList();
+            Assert.Single(images);
+            Assert.Equal(301, images[0].GetProperty("id").GetInt32());
+        }
+        finally
+        {
+            if (File.Exists(tempFile))
+            {
+                File.Delete(tempFile);
+            }
+        }
+    }
+
     private sealed class RecordingHandler : HttpMessageHandler
     {
-        public List<(HttpMethod Method, string Path, string Query, string? Content)> Calls { get; } = new();
+        public List<(HttpMethod Method, string Path, string Query, string? Content, string? Authorization)> Calls { get; } = new();
 
         private readonly Dictionary<string, int> _createdCategoryIds = new(StringComparer.OrdinalIgnoreCase);
         private int _nextCategoryId = 500;
@@ -212,7 +262,8 @@ public class WooProvisioningServiceTests
             var path = request.RequestUri!.AbsolutePath;
             var query = request.RequestUri!.Query;
             var content = request.Content is null ? null : request.Content.ReadAsStringAsync(cancellationToken).GetAwaiter().GetResult();
-            Calls.Add((request.Method, path, query, content));
+            var authorization = request.Headers.Authorization?.ToString();
+            Calls.Add((request.Method, path, query, content, authorization));
 
             if (request.Method == HttpMethod.Get && path == "/wp-json/wc/v3/products" && query.Contains("sku=PARENT-SKU", StringComparison.Ordinal))
             {
@@ -230,6 +281,16 @@ public class WooProvisioningServiceTests
             }
 
             if (request.Method == HttpMethod.Get && path == "/wp-json/wc/v3/products" && query.Contains("slug=child-product", StringComparison.Ordinal))
+            {
+                return Task.FromResult(JsonResponse("[]"));
+            }
+
+            if (request.Method == HttpMethod.Get && path == "/wp-json/wc/v3/products" && query.Contains("sku=LOCAL-IMAGE-SKU", StringComparison.Ordinal))
+            {
+                return Task.FromResult(JsonResponse("[]"));
+            }
+
+            if (request.Method == HttpMethod.Get && path == "/wp-json/wc/v3/products" && query.Contains("slug=local-image-product", StringComparison.Ordinal))
             {
                 return Task.FromResult(JsonResponse("[]"));
             }
@@ -276,6 +337,11 @@ public class WooProvisioningServiceTests
                 var id = ++_nextCategoryId;
                 _createdCategoryIds[slug!] = id;
                 return Task.FromResult(JsonResponse($"{{\"id\":{id},\"slug\":\"{slug}\",\"name\":\"{slug}\"}}"));
+            }
+
+            if (request.Method == HttpMethod.Post && path == "/wp-json/wp/v2/media")
+            {
+                return Task.FromResult(JsonResponse("{\"id\":301}"));
             }
 
             if (request.Method == HttpMethod.Post && path == "/wp-json/wc/v3/products")
