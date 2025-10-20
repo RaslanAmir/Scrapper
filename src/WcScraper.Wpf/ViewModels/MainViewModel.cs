@@ -3,12 +3,14 @@ using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Net.Http;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Threading.Tasks;
 using WcScraper.Core;
 using WcScraper.Core.Exporters;
@@ -952,28 +954,68 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
             try
             {
+                plugin.OptionData.Clear();
                 plugin.OptionKeys.Clear();
+                plugin.AssetManifest = null;
                 plugin.AssetPaths.Clear();
 
                 var options = await _wooScraper.FetchPluginOptionsAsync(baseUrl, username, applicationPassword, plugin, logger, settingsSnapshot);
                 if (options.Count > 0)
                 {
-                    var optionsPath = Path.Combine(bundleFolder, "options.json");
-                    var json = JsonSerializer.Serialize(options, _artifactWriteOptions);
-                    await File.WriteAllTextAsync(optionsPath, json, Encoding.UTF8);
-                    var keys = options.Keys.OrderBy(k => k, StringComparer.OrdinalIgnoreCase).ToList();
-                    plugin.OptionKeys.AddRange(keys);
-                    logger.Report($"Captured {keys.Count} options for plugin {plugin.Name ?? slug ?? plugin.PluginFile ?? folderName}.");
+                    foreach (var kvp in options)
+                    {
+                        var node = TryCloneJsonNode(kvp.Value);
+                        if (node is not null || kvp.Value.ValueKind == JsonValueKind.Null)
+                        {
+                            plugin.OptionData[kvp.Key] = node;
+                        }
+                    }
+
+                    if (plugin.OptionData.Count > 0)
+                    {
+                        var optionsPath = Path.Combine(bundleFolder, "options.json");
+                        var json = JsonSerializer.Serialize(plugin.OptionData, _artifactWriteOptions);
+                        await File.WriteAllTextAsync(optionsPath, json, Encoding.UTF8);
+                        var keys = plugin.OptionData.Keys.OrderBy(k => k, StringComparer.OrdinalIgnoreCase).ToList();
+                        plugin.OptionKeys.AddRange(keys);
+                        logger.Report($"Captured {keys.Count} options for plugin {plugin.Name ?? slug ?? plugin.PluginFile ?? folderName}.");
+                    }
                 }
 
                 var manifest = await _wooScraper.FetchPluginAssetManifestAsync(baseUrl, username, applicationPassword, plugin, logger);
-                if (manifest.Count > 0)
+                if (manifest.Paths.Count > 0 || !string.IsNullOrWhiteSpace(manifest.ManifestJson))
                 {
-                    var manifestPath = Path.Combine(bundleFolder, "manifest.json");
-                    var manifestJson = JsonSerializer.Serialize(manifest, _artifactWriteOptions);
-                    await File.WriteAllTextAsync(manifestPath, manifestJson, Encoding.UTF8);
-                    plugin.AssetPaths.AddRange(manifest);
-                    logger.Report($"Captured {manifest.Count} asset references for plugin {plugin.Name ?? slug ?? plugin.PluginFile ?? folderName}.");
+                    if (manifest.Paths.Count > 0)
+                    {
+                        plugin.AssetPaths.AddRange(manifest.Paths);
+                    }
+
+                    if (!string.IsNullOrWhiteSpace(manifest.ManifestJson))
+                    {
+                        plugin.AssetManifest = TryParseJsonNode(manifest.ManifestJson);
+                        if (plugin.AssetManifest is not null)
+                        {
+                            var manifestPath = Path.Combine(bundleFolder, "manifest.json");
+                            var manifestJson = plugin.AssetManifest.ToJsonString(_artifactWriteOptions);
+                            await File.WriteAllTextAsync(manifestPath, manifestJson, Encoding.UTF8);
+                        }
+                    }
+
+                    if (plugin.AssetPaths.Count > 0)
+                    {
+                        plugin.AssetPaths.Clear();
+                        plugin.AssetPaths.AddRange(manifest.Paths.Distinct(StringComparer.OrdinalIgnoreCase));
+                    }
+
+                    var assetCount = plugin.AssetPaths.Count;
+                    if (plugin.AssetManifest is not null)
+                    {
+                        logger.Report($"Captured asset manifest for plugin {plugin.Name ?? slug ?? plugin.PluginFile ?? folderName} ({assetCount} references).");
+                    }
+                    else if (assetCount > 0)
+                    {
+                        logger.Report($"Captured {assetCount} asset references for plugin {plugin.Name ?? slug ?? plugin.PluginFile ?? folderName}.");
+                    }
                 }
 
                 var archivePath = Path.Combine(bundleFolder, "archive.zip");
@@ -1016,28 +1058,68 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
             try
             {
+                theme.OptionData.Clear();
                 theme.OptionKeys.Clear();
+                theme.AssetManifest = null;
                 theme.AssetPaths.Clear();
 
                 var options = await _wooScraper.FetchThemeOptionsAsync(baseUrl, username, applicationPassword, theme, logger, settingsSnapshot);
                 if (options.Count > 0)
                 {
-                    var optionsPath = Path.Combine(bundleFolder, "options.json");
-                    var json = JsonSerializer.Serialize(options, _artifactWriteOptions);
-                    await File.WriteAllTextAsync(optionsPath, json, Encoding.UTF8);
-                    var keys = options.Keys.OrderBy(k => k, StringComparer.OrdinalIgnoreCase).ToList();
-                    theme.OptionKeys.AddRange(keys);
-                    logger.Report($"Captured {keys.Count} options for theme {theme.Name ?? slug ?? folderName}.");
+                    foreach (var kvp in options)
+                    {
+                        var node = TryCloneJsonNode(kvp.Value);
+                        if (node is not null || kvp.Value.ValueKind == JsonValueKind.Null)
+                        {
+                            theme.OptionData[kvp.Key] = node;
+                        }
+                    }
+
+                    if (theme.OptionData.Count > 0)
+                    {
+                        var optionsPath = Path.Combine(bundleFolder, "options.json");
+                        var json = JsonSerializer.Serialize(theme.OptionData, _artifactWriteOptions);
+                        await File.WriteAllTextAsync(optionsPath, json, Encoding.UTF8);
+                        var keys = theme.OptionData.Keys.OrderBy(k => k, StringComparer.OrdinalIgnoreCase).ToList();
+                        theme.OptionKeys.AddRange(keys);
+                        logger.Report($"Captured {keys.Count} options for theme {theme.Name ?? slug ?? folderName}.");
+                    }
                 }
 
                 var manifest = await _wooScraper.FetchThemeAssetManifestAsync(baseUrl, username, applicationPassword, theme, logger);
-                if (manifest.Count > 0)
+                if (manifest.Paths.Count > 0 || !string.IsNullOrWhiteSpace(manifest.ManifestJson))
                 {
-                    var manifestPath = Path.Combine(bundleFolder, "manifest.json");
-                    var manifestJson = JsonSerializer.Serialize(manifest, _artifactWriteOptions);
-                    await File.WriteAllTextAsync(manifestPath, manifestJson, Encoding.UTF8);
-                    theme.AssetPaths.AddRange(manifest);
-                    logger.Report($"Captured {manifest.Count} asset references for theme {theme.Name ?? slug ?? folderName}.");
+                    if (manifest.Paths.Count > 0)
+                    {
+                        theme.AssetPaths.AddRange(manifest.Paths);
+                    }
+
+                    if (!string.IsNullOrWhiteSpace(manifest.ManifestJson))
+                    {
+                        theme.AssetManifest = TryParseJsonNode(manifest.ManifestJson);
+                        if (theme.AssetManifest is not null)
+                        {
+                            var manifestPath = Path.Combine(bundleFolder, "manifest.json");
+                            var manifestJson = theme.AssetManifest.ToJsonString(_artifactWriteOptions);
+                            await File.WriteAllTextAsync(manifestPath, manifestJson, Encoding.UTF8);
+                        }
+                    }
+
+                    if (theme.AssetPaths.Count > 0)
+                    {
+                        theme.AssetPaths.Clear();
+                        theme.AssetPaths.AddRange(manifest.Paths.Distinct(StringComparer.OrdinalIgnoreCase));
+                    }
+
+                    var assetCount = theme.AssetPaths.Count;
+                    if (theme.AssetManifest is not null)
+                    {
+                        logger.Report($"Captured asset manifest for theme {theme.Name ?? slug ?? folderName} ({assetCount} references).");
+                    }
+                    else if (assetCount > 0)
+                    {
+                        logger.Report($"Captured {assetCount} asset references for theme {theme.Name ?? slug ?? folderName}.");
+                    }
                 }
 
                 var archivePath = Path.Combine(bundleFolder, "archive.zip");
@@ -1274,6 +1356,47 @@ public sealed class MainViewModel : INotifyPropertyChanged
             .ToArray();
 
         return Path.Combine(folderParts.Append($"{baseName}{extension}").ToArray());
+    }
+
+    private static JsonNode? TryCloneJsonNode(JsonElement element)
+    {
+        try
+        {
+            return JsonNode.Parse(element.GetRawText());
+        }
+        catch (JsonException)
+        {
+            return element.ValueKind switch
+            {
+                JsonValueKind.Null => JsonValue.Create<string?>(null),
+                JsonValueKind.String => JsonValue.Create(element.GetString()),
+                JsonValueKind.True => JsonValue.Create(true),
+                JsonValueKind.False => JsonValue.Create(false),
+                JsonValueKind.Number => element.TryGetInt64(out var l)
+                    ? JsonValue.Create(l)
+                    : double.TryParse(element.GetRawText(), NumberStyles.Float, CultureInfo.InvariantCulture, out var dbl)
+                        ? JsonValue.Create(dbl)
+                        : JsonValue.Create(element.GetRawText()),
+                _ => null
+            };
+        }
+    }
+
+    private static JsonNode? TryParseJsonNode(string json)
+    {
+        if (string.IsNullOrWhiteSpace(json))
+        {
+            return null;
+        }
+
+        try
+        {
+            return JsonNode.Parse(json);
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
     }
 
     private static string NormalizeRelativePath(string path)

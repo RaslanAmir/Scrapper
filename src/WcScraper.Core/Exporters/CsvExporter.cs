@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text;
+using System.Text.Json;
 
 namespace WcScraper.Core.Exporters;
 
@@ -43,7 +44,9 @@ public static class CsvExporter
                 ["auto_update"] = p.AutoUpdate,
                 ["update_available_version"] = p.Update?.NewVersion,
                 ["update_package"] = p.Update?.Package,
+                ["option_data"] = p.OptionData.Count > 0 ? JsonSerializer.Serialize(p.OptionData) : null,
                 ["option_keys"] = p.OptionKeys.Count > 0 ? string.Join(";", p.OptionKeys) : null,
+                ["asset_manifest"] = p.AssetManifest is not null ? p.AssetManifest.ToJsonString() : null,
                 ["asset_paths"] = p.AssetPaths.Count > 0 ? string.Join(";", p.AssetPaths) : null
             })
             .ToList();
@@ -66,7 +69,9 @@ public static class CsvExporter
                 ["auto_update"] = t.AutoUpdate,
                 ["update_available_version"] = t.Update?.NewVersion,
                 ["update_package"] = t.Update?.Package,
+                ["option_data"] = t.OptionData.Count > 0 ? JsonSerializer.Serialize(t.OptionData) : null,
                 ["option_keys"] = t.OptionKeys.Count > 0 ? string.Join(";", t.OptionKeys) : null,
+                ["asset_manifest"] = t.AssetManifest is not null ? t.AssetManifest.ToJsonString() : null,
                 ["asset_paths"] = t.AssetPaths.Count > 0 ? string.Join(";", t.AssetPaths) : null
             })
             .ToList();
