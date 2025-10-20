@@ -2938,14 +2938,14 @@ public sealed class WooScraper : IDisposable
 
         var results = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-        void Harvest(JsonElement node)
+        void Harvest(JsonElement node, bool allowString)
         {
             switch (node.ValueKind)
             {
                 case JsonValueKind.String:
                 {
                     var value = node.GetString();
-                    if (!string.IsNullOrWhiteSpace(value))
+                    if (allowString && !string.IsNullOrWhiteSpace(value) && LooksLikePath(value))
                     {
                         results.Add(value);
                     }
@@ -2955,7 +2955,7 @@ public sealed class WooScraper : IDisposable
                 {
                     foreach (var child in node.EnumerateArray())
                     {
-                        Harvest(child);
+                        Harvest(child, allowString);
                     }
                     break;
                 }
@@ -2965,11 +2965,15 @@ public sealed class WooScraper : IDisposable
                     {
                         if (IsPathLikeProperty(property.Name))
                         {
-                            Harvest(property.Value);
+                            Harvest(property.Value, true);
                         }
-                        else if (property.Value.ValueKind == JsonValueKind.Array || property.Value.ValueKind == JsonValueKind.Object)
+                        else if (property.Value.ValueKind == JsonValueKind.Object)
                         {
-                            Harvest(property.Value);
+                            Harvest(property.Value, allowString);
+                        }
+                        else if (property.Value.ValueKind == JsonValueKind.Array)
+                        {
+                            Harvest(property.Value, false);
                         }
                     }
                     break;
@@ -2977,7 +2981,7 @@ public sealed class WooScraper : IDisposable
             }
         }
 
-        Harvest(element);
+        Harvest(element, true);
         return results.ToList();
     }
 
@@ -2991,6 +2995,35 @@ public sealed class WooScraper : IDisposable
                || name.Equals("src", StringComparison.OrdinalIgnoreCase)
                || name.Equals("relative_path", StringComparison.OrdinalIgnoreCase)
                || name.Equals("url", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool LooksLikePath(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return false;
+        }
+
+        if (value.Contains('/') || value.Contains('\\'))
+        {
+            return true;
+        }
+
+        var extensions = new[]
+        {
+            ".js", ".mjs", ".cjs", ".css", ".json", ".php", ".html", ".htm", ".png", ".jpg", ".jpeg", ".gif",
+            ".svg", ".webp", ".ico", ".map", ".ttf", ".otf", ".woff", ".woff2"
+        };
+
+        foreach (var extension in extensions)
+        {
+            if (value.EndsWith(extension, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private async Task<List<InstalledPlugin>> FetchPluginsViaAdminAsync(
