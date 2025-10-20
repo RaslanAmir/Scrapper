@@ -250,6 +250,120 @@ public class WooProvisioningServiceTests
         }
     }
 
+    [Fact]
+    public async Task ProvisionAsync_PageWithoutMappedAuthor_DoesNotSendAuthorField()
+    {
+        var handler = new RecordingHandler();
+        using var httpClient = new HttpClient(handler);
+        var service = new WooProvisioningService(httpClient);
+        var settings = new WooProvisioningSettings(
+            "https://target.example",
+            "ck",
+            "cs",
+            wordpressUsername: "wpuser",
+            wordpressApplicationPassword: "app-pass");
+
+        var page = new WordPressPage
+        {
+            Id = 10,
+            Title = new WordPressRenderedText { Rendered = "Sample Page" },
+            Content = new WordPressRenderedText { Rendered = "<p>Hello</p>" },
+            Author = 123
+        };
+
+        var siteContent = new WordPressSiteContent
+        {
+            Pages = { page }
+        };
+
+        await service.ProvisionAsync(
+            settings,
+            Array.Empty<StoreProduct>(),
+            siteContent: siteContent);
+
+        var pageCall = handler.Calls.Single(call => call.Method == HttpMethod.Post && call.Path == "/wp-json/wp/v2/pages");
+        Assert.NotNull(pageCall.Content);
+        using var doc = JsonDocument.Parse(pageCall.Content!);
+        Assert.False(doc.RootElement.TryGetProperty("author", out _));
+    }
+
+    [Fact]
+    public async Task ProvisionAsync_PostWithoutMappedAuthor_DoesNotSendAuthorField()
+    {
+        var handler = new RecordingHandler();
+        using var httpClient = new HttpClient(handler);
+        var service = new WooProvisioningService(httpClient);
+        var settings = new WooProvisioningSettings(
+            "https://target.example",
+            "ck",
+            "cs",
+            wordpressUsername: "wpuser",
+            wordpressApplicationPassword: "app-pass");
+
+        var post = new WordPressPost
+        {
+            Id = 20,
+            Title = new WordPressRenderedText { Rendered = "Sample Post" },
+            Content = new WordPressRenderedText { Rendered = "<p>World</p>" },
+            Author = 456
+        };
+
+        var siteContent = new WordPressSiteContent
+        {
+            Posts = { post }
+        };
+
+        await service.ProvisionAsync(
+            settings,
+            Array.Empty<StoreProduct>(),
+            siteContent: siteContent);
+
+        var postCall = handler.Calls.Single(call => call.Method == HttpMethod.Post && call.Path == "/wp-json/wp/v2/posts");
+        Assert.NotNull(postCall.Content);
+        using var doc = JsonDocument.Parse(postCall.Content!);
+        Assert.False(doc.RootElement.TryGetProperty("author", out _));
+    }
+
+    [Fact]
+    public async Task ProvisionAsync_PageWithMappedAuthor_UsesMappedAuthor()
+    {
+        var handler = new RecordingHandler();
+        using var httpClient = new HttpClient(handler);
+        var service = new WooProvisioningService(httpClient);
+        var settings = new WooProvisioningSettings(
+            "https://target.example",
+            "ck",
+            "cs",
+            wordpressUsername: "wpuser",
+            wordpressApplicationPassword: "app-pass");
+
+        var page = new WordPressPage
+        {
+            Id = 11,
+            Title = new WordPressRenderedText { Rendered = "Mapped Page" },
+            Content = new WordPressRenderedText { Rendered = "<p>Mapped</p>" },
+            Author = 321
+        };
+
+        var siteContent = new WordPressSiteContent
+        {
+            Pages = { page }
+        };
+
+        var authorMap = new Dictionary<int, int> { [321] = 654 };
+
+        await service.ProvisionAsync(
+            settings,
+            Array.Empty<StoreProduct>(),
+            siteContent: siteContent,
+            authorIdMap: authorMap);
+
+        var pageCall = handler.Calls.Single(call => call.Method == HttpMethod.Post && call.Path == "/wp-json/wp/v2/pages");
+        Assert.NotNull(pageCall.Content);
+        using var doc = JsonDocument.Parse(pageCall.Content!);
+        Assert.Equal(654, doc.RootElement.GetProperty("author").GetInt32());
+    }
+
     private sealed class RecordingHandler : HttpMessageHandler
     {
         public List<(HttpMethod Method, string Path, string Query, string? Content, string? Authorization)> Calls { get; } = new();
@@ -347,6 +461,26 @@ public class WooProvisioningServiceTests
             if (request.Method == HttpMethod.Post && path == "/wp-json/wc/v3/products")
             {
                 return Task.FromResult(JsonResponse("{\"id\":200,\"sku\":\"PARENT-SKU\",\"slug\":\"parent-product\"}"));
+            }
+
+            if (request.Method == HttpMethod.Get && path == "/wp-json/wp/v2/pages")
+            {
+                return Task.FromResult(JsonResponse("[]"));
+            }
+
+            if (request.Method == HttpMethod.Post && path == "/wp-json/wp/v2/pages")
+            {
+                return Task.FromResult(JsonResponse("{\"id\":601}"));
+            }
+
+            if (request.Method == HttpMethod.Get && path == "/wp-json/wp/v2/posts")
+            {
+                return Task.FromResult(JsonResponse("[]"));
+            }
+
+            if (request.Method == HttpMethod.Post && path == "/wp-json/wp/v2/posts")
+            {
+                return Task.FromResult(JsonResponse("{\"id\":701}"));
             }
 
             if (request.Method == HttpMethod.Get && path == "/wp-json/wc/v3/products/200/variations")

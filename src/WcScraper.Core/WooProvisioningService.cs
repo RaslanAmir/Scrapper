@@ -105,6 +105,7 @@ public sealed class WooProvisioningService : IDisposable
         IEnumerable<WooOrder>? orders = null,
         IEnumerable<WooSubscription>? subscriptions = null,
         WordPressSiteContent? siteContent = null,
+        IReadOnlyDictionary<int, int>? authorIdMap = null,
         IProgress<string>? progress = null,
         CancellationToken cancellationToken = default)
     {
@@ -253,8 +254,22 @@ public sealed class WooProvisioningService : IDisposable
         if (siteContent is not null)
         {
             mediaResult = await EnsureMediaLibraryAsync(baseUrl, settings, siteContent.MediaLibrary, siteContent.MediaRootDirectory, progress, cancellationToken);
-            pageIdMap = await EnsurePagesAsync(baseUrl, settings, siteContent.Pages, mediaResult, progress, cancellationToken);
-            postIdMap = await EnsurePostsAsync(baseUrl, settings, siteContent.Posts, mediaResult, progress, cancellationToken);
+            pageIdMap = await EnsurePagesAsync(
+                baseUrl,
+                settings,
+                siteContent.Pages,
+                mediaResult,
+                authorIdMap,
+                progress,
+                cancellationToken);
+            postIdMap = await EnsurePostsAsync(
+                baseUrl,
+                settings,
+                siteContent.Posts,
+                mediaResult,
+                authorIdMap,
+                progress,
+                cancellationToken);
             await EnsureMenusAsync(baseUrl, settings, siteContent.Menus, pageIdMap, postIdMap, mediaResult, progress, cancellationToken);
             await EnsureWidgetsAsync(baseUrl, settings, siteContent.Widgets, progress, cancellationToken);
         }
@@ -686,6 +701,7 @@ public sealed class WooProvisioningService : IDisposable
         WooProvisioningSettings settings,
         IReadOnlyList<WordPressPage>? pages,
         MediaProvisioningResult? mediaResult,
+        IReadOnlyDictionary<int, int>? authorIdMap,
         IProgress<string>? progress,
         CancellationToken cancellationToken)
     {
@@ -709,7 +725,16 @@ public sealed class WooProvisioningService : IDisposable
         foreach (var page in ordered)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var ensuredId = await EnsureContentItemAsync(baseUrl, settings, page, "pages", mediaResult, map, progress, cancellationToken);
+            var ensuredId = await EnsureContentItemAsync(
+                baseUrl,
+                settings,
+                page,
+                "pages",
+                mediaResult,
+                map,
+                authorIdMap,
+                progress,
+                cancellationToken);
             if (page.Id > 0 && ensuredId > 0)
             {
                 map[page.Id] = ensuredId;
@@ -724,6 +749,7 @@ public sealed class WooProvisioningService : IDisposable
         WooProvisioningSettings settings,
         IReadOnlyList<WordPressPost>? posts,
         MediaProvisioningResult? mediaResult,
+        IReadOnlyDictionary<int, int>? authorIdMap,
         IProgress<string>? progress,
         CancellationToken cancellationToken)
     {
@@ -742,7 +768,16 @@ public sealed class WooProvisioningService : IDisposable
         foreach (var post in posts)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var ensuredId = await EnsureContentItemAsync(baseUrl, settings, post, "posts", mediaResult, null, progress, cancellationToken);
+            var ensuredId = await EnsureContentItemAsync(
+                baseUrl,
+                settings,
+                post,
+                "posts",
+                mediaResult,
+                null,
+                authorIdMap,
+                progress,
+                cancellationToken);
             if (post.Id > 0 && ensuredId > 0)
             {
                 map[post.Id] = ensuredId;
@@ -837,6 +872,7 @@ public sealed class WooProvisioningService : IDisposable
         string resource,
         MediaProvisioningResult? mediaResult,
         IReadOnlyDictionary<int, int>? parentIdMap,
+        IReadOnlyDictionary<int, int>? authorIdMap,
         IProgress<string>? progress,
         CancellationToken cancellationToken) where T : WordPressContentBase
     {
@@ -860,9 +896,15 @@ public sealed class WooProvisioningService : IDisposable
             ["status"] = item.Status ?? "publish",
             ["slug"] = slug,
             ["excerpt"] = excerptHtml,
-            ["template"] = item.Template,
-            ["author"] = item.Author
+            ["template"] = item.Template
         };
+
+        if (item.Author.HasValue
+            && authorIdMap is not null
+            && authorIdMap.TryGetValue(item.Author.Value, out var mappedAuthor))
+        {
+            payload["author"] = mappedAuthor;
+        }
 
         if (item.Date.HasValue)
         {
