@@ -2498,13 +2498,17 @@ public sealed class WooProvisioningService : IDisposable
             payload["excluded_product_ids"] = excluded;
         }
 
-        var productCategories = MapIds(coupon.ProductCategories, categoryMap);
+        var productCategories = categoryMap.Count == 0
+            ? coupon.ProductCategories.ToList()
+            : MapIds(coupon.ProductCategories, categoryMap);
         if (productCategories.Count > 0)
         {
             payload["product_categories"] = productCategories;
         }
 
-        var excludedCategories = MapIds(coupon.ExcludedProductCategories, categoryMap);
+        var excludedCategories = categoryMap.Count == 0
+            ? coupon.ExcludedProductCategories.ToList()
+            : MapIds(coupon.ExcludedProductCategories, categoryMap);
         if (excludedCategories.Count > 0)
         {
             payload["excluded_product_categories"] = excludedCategories;
