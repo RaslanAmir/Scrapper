@@ -360,6 +360,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
             bool attemptedCustomerFetch = false;
             bool attemptedOrderFetch = false;
             bool attemptedCouponFetch = false;
+            bool attemptedSubscriptionFetch = false;
             List<WordPressPage> pages = new();
             List<WordPressPost> posts = new();
             List<WordPressMediaItem> mediaLibrary = new();
@@ -507,6 +508,13 @@ public sealed class MainViewModel : INotifyPropertyChanged
                     Append(orders.Count > 0
                         ? $"Found {orders.Count} orders."
                         : "No orders returned by the authenticated endpoint.");
+
+                    attemptedSubscriptionFetch = true;
+                    Append("Fetching subscriptions…");
+                    subscriptions = await _wooScraper.FetchSubscriptionsAsync(targetUrl, WordPressUsername, WordPressApplicationPassword, logger);
+                    Append(subscriptions.Count > 0
+                        ? $"Found {subscriptions.Count} subscriptions."
+                        : "No subscriptions returned by the authenticated endpoint.");
                 }
             }
 
@@ -1428,7 +1436,22 @@ public sealed class MainViewModel : INotifyPropertyChanged
         var productSnapshots = CloneProductsWithMedia(products);
         var variationSnapshots = CloneProductsWithMedia(variations);
         var variableProducts = BuildVariableProducts(productSnapshots, variationSnapshots);
-        _lastProvisioningContext = new ProvisioningContext(productSnapshots, variationSnapshots, variableProducts, configuration, pluginBundles, themeBundles, customers, coupons, orders, subscriptions, siteContent);
+        var customerSnapshots = CloneRecords(customers);
+        var couponSnapshots = CloneRecords(coupons);
+        var orderSnapshots = CloneRecords(orders);
+        var subscriptionSnapshots = CloneRecords(subscriptions);
+        _lastProvisioningContext = new ProvisioningContext(
+            productSnapshots,
+            variationSnapshots,
+            variableProducts,
+            configuration,
+            pluginBundles,
+            themeBundles,
+            customerSnapshots,
+            couponSnapshots,
+            orderSnapshots,
+            subscriptionSnapshots,
+            siteContent);
         OnPropertyChanged(nameof(CanReplicate));
         ReplicateCommand.RaiseCanExecuteChanged();
     }
@@ -1469,6 +1492,19 @@ public sealed class MainViewModel : INotifyPropertyChanged
         clone.LocalImageFilePaths.Clear();
         clone.LocalImageFilePaths.AddRange(product.LocalImageFilePaths);
         return clone;
+    }
+
+    private static List<T> CloneRecords<T>(IEnumerable<T> source) where T : class
+    {
+        var list = source?.Where(item => item is not null).Select(item => item!).ToList() ?? new List<T>();
+        if (list.Count == 0)
+        {
+            return new List<T>();
+        }
+
+        var json = JsonSerializer.Serialize(list);
+        var clones = JsonSerializer.Deserialize<List<T>>(json) ?? new List<T>();
+        return clones;
     }
 
     private static List<ProvisioningVariableProduct> BuildVariableProducts(
@@ -1786,5 +1822,17 @@ public enum PlatformMode
                 else if (attemptedOrderFetch)
                 {
                     Append("Orders export skipped (no order data).");
+                }
+
+                if (subscriptions.Count > 0)
+                {
+                    var path = Path.Combine(storeOutputFolder, $"{storeId}_{timestamp}_subscriptions.json");
+                    var json = JsonSerializer.Serialize(subscriptions, _artifactWriteOptions);
+                    await File.WriteAllTextAsync(path, json, Encoding.UTF8);
+                    Append($"Wrote {path}");
+                }
+                else if (attemptedSubscriptionFetch)
+                {
+                    Append("Subscriptions export skipped (no subscription data).");
                 }
             }

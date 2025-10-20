@@ -537,16 +537,28 @@ public sealed class WooSubscription
     [JsonPropertyName("id")] public int Id { get; set; }
     [JsonPropertyName("number")] public string? Number { get; set; }
     [JsonPropertyName("status")] public string? Status { get; set; }
+    [JsonPropertyName("currency")] public string? Currency { get; set; }
     [JsonPropertyName("customer_id")] public int? CustomerId { get; set; }
+    [JsonPropertyName("customer_note")] public string? CustomerNote { get; set; }
+    [JsonPropertyName("order_key")] public string? OrderKey { get; set; }
     [JsonPropertyName("billing")] public WooAddress? Billing { get; set; }
     [JsonPropertyName("shipping")] public WooAddress? Shipping { get; set; }
     [JsonPropertyName("payment_method")] public string? PaymentMethod { get; set; }
     [JsonPropertyName("payment_method_title")] public string? PaymentMethodTitle { get; set; }
+    [JsonPropertyName("billing_period")] public string? BillingPeriod { get; set; }
+    [JsonPropertyName("billing_interval")] public int? BillingInterval { get; set; }
     [JsonPropertyName("start_date")] public string? StartDate { get; set; }
     [JsonPropertyName("trial_end_date")] public string? TrialEndDate { get; set; }
     [JsonPropertyName("next_payment_date")] public string? NextPaymentDate { get; set; }
     [JsonPropertyName("end_date")] public string? EndDate { get; set; }
+    [JsonPropertyName("date_created")] public string? DateCreated { get; set; }
+    [JsonPropertyName("date_created_gmt")] public string? DateCreatedGmt { get; set; }
+    [JsonPropertyName("date_modified")] public string? DateModified { get; set; }
+    [JsonPropertyName("date_modified_gmt")] public string? DateModifiedGmt { get; set; }
     [JsonPropertyName("line_items")] public List<WooOrderLineItem> LineItems { get; set; } = new();
+    [JsonPropertyName("shipping_lines")] public List<WooOrderShippingLine> ShippingLines { get; set; } = new();
+    [JsonPropertyName("fee_lines")] public List<WooOrderFeeLine> FeeLines { get; set; } = new();
+    [JsonPropertyName("tax_lines")] public List<WooOrderTaxLine> TaxLines { get; set; } = new();
     [JsonPropertyName("meta_data")] public List<StoreMetaData> MetaData { get; set; } = new();
 }
 
