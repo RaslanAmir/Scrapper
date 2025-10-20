@@ -389,14 +389,37 @@ public sealed class WooProvisioningService : IDisposable
             }
         }
 
+        var taxRateLookup = TaxRateLookup.Empty;
+        if (orderList.Count > 0 || subscriptionList.Count > 0)
+        {
+            taxRateLookup = await BuildTaxRateLookupAsync(baseUrl, settings, orderList, subscriptionList, cancellationToken);
+        }
+
         if (orderList.Count > 0)
         {
-            await EnsureOrdersAsync(baseUrl, settings, orderList, productIdMap, customerIdMap, couponCodeMap, progress, cancellationToken);
+            await EnsureOrdersAsync(
+                baseUrl,
+                settings,
+                orderList,
+                productIdMap,
+                customerIdMap,
+                couponCodeMap,
+                taxRateLookup,
+                progress,
+                cancellationToken);
         }
 
         if (subscriptionList.Count > 0)
         {
-            await EnsureSubscriptionsAsync(baseUrl, settings, subscriptionList, productIdMap, customerIdMap, progress, cancellationToken);
+            await EnsureSubscriptionsAsync(
+                baseUrl,
+                settings,
+                subscriptionList,
+                productIdMap,
+                customerIdMap,
+                taxRateLookup,
+                progress,
+                cancellationToken);
         }
 
         if (menuCollection is not null)
@@ -2604,6 +2627,162 @@ public sealed class WooProvisioningService : IDisposable
         return payload;
     }
 
+    private async Task<TaxRateLookup> BuildTaxRateLookupAsync(
+        string baseUrl,
+        WooProvisioningSettings settings,
+        List<WooOrder> orders,
+        List<WooSubscription> subscriptions,
+        CancellationToken cancellationToken)
+    {
+        var requiredCodes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var requiredIds = new HashSet<int>();
+
+        static void Collect(IEnumerable<WooOrderTaxLine> lines, HashSet<string> codes, HashSet<int> ids)
+        {
+            foreach (var line in lines ?? Enumerable.Empty<WooOrderTaxLine>())
+            {
+                if (line is null)
+                {
+                    continue;
+                }
+
+                if (!string.IsNullOrWhiteSpace(line.RateCode))
+                {
+                    codes.Add(line.RateCode);
+                }
+
+                if (line.RateId is int rateId && rateId > 0)
+                {
+                    ids.Add(rateId);
+                }
+            }
+        }
+
+        foreach (var order in orders)
+        {
+            if (order is null)
+            {
+                continue;
+            }
+
+            Collect(order.TaxLines, requiredCodes, requiredIds);
+        }
+
+        foreach (var subscription in subscriptions)
+        {
+            if (subscription is null)
+            {
+                continue;
+            }
+
+            Collect(subscription.TaxLines, requiredCodes, requiredIds);
+        }
+
+        if (requiredCodes.Count == 0 && requiredIds.Count == 0)
+        {
+            return TaxRateLookup.Empty;
+        }
+
+        var mappedByCode = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        var mappedById = new Dictionary<int, int>();
+        const int pageSize = 100;
+        var page = 1;
+
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var path = $"/wp-json/wc/v3/taxes?per_page={pageSize}&page={page}";
+            var pageRates = await GetAsync<List<WooTaxRate>>(baseUrl, settings, path, cancellationToken);
+            if (pageRates is null || pageRates.Count == 0)
+            {
+                break;
+            }
+
+            foreach (var rate in pageRates)
+            {
+                if (rate is null)
+                {
+                    continue;
+                }
+
+                if (!string.IsNullOrWhiteSpace(rate.RateCode)
+                    && requiredCodes.Contains(rate.RateCode)
+                    && !mappedByCode.ContainsKey(rate.RateCode))
+                {
+                    mappedByCode[rate.RateCode] = rate.Id;
+                }
+
+                if (requiredIds.Contains(rate.Id) && !mappedById.ContainsKey(rate.Id))
+                {
+                    mappedById[rate.Id] = rate.Id;
+                }
+            }
+
+            if (pageRates.Count < pageSize)
+            {
+                break;
+            }
+
+            page++;
+        }
+
+        if (mappedByCode.Count == 0 && mappedById.Count == 0)
+        {
+            return TaxRateLookup.Empty;
+        }
+
+        if (mappedByCode.Count > 0 && requiredIds.Count > 0)
+        {
+            IEnumerable<WooOrderTaxLine> EnumerateLines()
+            {
+                foreach (var order in orders)
+                {
+                    if (order?.TaxLines is null)
+                    {
+                        continue;
+                    }
+
+                    foreach (var line in order.TaxLines)
+                    {
+                        if (line is not null)
+                        {
+                            yield return line;
+                        }
+                    }
+                }
+
+                foreach (var subscription in subscriptions)
+                {
+                    if (subscription?.TaxLines is null)
+                    {
+                        continue;
+                    }
+
+                    foreach (var line in subscription.TaxLines)
+                    {
+                        if (line is not null)
+                        {
+                            yield return line;
+                        }
+                    }
+                }
+            }
+
+            foreach (var line in EnumerateLines())
+            {
+                if (line.RateId is int sourceId
+                    && !mappedById.ContainsKey(sourceId)
+                    && !string.IsNullOrWhiteSpace(line.RateCode)
+                    && mappedByCode.TryGetValue(line.RateCode, out var mappedId))
+                {
+                    mappedById[sourceId] = mappedId;
+                }
+            }
+        }
+
+        return new TaxRateLookup(mappedByCode, mappedById);
+    }
+
     private async Task EnsureOrdersAsync(
         string baseUrl,
         WooProvisioningSettings settings,
@@ -2611,6 +2790,7 @@ public sealed class WooProvisioningService : IDisposable
         IReadOnlyDictionary<int, int> productMap,
         IReadOnlyDictionary<int, int> customerMap,
         IReadOnlyDictionary<string, int> couponCodeMap,
+        TaxRateLookup taxRateLookup,
         IProgress<string>? progress,
         CancellationToken cancellationToken)
     {
@@ -2625,7 +2805,7 @@ public sealed class WooProvisioningService : IDisposable
                 continue;
             }
 
-            var payload = BuildOrderPayload(order, productMap, customerMap, couponCodeMap, lineItems);
+            var payload = BuildOrderPayload(order, productMap, customerMap, couponCodeMap, lineItems, taxRateLookup);
             progress?.Report($"Creating order '{identifier}'.");
             try
             {
@@ -2653,6 +2833,7 @@ public sealed class WooProvisioningService : IDisposable
         List<WooSubscription> subscriptions,
         IReadOnlyDictionary<int, int> productMap,
         IReadOnlyDictionary<int, int> customerMap,
+        TaxRateLookup taxRateLookup,
         IProgress<string>? progress,
         CancellationToken cancellationToken)
     {
@@ -2674,7 +2855,7 @@ public sealed class WooProvisioningService : IDisposable
                 continue;
             }
 
-            var payload = BuildSubscriptionPayload(subscription, customerMap, lineItems);
+            var payload = BuildSubscriptionPayload(subscription, customerMap, lineItems, taxRateLookup);
             if (payload.Count == 0)
             {
                 progress?.Report($"Skipping subscription '{identifier}': no importable fields.");
@@ -2805,7 +2986,8 @@ public sealed class WooProvisioningService : IDisposable
     private Dictionary<string, object?> BuildSubscriptionPayload(
         WooSubscription subscription,
         IReadOnlyDictionary<int, int> customerMap,
-        List<Dictionary<string, object?>> lineItems)
+        List<Dictionary<string, object?>> lineItems,
+        TaxRateLookup taxRateLookup)
     {
         var payload = new Dictionary<string, object?>();
         AddIfValue(payload, "status", subscription.Status);
@@ -2858,7 +3040,7 @@ public sealed class WooProvisioningService : IDisposable
             payload["fee_lines"] = feeLines;
         }
 
-        var taxLines = BuildTaxLines(subscription.TaxLines);
+        var taxLines = BuildTaxLines(subscription.TaxLines, taxRateLookup);
         if (taxLines.Count > 0)
         {
             payload["tax_lines"] = taxLines;
@@ -2893,7 +3075,8 @@ public sealed class WooProvisioningService : IDisposable
         IReadOnlyDictionary<int, int> productMap,
         IReadOnlyDictionary<int, int> customerMap,
         IReadOnlyDictionary<string, int> couponCodeMap,
-        List<Dictionary<string, object?>> lineItems)
+        List<Dictionary<string, object?>> lineItems,
+        TaxRateLookup taxRateLookup)
     {
         var payload = new Dictionary<string, object?>();
         AddIfValue(payload, "status", order.Status);
@@ -2957,7 +3140,7 @@ public sealed class WooProvisioningService : IDisposable
             payload["fee_lines"] = feeLines;
         }
 
-        var taxLines = BuildTaxLines(order.TaxLines);
+        var taxLines = BuildTaxLines(order.TaxLines, taxRateLookup);
         if (taxLines.Count > 0)
         {
             payload["tax_lines"] = taxLines;
@@ -3122,7 +3305,9 @@ public sealed class WooProvisioningService : IDisposable
         return result;
     }
 
-    private static List<Dictionary<string, object?>> BuildTaxLines(IEnumerable<WooOrderTaxLine> lines)
+    private static List<Dictionary<string, object?>> BuildTaxLines(
+        IEnumerable<WooOrderTaxLine> lines,
+        TaxRateLookup taxRateLookup)
     {
         var result = new List<Dictionary<string, object?>>();
         foreach (var line in lines ?? Enumerable.Empty<WooOrderTaxLine>())
@@ -3134,7 +3319,10 @@ public sealed class WooProvisioningService : IDisposable
 
             var entry = new Dictionary<string, object?>();
             AddIfValue(entry, "rate_code", line.RateCode);
-            AddIfValue(entry, "rate_id", line.RateId);
+            if (taxRateLookup.TryMap(line, out var mappedRateId))
+            {
+                entry["rate_id"] = mappedRateId;
+            }
             AddIfValue(entry, "label", line.Label);
             AddIfValue(entry, "compound", line.Compound);
             AddIfValue(entry, "tax_total", line.TaxTotal);
@@ -4536,6 +4724,51 @@ public sealed class WooProvisioningService : IDisposable
 
         var result = builder.ToString().Trim('-');
         return string.IsNullOrWhiteSpace(result) ? null : result;
+    }
+
+    private sealed class TaxRateLookup
+    {
+        public static TaxRateLookup Empty { get; } = new(new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase), new Dictionary<int, int>());
+
+        private readonly IReadOnlyDictionary<string, int> _byCode;
+        private readonly IReadOnlyDictionary<int, int> _byId;
+
+        public TaxRateLookup(
+            IReadOnlyDictionary<string, int> byCode,
+            IReadOnlyDictionary<int, int> byId)
+        {
+            _byCode = byCode ?? new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            _byId = byId ?? new Dictionary<int, int>();
+        }
+
+        public bool TryMap(WooOrderTaxLine? line, out int mappedId)
+        {
+            if (line is null)
+            {
+                mappedId = default;
+                return false;
+            }
+
+            if (!string.IsNullOrWhiteSpace(line.RateCode)
+                && _byCode.TryGetValue(line.RateCode, out mappedId))
+            {
+                return true;
+            }
+
+            if (line.RateId is int sourceId && _byId.TryGetValue(sourceId, out mappedId))
+            {
+                return true;
+            }
+
+            mappedId = default;
+            return false;
+        }
+    }
+
+    private sealed class WooTaxRate
+    {
+        [JsonPropertyName("id")] public int Id { get; set; }
+        [JsonPropertyName("rate_code")] public string? RateCode { get; set; }
     }
 
     private sealed class WooProvisioningException : Exception

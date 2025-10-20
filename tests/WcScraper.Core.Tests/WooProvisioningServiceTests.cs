@@ -713,6 +713,74 @@ public class WooProvisioningServiceTests
     }
 
     [Fact]
+    public async Task ProvisionAsync_OrderTaxLines_RemapsOrOmitsRateIdentifiers()
+    {
+        var handler = new RecordingHandler();
+        handler.TaxRates.Add(new RecordingHandler.TaxRateRecord
+        {
+            Id = 987,
+            RateCode = "US-CA-STATE TAX"
+        });
+
+        using var httpClient = new HttpClient(handler);
+        var service = new WooProvisioningService(httpClient);
+        var settings = new WooProvisioningSettings("https://target.example", "ck", "cs");
+
+        var order = new WooOrder
+        {
+            Id = 701,
+            LineItems =
+            {
+                new WooOrderLineItem
+                {
+                    Name = "Taxed Item",
+                    Quantity = 1,
+                    Total = "10.00"
+                }
+            },
+            TaxLines =
+            {
+                new WooOrderTaxLine
+                {
+                    RateCode = "US-CA-STATE TAX",
+                    RateId = 123,
+                    Label = "CA State Tax",
+                    TaxTotal = "0.80"
+                },
+                new WooOrderTaxLine
+                {
+                    RateCode = "MISSING-CODE",
+                    RateId = 456,
+                    Label = "Unknown Tax",
+                    TaxTotal = "0.20"
+                }
+            }
+        };
+
+        await service.ProvisionAsync(
+            settings,
+            Array.Empty<StoreProduct>(),
+            orders: new[] { order });
+
+        var taxRequests = handler.Calls
+            .Where(call => call.Method == HttpMethod.Get && call.Path == "/wp-json/wc/v3/taxes")
+            .ToList();
+        Assert.NotEmpty(taxRequests);
+
+        var orderCall = handler.Calls.Single(call => call.Method == HttpMethod.Post && call.Path == "/wp-json/wc/v3/orders");
+        Assert.NotNull(orderCall.Content);
+        using var doc = JsonDocument.Parse(orderCall.Content!);
+        var taxLines = doc.RootElement.GetProperty("tax_lines").EnumerateArray().ToList();
+        Assert.Equal(2, taxLines.Count);
+
+        var mappedLine = Assert.Single(taxLines.Where(element => element.GetProperty("rate_code").GetString() == "US-CA-STATE TAX"));
+        Assert.Equal(987, mappedLine.GetProperty("rate_id").GetInt32());
+
+        var missingLine = Assert.Single(taxLines.Where(element => element.GetProperty("rate_code").GetString() == "MISSING-CODE"));
+        Assert.False(missingLine.TryGetProperty("rate_id", out _));
+    }
+
+    [Fact]
     public async Task ProvisionAsync_MissingShippingZone_CreatesZoneAndUsesNewId()
     {
         var handler = new RecordingHandler
@@ -793,6 +861,7 @@ public class WooProvisioningServiceTests
     private sealed class RecordingHandler : HttpMessageHandler
     {
         public List<(HttpMethod Method, string Path, string Query, string? Content, string? Authorization)> Calls { get; } = new();
+        public List<TaxRateRecord> TaxRates { get; } = new();
 
         private readonly Dictionary<string, int> _createdCategoryIds = new(StringComparer.OrdinalIgnoreCase);
         private int _nextCategoryId = 500;
@@ -816,6 +885,25 @@ public class WooProvisioningServiceTests
             var content = request.Content is null ? null : request.Content.ReadAsStringAsync(cancellationToken).GetAwaiter().GetResult();
             var authorization = request.Headers.Authorization?.ToString();
             Calls.Add((request.Method, path, query, content, authorization));
+
+            if (request.Method == HttpMethod.Get && path == "/wp-json/wc/v3/taxes")
+            {
+                var pageValue = GetQueryParameter(query, "page");
+                if (!string.IsNullOrEmpty(pageValue) && !string.Equals(pageValue, "1", StringComparison.OrdinalIgnoreCase))
+                {
+                    return Task.FromResult(JsonResponse("[]"));
+                }
+
+                var payload = JsonSerializer.Serialize(TaxRates.Select(rate => new
+                {
+                    id = rate.Id,
+                    rate_code = rate.RateCode,
+                    rate = rate.Rate,
+                    name = rate.Name,
+                    @class = rate.Class
+                }));
+                return Task.FromResult(JsonResponse(payload));
+            }
 
             if (request.Method == HttpMethod.Post && path == "/wp-json/wc/v3/shipping/zones")
             {
@@ -1119,6 +1207,35 @@ public class WooProvisioningServiceTests
             return doc.RootElement.TryGetProperty("order", out var orderProperty) && orderProperty.ValueKind == JsonValueKind.Number
                 ? orderProperty.GetInt32()
                 : 0;
+        }
+
+        private static string? GetQueryParameter(string query, string key)
+        {
+            if (string.IsNullOrEmpty(query))
+            {
+                return null;
+            }
+
+            var trimmed = query.TrimStart('?');
+            foreach (var segment in trimmed.Split('&', StringSplitOptions.RemoveEmptyEntries))
+            {
+                var parts = segment.Split('=', 2);
+                if (parts.Length == 2 && string.Equals(parts[0], key, StringComparison.OrdinalIgnoreCase))
+                {
+                    return Uri.UnescapeDataString(parts[1]);
+                }
+            }
+
+            return null;
+        }
+
+        public sealed class TaxRateRecord
+        {
+            public int Id { get; init; }
+            public string? RateCode { get; init; }
+            public string? Rate { get; init; }
+            public string? Name { get; init; }
+            public string? Class { get; init; }
         }
     }
 }
