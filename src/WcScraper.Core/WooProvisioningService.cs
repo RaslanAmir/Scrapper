@@ -288,33 +288,50 @@ public sealed class WooProvisioningService : IDisposable
         var tagIdMap = new Dictionary<int, int>();
         var couponCodeMap = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
 
+        var categorySeeds = CollectTaxonomySeeds(
+            productList.SelectMany(p => p.Categories ?? Enumerable.Empty<Category>()),
+            c => c.Name,
+            c => c.Slug,
+            c => c.Id,
+            c => c.ParentId,
+            c => c.ParentSlug,
+            c => c.ParentName);
+        if (menuCategorySeedSources.Count > 0)
+        {
+            categorySeeds = CollectTaxonomySeeds(
+                menuCategorySeedSources,
+                s => s.Name,
+                s => s.Slug,
+                s => s.Id,
+                existing: categorySeeds);
+        }
+
+        var categorySeedList = categorySeeds.ToList();
         if (productList.Count > 0)
         {
             progress?.Report($"Preparing taxonomies for {productList.Count} products…");
-            var categorySeeds = CollectTaxonomySeeds(
-                productList.SelectMany(p => p.Categories ?? Enumerable.Empty<Category>()),
-                c => c.Name,
-                c => c.Slug,
-                c => c.Id,
-                c => c.ParentId,
-                c => c.ParentSlug,
-                c => c.ParentName);
-            if (menuCategorySeedSources.Count > 0)
-            {
-                categorySeeds = CollectTaxonomySeeds(
-                    menuCategorySeedSources,
-                    s => s.Name,
-                    s => s.Slug,
-                    s => s.Id,
-                    existing: categorySeeds);
-            }
+        }
+        else if (categorySeedList.Count > 0)
+        {
+            progress?.Report("Preparing taxonomies for menu references…");
+        }
 
-            var categorySeedList = categorySeeds.ToList();
+        Dictionary<string, int> categoryMap;
+        if (categorySeedList.Count > 0)
+        {
+            categoryMap = await EnsureTaxonomiesAsync(baseUrl, settings, "categories", categorySeedList, progress, cancellationToken);
+            categoryIdMap = BuildCategoryIdMap(productList, categoryMap, categorySeeds.SourceIdLookup);
+        }
+        else
+        {
+            categoryMap = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        }
+
+        if (productList.Count > 0)
+        {
             var tagSeeds = CollectTaxonomySeeds(productList.SelectMany(p => p.Tags ?? Enumerable.Empty<ProductTag>()), t => t.Name, t => t.Slug).ToList();
             var attributeSeeds = CollectAttributeSeeds(productList.Concat(variationList));
 
-            var categoryMap = await EnsureTaxonomiesAsync(baseUrl, settings, "categories", categorySeedList, progress, cancellationToken);
-            categoryIdMap = BuildCategoryIdMap(productList, categoryMap, categorySeeds.SourceIdLookup);
             var tagMap = await EnsureTaxonomiesAsync(baseUrl, settings, "tags", tagSeeds, progress, cancellationToken);
             tagIdMap = BuildTagIdMap(productList, tagMap);
             var attributeMap = await EnsureAttributesAsync(baseUrl, settings, attributeSeeds, progress, cancellationToken);

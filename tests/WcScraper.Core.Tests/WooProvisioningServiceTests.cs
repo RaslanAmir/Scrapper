@@ -766,6 +766,71 @@ public class WooProvisioningServiceTests
     }
 
     [Fact]
+    public async Task ProvisionAsync_MenuCategoryWithoutProducts_MapsCategoryId()
+    {
+        var handler = new RecordingHandler();
+        using var httpClient = new HttpClient(handler);
+        var service = new WooProvisioningService(httpClient);
+        var settings = new WooProvisioningSettings(
+            "https://target.example",
+            "ck",
+            "cs",
+            wordpressUsername: "wpuser",
+            wordpressApplicationPassword: "app-pass");
+
+        var menuCategoryItem = new WordPressMenuItem
+        {
+            Id = 305,
+            Order = 1,
+            Title = new WordPressRenderedText { Rendered = "Menu Only Category" },
+            Object = "product_cat",
+            ObjectId = 888,
+            Url = "https://source.example/product-category/menu-only/"
+        };
+
+        var menuCollection = new WordPressMenuCollection
+        {
+            Menus =
+            {
+                new WordPressMenu
+                {
+                    Id = 44,
+                    Name = "Navigation",
+                    Slug = "navigation",
+                    Items = { menuCategoryItem }
+                }
+            }
+        };
+
+        var siteContent = new WordPressSiteContent
+        {
+            Menus = menuCollection
+        };
+
+        await service.ProvisionAsync(
+            settings,
+            Array.Empty<StoreProduct>(),
+            siteContent: siteContent);
+
+        var createdCategoryId = handler.GetCreatedCategoryId("menu-only");
+        Assert.True(
+            createdCategoryId.HasValue,
+            "Expected category to be created for the menu item when no products are provided.");
+
+        var menuItemCalls = handler.Calls
+            .Where(call => call.Method == HttpMethod.Post && call.Path == "/wp-json/wp/v2/menu-items")
+            .ToList();
+
+        Assert.Single(menuItemCalls);
+        Assert.Contains(
+            handler.Calls,
+            call => call.Method == HttpMethod.Post && call.Path == "/wp-json/wc/v3/products/categories");
+
+        using var doc = JsonDocument.Parse(menuItemCalls[0].Content!);
+        Assert.Equal(createdCategoryId.Value, doc.RootElement.GetProperty("object_id").GetInt32());
+    }
+
+    [Fact]
     public async Task ProvisionAsync_PageWithMappedAuthor_UsesMappedAuthor()
     {
         var handler = new RecordingHandler();
