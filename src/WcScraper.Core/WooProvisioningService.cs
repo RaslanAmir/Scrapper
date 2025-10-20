@@ -251,6 +251,7 @@ public sealed class WooProvisioningService : IDisposable
         Dictionary<int, int>? pageIdMap = null;
         Dictionary<int, int>? postIdMap = null;
         WordPressMenuCollection? menuCollection = null;
+        var menuCategorySeedSources = new List<MenuCategorySeedSource>();
         WordPressWidgetSnapshot? widgetSnapshot = null;
 
         if (siteContent is not null)
@@ -273,6 +274,10 @@ public sealed class WooProvisioningService : IDisposable
                 progress,
                 cancellationToken);
             menuCollection = siteContent.Menus;
+            if (menuCollection is not null)
+            {
+                menuCategorySeedSources = CollectMenuCategorySeedSources(menuCollection);
+            }
             widgetSnapshot = siteContent.Widgets;
         }
 
@@ -294,11 +299,22 @@ public sealed class WooProvisioningService : IDisposable
                 c => c.ParentId,
                 c => c.ParentSlug,
                 c => c.ParentName);
-            var tagSeeds = CollectTaxonomySeeds(productList.SelectMany(p => p.Tags ?? Enumerable.Empty<ProductTag>()), t => t.Name, t => t.Slug);
+            if (menuCategorySeedSources.Count > 0)
+            {
+                categorySeeds = CollectTaxonomySeeds(
+                    menuCategorySeedSources,
+                    s => s.Name,
+                    s => s.Slug,
+                    s => s.Id,
+                    existing: categorySeeds);
+            }
+
+            var categorySeedList = categorySeeds.ToList();
+            var tagSeeds = CollectTaxonomySeeds(productList.SelectMany(p => p.Tags ?? Enumerable.Empty<ProductTag>()), t => t.Name, t => t.Slug).ToList();
             var attributeSeeds = CollectAttributeSeeds(productList.Concat(variationList));
 
-            var categoryMap = await EnsureTaxonomiesAsync(baseUrl, settings, "categories", categorySeeds, progress, cancellationToken);
-            categoryIdMap = BuildCategoryIdMap(productList, categoryMap);
+            var categoryMap = await EnsureTaxonomiesAsync(baseUrl, settings, "categories", categorySeedList, progress, cancellationToken);
+            categoryIdMap = BuildCategoryIdMap(productList, categoryMap, categorySeeds.SourceIdLookup);
             var tagMap = await EnsureTaxonomiesAsync(baseUrl, settings, "tags", tagSeeds, progress, cancellationToken);
             tagIdMap = BuildTagIdMap(productList, tagMap);
             var attributeMap = await EnsureAttributesAsync(baseUrl, settings, attributeSeeds, progress, cancellationToken);
@@ -912,6 +928,99 @@ public sealed class WooProvisioningService : IDisposable
         {
             await EnsureMenuLocationsAsync(baseUrl, settings, menuCollection.Locations, menuIdMap, progress, cancellationToken);
         }
+    }
+
+    private static List<MenuCategorySeedSource> CollectMenuCategorySeedSources(WordPressMenuCollection menuCollection)
+    {
+        var result = new Dictionary<int, MenuCategorySeedSource>();
+        if (menuCollection?.Menus is null || menuCollection.Menus.Count == 0)
+        {
+            return new List<MenuCategorySeedSource>();
+        }
+
+        void CollectFromItem(WordPressMenuItem? item)
+        {
+            if (item is null)
+            {
+                return;
+            }
+
+            if (item.ObjectId is int objectId
+                && objectId > 0
+                && !string.IsNullOrWhiteSpace(item.Object)
+                && item.Object.Equals("product_cat", StringComparison.OrdinalIgnoreCase))
+            {
+                var slug = ResolveMenuCategorySlug(item);
+                if (!string.IsNullOrWhiteSpace(slug))
+                {
+                    result[objectId] = new MenuCategorySeedSource(objectId, item.Title?.Rendered, slug!);
+                }
+            }
+
+            if (item.Children is { Count: > 0 })
+            {
+                foreach (var child in item.Children)
+                {
+                    CollectFromItem(child);
+                }
+            }
+        }
+
+        foreach (var menu in menuCollection.Menus)
+        {
+            if (menu?.Items is null)
+            {
+                continue;
+            }
+
+            foreach (var item in menu.Items)
+            {
+                CollectFromItem(item);
+            }
+        }
+
+        return result.Values.ToList();
+    }
+
+    private static string? ResolveMenuCategorySlug(WordPressMenuItem item)
+    {
+        if (item is null)
+        {
+            return null;
+        }
+
+        if (!string.IsNullOrWhiteSpace(item.Url)
+            && Uri.TryCreate(item.Url, UriKind.RelativeOrAbsolute, out var uri))
+        {
+            var path = uri.IsAbsoluteUri ? uri.AbsolutePath : uri.OriginalString;
+            if (!string.IsNullOrWhiteSpace(path))
+            {
+                var segments = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
+                for (var i = segments.Length - 1; i >= 0; i--)
+                {
+                    var segment = segments[i];
+                    if (string.IsNullOrWhiteSpace(segment))
+                    {
+                        continue;
+                    }
+
+                    var normalized = NormalizeSlug(Uri.UnescapeDataString(segment));
+                    if (string.IsNullOrWhiteSpace(normalized))
+                    {
+                        continue;
+                    }
+
+                    if (string.Equals(normalized, "product-category", StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+
+                    return normalized;
+                }
+            }
+        }
+
+        return NormalizeSlug(item.Title?.Rendered);
     }
 
     private async Task EnsureWidgetsAsync(
@@ -4372,7 +4481,8 @@ public sealed class WooProvisioningService : IDisposable
 
     private static Dictionary<int, int> BuildCategoryIdMap(
         IEnumerable<StoreProduct> products,
-        IReadOnlyDictionary<string, int> categoryMap)
+        IReadOnlyDictionary<string, int> categoryMap,
+        IReadOnlyDictionary<int, string>? categorySeedLookup)
     {
         var result = new Dictionary<int, int>();
         foreach (var product in products)
@@ -4396,6 +4506,23 @@ public sealed class WooProvisioningService : IDisposable
                 }
 
                 result[category.Id] = mappedId;
+            }
+        }
+
+        if (categorySeedLookup is not null)
+        {
+            foreach (var pair in categorySeedLookup)
+            {
+                if (result.ContainsKey(pair.Key))
+                {
+                    continue;
+                }
+
+                if (!string.IsNullOrWhiteSpace(pair.Value)
+                    && categoryMap.TryGetValue(pair.Value, out var mappedId))
+                {
+                    result[pair.Key] = mappedId;
+                }
             }
         }
 
@@ -4517,18 +4644,17 @@ public sealed class WooProvisioningService : IDisposable
         return seeds;
     }
 
-    private static List<TaxonomySeed> CollectTaxonomySeeds<T>(
+    private static TaxonomySeedCollection CollectTaxonomySeeds<T>(
         IEnumerable<T> items,
         Func<T, string?> getName,
         Func<T, string?> getSlug,
         Func<T, int?>? getId = null,
         Func<T, int?>? getParentId = null,
         Func<T, string?>? getParentSlug = null,
-        Func<T, string?>? getParentName = null)
+        Func<T, string?>? getParentName = null,
+        TaxonomySeedCollection? result = null)
     {
-        var result = new Dictionary<string, TaxonomySeed>(StringComparer.OrdinalIgnoreCase);
-        var idLookup = new Dictionary<int, string>();
-        var pendingParents = new Dictionary<string, int>();
+        result ??= new TaxonomySeedCollection();
         foreach (var item in items)
         {
             var name = getName(item);
@@ -4544,21 +4670,17 @@ public sealed class WooProvisioningService : IDisposable
                 continue;
             }
 
-            if (!result.TryGetValue(normalizedSlug, out var seed))
-            {
-                var displayName = string.IsNullOrWhiteSpace(name)
-                    ? (string.IsNullOrWhiteSpace(slug) ? normalizedSlug : slug!)
-                    : name!;
-                seed = new TaxonomySeed(normalizedSlug, displayName, normalizedSlug);
-                result[normalizedSlug] = seed;
-            }
+            var displayName = string.IsNullOrWhiteSpace(name)
+                ? (string.IsNullOrWhiteSpace(slug) ? normalizedSlug : slug!)
+                : name!;
+            var seed = result.GetOrAdd(normalizedSlug, () => new TaxonomySeed(normalizedSlug, displayName, normalizedSlug));
 
             if (getId is not null)
             {
                 var id = getId(item);
                 if (id is > 0)
                 {
-                    idLookup[id.Value] = seed.Key;
+                    result.AddIdLookup(id.Value, seed.Key);
                 }
             }
 
@@ -4568,13 +4690,13 @@ public sealed class WooProvisioningService : IDisposable
                 var parentId = getParentId(item);
                 if (parentId is > 0)
                 {
-                    if (idLookup.TryGetValue(parentId.Value, out var mappedParent))
+                    if (result.TryGetIdLookup(parentId.Value, out var mappedParent))
                     {
                         parentKey = mappedParent;
                     }
-                    else if (!pendingParents.ContainsKey(seed.Key))
+                    else
                     {
-                        pendingParents[seed.Key] = parentId.Value;
+                        result.AddPendingParent(seed.Key, parentId.Value);
                     }
                 }
             }
@@ -4591,26 +4713,12 @@ public sealed class WooProvisioningService : IDisposable
             if (!string.IsNullOrWhiteSpace(parentKey))
             {
                 seed.ParentKey = parentKey;
-                if (!result.ContainsKey(parentKey))
-                {
-                    var parentDisplayName = getParentName?.Invoke(item);
-                    var displayName = string.IsNullOrWhiteSpace(parentDisplayName)
-                        ? parentKey
-                        : parentDisplayName!;
-                    result[parentKey] = new TaxonomySeed(parentKey, displayName, parentKey);
-                }
+                result.EnsureParentPlaceholder(parentKey, getParentName?.Invoke(item));
             }
         }
 
-        foreach (var kvp in pendingParents)
-        {
-            if (idLookup.TryGetValue(kvp.Value, out var parentKey) && result.TryGetValue(kvp.Key, out var seed))
-            {
-                seed.ParentKey = parentKey;
-            }
-        }
-
-        return result.Values.ToList();
+        result.ResolvePendingParents();
+        return result;
     }
 
     private static List<TaxonomySeed> OrderTaxonomySeedsByHierarchy(List<TaxonomySeed> seeds)
@@ -4804,6 +4912,106 @@ public sealed class WooProvisioningService : IDisposable
         }
 
         public HttpStatusCode StatusCode { get; }
+    }
+
+    private sealed class MenuCategorySeedSource
+    {
+        public MenuCategorySeedSource(int id, string? name, string slug)
+        {
+            Id = id;
+            Name = name;
+            Slug = slug;
+        }
+
+        public int Id { get; }
+        public string? Name { get; }
+        public string Slug { get; }
+    }
+
+    private sealed class TaxonomySeedCollection
+    {
+        private readonly Dictionary<string, TaxonomySeed> _byKey = new(StringComparer.OrdinalIgnoreCase);
+        private readonly List<TaxonomySeed> _ordered = new();
+        private readonly Dictionary<int, string> _idLookup = new();
+        private readonly Dictionary<string, int> _pendingParentIds = new(StringComparer.OrdinalIgnoreCase);
+
+        public IReadOnlyDictionary<int, string> SourceIdLookup => _idLookup;
+
+        public TaxonomySeed GetOrAdd(string key, Func<TaxonomySeed> factory)
+        {
+            if (!_byKey.TryGetValue(key, out var seed))
+            {
+                seed = factory();
+                _byKey[key] = seed;
+                _ordered.Add(seed);
+            }
+
+            return seed;
+        }
+
+        public void AddIdLookup(int id, string key)
+        {
+            _idLookup[id] = key;
+        }
+
+        public bool TryGetIdLookup(int id, out string key)
+        {
+            return _idLookup.TryGetValue(id, out key!);
+        }
+
+        public void AddPendingParent(string childKey, int parentId)
+        {
+            _pendingParentIds[childKey] = parentId;
+        }
+
+        public void EnsureParentPlaceholder(string parentKey, string? parentDisplayName)
+        {
+            if (_byKey.ContainsKey(parentKey))
+            {
+                return;
+            }
+
+            var displayName = string.IsNullOrWhiteSpace(parentDisplayName) ? parentKey : parentDisplayName!;
+            var seed = new TaxonomySeed(parentKey, displayName, parentKey);
+            _byKey[parentKey] = seed;
+            _ordered.Add(seed);
+        }
+
+        public void ResolvePendingParents()
+        {
+            if (_pendingParentIds.Count == 0)
+            {
+                return;
+            }
+
+            var resolved = new List<string>();
+            foreach (var kvp in _pendingParentIds)
+            {
+                if (!_idLookup.TryGetValue(kvp.Value, out var parentKey))
+                {
+                    continue;
+                }
+
+                if (!_byKey.TryGetValue(kvp.Key, out var child))
+                {
+                    continue;
+                }
+
+                child.ParentKey = parentKey;
+                EnsureParentPlaceholder(parentKey, null);
+                resolved.Add(kvp.Key);
+            }
+
+            foreach (var key in resolved)
+            {
+                _pendingParentIds.Remove(key);
+            }
+        }
+
+        public List<TaxonomySeed> ToList()
+        {
+            return new List<TaxonomySeed>(_ordered);
+        }
     }
 
     private sealed class TaxonomySeed

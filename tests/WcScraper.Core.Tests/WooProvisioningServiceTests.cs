@@ -701,6 +701,71 @@ public class WooProvisioningServiceTests
     }
 
     [Fact]
+    public async Task ProvisionAsync_MenuCategoryWithoutProductAssociation_MapsCategoryId()
+    {
+        var handler = new RecordingHandler();
+        using var httpClient = new HttpClient(handler);
+        var service = new WooProvisioningService(httpClient);
+        var settings = new WooProvisioningSettings(
+            "https://target.example",
+            "ck",
+            "cs",
+            wordpressUsername: "wpuser",
+            wordpressApplicationPassword: "app-pass");
+
+        var placeholderProduct = new StoreProduct
+        {
+            Id = 999,
+            Name = "Placeholder",
+            Slug = "placeholder",
+            Sku = "PLACEHOLDER"
+        };
+
+        var menuCategoryItem = new WordPressMenuItem
+        {
+            Id = 201,
+            Order = 1,
+            Title = new WordPressRenderedText { Rendered = "Menu Only Category" },
+            Object = "product_cat",
+            ObjectId = 777,
+            Url = "https://source.example/product-category/menu-only/"
+        };
+
+        var menuCollection = new WordPressMenuCollection
+        {
+            Menus =
+            {
+                new WordPressMenu
+                {
+                    Id = 22,
+                    Name = "Primary",
+                    Slug = "primary",
+                    Items = { menuCategoryItem }
+                }
+            }
+        };
+
+        var siteContent = new WordPressSiteContent
+        {
+            Menus = menuCollection
+        };
+
+        await service.ProvisionAsync(
+            settings,
+            new[] { placeholderProduct },
+            siteContent: siteContent);
+
+        var createdCategoryId = handler.GetCreatedCategoryId("menu-only");
+        Assert.True(createdCategoryId.HasValue, "Expected category to be created for the menu item.");
+
+        var menuItemCall = handler.Calls.Single(call => call.Method == HttpMethod.Post && call.Path == "/wp-json/wp/v2/menu-items");
+        Assert.False(string.IsNullOrWhiteSpace(menuItemCall.Content));
+
+        using var doc = JsonDocument.Parse(menuItemCall.Content!);
+        Assert.Equal(createdCategoryId.Value, doc.RootElement.GetProperty("object_id").GetInt32());
+    }
+
+    [Fact]
     public async Task ProvisionAsync_PageWithMappedAuthor_UsesMappedAuthor()
     {
         var handler = new RecordingHandler();
