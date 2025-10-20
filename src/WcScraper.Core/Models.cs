@@ -229,6 +229,15 @@ public sealed class ThemeUpdateInfo
     [JsonPropertyName("package")] public string? Package { get; set; }
 }
 
+public sealed class WooSettingGroup
+{
+    [JsonPropertyName("id")] public string? Id { get; set; }
+    [JsonPropertyName("label")] public string? Label { get; set; }
+    [JsonPropertyName("description")] public string? Description { get; set; }
+    [JsonPropertyName("parent_id")] public string? ParentId { get; set; }
+    [JsonPropertyName("option_key")] public string? OptionKey { get; set; }
+}
+
 public sealed class WooStoreSetting
 {
     [JsonPropertyName("id")] public string? Id { get; set; }
