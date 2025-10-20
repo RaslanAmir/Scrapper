@@ -1007,6 +1007,37 @@ public class WooProvisioningServiceTests
     }
 
     [Fact]
+    public async Task ProvisionAsync_ShippingZoneWithEmptyLocations_CallsLocationsEndpointWithEmptyArray()
+    {
+        var handler = new RecordingHandler();
+        using var httpClient = new HttpClient(handler);
+        var service = new WooProvisioningService(httpClient);
+        var settings = new WooProvisioningSettings("https://target.example", "ck", "cs");
+
+        var configuration = new StoreConfiguration
+        {
+            ShippingZones =
+            {
+                new ShippingZoneSetting
+                {
+                    Id = 123,
+                    Name = "Empty Zone",
+                    Locations = new List<ShippingZoneLocation>()
+                }
+            }
+        };
+
+        await service.ProvisionAsync(
+            settings,
+            Array.Empty<StoreProduct>(),
+            configuration: configuration);
+
+        var locationCall = handler.Calls.Single(call => call.Method == HttpMethod.Put
+            && call.Path == "/wp-json/wc/v3/shipping/zones/123/locations");
+        Assert.Equal("[]", locationCall.Content);
+    }
+
+    [Fact]
     public async Task ProvisionAsync_MissingShippingZone_CreatesZoneAndUsesNewId()
     {
         var handler = new RecordingHandler
