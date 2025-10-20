@@ -366,7 +366,7 @@ public sealed class WooProvisioningService : IDisposable
 
         if (subscriptionList.Count > 0)
         {
-            progress?.Report($"Skipping {subscriptionList.Count} subscriptions (provisioning not implemented).");
+            await EnsureSubscriptionsAsync(baseUrl, settings, subscriptionList, productIdMap, customerIdMap, progress, cancellationToken);
         }
 
         progress?.Report("Provisioning complete.");
@@ -2454,6 +2454,67 @@ public sealed class WooProvisioningService : IDisposable
         }
     }
 
+    private async Task EnsureSubscriptionsAsync(
+        string baseUrl,
+        WooProvisioningSettings settings,
+        List<WooSubscription> subscriptions,
+        IReadOnlyDictionary<int, int> productMap,
+        IReadOnlyDictionary<int, int> customerMap,
+        IProgress<string>? progress,
+        CancellationToken cancellationToken)
+    {
+        var endpointUnavailable = false;
+        foreach (var subscription in subscriptions)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (endpointUnavailable)
+            {
+                progress?.Report($"Skipping subscription '{GetSubscriptionIdentifier(subscription)}': endpoint unavailable.");
+                continue;
+            }
+
+            var identifier = GetSubscriptionIdentifier(subscription);
+            var lineItems = BuildOrderLineItems(subscription.LineItems, productMap);
+            if (lineItems.Count == 0)
+            {
+                progress?.Report($"Skipping subscription '{identifier}': no line items could be mapped.");
+                continue;
+            }
+
+            var payload = BuildSubscriptionPayload(subscription, customerMap, lineItems);
+            if (payload.Count == 0)
+            {
+                progress?.Report($"Skipping subscription '{identifier}': no importable fields.");
+                continue;
+            }
+
+            progress?.Report($"Creating subscription '{identifier}'.");
+            try
+            {
+                await PostAsync<WooSubscription>(baseUrl, settings, "/wp-json/wc/v1/subscriptions", payload, cancellationToken);
+            }
+            catch (WooProvisioningException ex) when (ex.StatusCode == HttpStatusCode.NotFound)
+            {
+                progress?.Report("Subscriptions endpoint not available (404). Skipping remaining subscriptions.");
+                endpointUnavailable = true;
+            }
+            catch (WooProvisioningException ex) when (ex.StatusCode == HttpStatusCode.BadRequest || ex.StatusCode == HttpStatusCode.Conflict)
+            {
+                progress?.Report($"Subscription '{identifier}' may already exist ({(int)ex.StatusCode}). Retrying fetch.");
+                var existing = await FindSubscriptionAsync(baseUrl, settings, subscription, cancellationToken);
+                if (existing is not null)
+                {
+                    progress?.Report($"Updating subscription '{identifier}' (ID {existing.Id}).");
+                    await PutAsync<WooSubscription>(baseUrl, settings, $"/wp-json/wc/v1/subscriptions/{existing.Id}", payload, cancellationToken);
+                }
+                else
+                {
+                    throw;
+                }
+            }
+        }
+    }
+
     private async Task<WooOrder?> FindOrderAsync(
         string baseUrl,
         WooProvisioningSettings settings,
@@ -2487,6 +2548,136 @@ public sealed class WooProvisioningService : IDisposable
         }
 
         return null;
+    }
+
+    private async Task<WooSubscription?> FindSubscriptionAsync(
+        string baseUrl,
+        WooProvisioningSettings settings,
+        WooSubscription subscription,
+        CancellationToken cancellationToken)
+    {
+        if (subscription.Id > 0)
+        {
+            var existing = await GetAsync<WooSubscription>(baseUrl, settings, $"/wp-json/wc/v1/subscriptions/{subscription.Id}", cancellationToken);
+            if (existing is not null)
+            {
+                return existing;
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(subscription.Number))
+        {
+            var list = await GetAsync<List<WooSubscription>>(baseUrl, settings, $"/wp-json/wc/v1/subscriptions?per_page=1&search={Uri.EscapeDataString(subscription.Number)}", cancellationToken);
+            if (list is { Count: > 0 })
+            {
+                var match = list.FirstOrDefault(s => string.Equals(s.Number, subscription.Number, StringComparison.OrdinalIgnoreCase));
+                if (match is not null)
+                {
+                    return match;
+                }
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(subscription.OrderKey))
+        {
+            var list = await GetAsync<List<WooSubscription>>(baseUrl, settings, $"/wp-json/wc/v1/subscriptions?per_page=1&search={Uri.EscapeDataString(subscription.OrderKey)}", cancellationToken);
+            if (list is { Count: > 0 })
+            {
+                var match = list.FirstOrDefault(s => string.Equals(s.OrderKey, subscription.OrderKey, StringComparison.OrdinalIgnoreCase));
+                if (match is not null)
+                {
+                    return match;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private static string GetSubscriptionIdentifier(WooSubscription subscription)
+    {
+        if (!string.IsNullOrWhiteSpace(subscription.Number))
+        {
+            return subscription.Number!;
+        }
+
+        if (!string.IsNullOrWhiteSpace(subscription.OrderKey))
+        {
+            return subscription.OrderKey!;
+        }
+
+        return subscription.Id > 0 ? subscription.Id.ToString(CultureInfo.InvariantCulture) : "subscription";
+    }
+
+    private Dictionary<string, object?> BuildSubscriptionPayload(
+        WooSubscription subscription,
+        IReadOnlyDictionary<int, int> customerMap,
+        List<Dictionary<string, object?>> lineItems)
+    {
+        var payload = new Dictionary<string, object?>();
+        AddIfValue(payload, "status", subscription.Status);
+        AddIfValue(payload, "currency", subscription.Currency);
+        AddIfValue(payload, "customer_note", subscription.CustomerNote);
+        AddIfValue(payload, "order_key", subscription.OrderKey);
+        AddIfValue(payload, "billing_period", subscription.BillingPeriod);
+        AddIfValue(payload, "billing_interval", subscription.BillingInterval);
+        AddIfValue(payload, "payment_method", subscription.PaymentMethod);
+        AddIfValue(payload, "payment_method_title", subscription.PaymentMethodTitle);
+        AddIfValue(payload, "start_date", subscription.StartDate);
+        AddIfValue(payload, "trial_end_date", subscription.TrialEndDate);
+        AddIfValue(payload, "next_payment_date", subscription.NextPaymentDate);
+        AddIfValue(payload, "end_date", subscription.EndDate);
+        AddIfValue(payload, "date_created", subscription.DateCreated);
+        AddIfValue(payload, "date_created_gmt", subscription.DateCreatedGmt);
+        AddIfValue(payload, "date_modified", subscription.DateModified);
+        AddIfValue(payload, "date_modified_gmt", subscription.DateModifiedGmt);
+
+        var mappedCustomer = MapId(subscription.CustomerId, customerMap);
+        if (mappedCustomer.HasValue)
+        {
+            payload["customer_id"] = mappedCustomer.Value;
+        }
+
+        if (subscription.Billing is not null)
+        {
+            payload["billing"] = subscription.Billing;
+        }
+
+        if (subscription.Shipping is not null)
+        {
+            payload["shipping"] = subscription.Shipping;
+        }
+
+        if (lineItems.Count > 0)
+        {
+            payload["line_items"] = lineItems;
+        }
+
+        var shippingLines = BuildShippingLines(subscription.ShippingLines);
+        if (shippingLines.Count > 0)
+        {
+            payload["shipping_lines"] = shippingLines;
+        }
+
+        var feeLines = BuildFeeLines(subscription.FeeLines);
+        if (feeLines.Count > 0)
+        {
+            payload["fee_lines"] = feeLines;
+        }
+
+        var taxLines = BuildTaxLines(subscription.TaxLines);
+        if (taxLines.Count > 0)
+        {
+            payload["tax_lines"] = taxLines;
+        }
+
+        var meta = BuildMetaDataPayload(subscription.MetaData);
+        if (meta.Count > 0)
+        {
+            payload["meta_data"] = meta;
+        }
+
+        return payload;
     }
 
     private static string GetOrderIdentifier(WooOrder order)

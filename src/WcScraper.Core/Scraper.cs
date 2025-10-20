@@ -1213,6 +1213,88 @@ public sealed class WooScraper : IDisposable
         return all;
     }
 
+    public async Task<List<WooSubscription>> FetchSubscriptionsAsync(
+        string baseUrl,
+        string username,
+        string applicationPassword,
+        IProgress<string>? log = null,
+        int perPage = 100,
+        int maxPages = 100)
+    {
+        baseUrl = CleanBaseUrl(baseUrl);
+        if (string.IsNullOrWhiteSpace(username) || string.IsNullOrWhiteSpace(applicationPassword))
+        {
+            log?.Report("Subscriptions request skipped: missing credentials.");
+            return new();
+        }
+
+        var all = new List<WooSubscription>();
+
+        for (int page = 1; page <= maxPages; page++)
+        {
+            var url = $"{baseUrl}/wp-json/wc/v1/subscriptions?per_page={perPage}&page={page}&orderby=id&order=asc";
+            try
+            {
+                using var req = new HttpRequestMessage(HttpMethod.Get, url);
+                req.Headers.Authorization = CreateBasicAuthHeader(username, applicationPassword);
+                log?.Report($"GET {url} (authenticated)");
+                using var resp = await _http.SendAsync(req);
+                if (!resp.IsSuccessStatusCode)
+                {
+                    if (resp.StatusCode == HttpStatusCode.NotFound)
+                    {
+                        log?.Report("Subscriptions endpoint returned 404.");
+                    }
+                    else
+                    {
+                        log?.Report($"Subscriptions request failed: {(int)resp.StatusCode} ({resp.ReasonPhrase}).");
+                    }
+                    break;
+                }
+
+                var text = await resp.Content.ReadAsStringAsync();
+                if (string.IsNullOrWhiteSpace(text))
+                {
+                    break;
+                }
+
+                var items = DeserializeListWithRecovery<WooSubscription>(text, "subscriptions", log);
+                if (items.Count == 0)
+                {
+                    break;
+                }
+
+                all.AddRange(items);
+                if (items.Count < perPage)
+                {
+                    break;
+                }
+            }
+            catch (TaskCanceledException ex)
+            {
+                log?.Report($"Subscriptions request timed out: {ex.Message}");
+                break;
+            }
+            catch (AuthenticationException ex)
+            {
+                log?.Report($"Subscriptions request TLS handshake failed: {ex.Message}");
+                break;
+            }
+            catch (IOException ex)
+            {
+                log?.Report($"Subscriptions request I/O failure: {ex.Message}");
+                break;
+            }
+            catch (HttpRequestException ex)
+            {
+                log?.Report($"Subscriptions request failed: {ex.Message}");
+                break;
+            }
+        }
+
+        return all;
+    }
+
     public async Task<List<StoreProduct>> FetchWpProductsBasicAsync(
         string baseUrl,
         int perPage = 100,
