@@ -2893,7 +2893,7 @@ public sealed class WooScraper : IDisposable
             if (candidate.ValueKind == JsonValueKind.String)
             {
                 var value = candidate.GetString();
-                if (!string.IsNullOrWhiteSpace(value))
+                if (!string.IsNullOrWhiteSpace(value) && LooksLikePath(value))
                 {
                     items.Add(value);
                 }
@@ -2930,6 +2930,15 @@ public sealed class WooScraper : IDisposable
 
     private static List<string> ExtractAssetPaths(JsonElement element)
     {
+        if (element.ValueKind == JsonValueKind.String)
+        {
+            var value = element.GetString();
+            if (!string.IsNullOrWhiteSpace(value) && LooksLikePath(value))
+            {
+                return new List<string> { value };
+            }
+        }
+
         var paths = ExtractStringList(element);
         if (paths.Count > 0)
         {
@@ -2981,7 +2990,7 @@ public sealed class WooScraper : IDisposable
             }
         }
 
-        Harvest(element, true);
+        Harvest(element, false);
         return results.ToList();
     }
 
