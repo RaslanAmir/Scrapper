@@ -2504,8 +2504,7 @@ public sealed class WooProvisioningService : IDisposable
                 var existing = await FindSubscriptionAsync(baseUrl, settings, subscription, cancellationToken);
                 if (existing is not null)
                 {
-                    progress?.Report($"Updating subscription '{identifier}' (ID {existing.Id}).");
-                    await PutAsync<WooSubscription>(baseUrl, settings, $"/wp-json/wc/v1/subscriptions/{existing.Id}", payload, cancellationToken);
+                    progress?.Report($"Subscription '{identifier}' already present as ID {existing.Id}. Skipping creation.");
                 }
                 else
                 {
