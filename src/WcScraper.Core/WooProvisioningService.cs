@@ -4067,24 +4067,48 @@ public sealed class WooProvisioningService : IDisposable
 
     private async Task<WooAttributeResponse?> FindAttributeAsync(string baseUrl, WooProvisioningSettings settings, string slug, CancellationToken cancellationToken)
     {
-        var list = await GetAsync<List<WooAttributeResponse>>(baseUrl, settings, $"/wp-json/wc/v3/products/attributes?per_page=100", cancellationToken);
-        if (list is null)
-        {
-            return null;
-        }
+        const int pageSize = 100;
+        var page = 1;
 
-        return list.FirstOrDefault(a => string.Equals(a.Slug, slug, StringComparison.OrdinalIgnoreCase));
+        while (true)
+        {
+            var list = await GetAsync<List<WooAttributeResponse>>(baseUrl, settings, $"/wp-json/wc/v3/products/attributes?per_page={pageSize}&page={page}", cancellationToken);
+            if (list is null || list.Count == 0)
+            {
+                return null;
+            }
+
+            var match = list.FirstOrDefault(a => string.Equals(a.Slug, slug, StringComparison.OrdinalIgnoreCase));
+            if (match is not null)
+            {
+                return match;
+            }
+
+            page++;
+        }
     }
 
     private async Task<WooTermResponse?> FindAttributeTermAsync(string baseUrl, WooProvisioningSettings settings, int attributeId, string slug, CancellationToken cancellationToken)
     {
-        var list = await GetAsync<List<WooTermResponse>>(baseUrl, settings, $"/wp-json/wc/v3/products/attributes/{attributeId}/terms?per_page=100", cancellationToken);
-        if (list is null)
-        {
-            return null;
-        }
+        const int pageSize = 100;
+        var page = 1;
 
-        return list.FirstOrDefault(t => string.Equals(t.Slug, slug, StringComparison.OrdinalIgnoreCase));
+        while (true)
+        {
+            var list = await GetAsync<List<WooTermResponse>>(baseUrl, settings, $"/wp-json/wc/v3/products/attributes/{attributeId}/terms?per_page={pageSize}&page={page}", cancellationToken);
+            if (list is null || list.Count == 0)
+            {
+                return null;
+            }
+
+            var match = list.FirstOrDefault(t => string.Equals(t.Slug, slug, StringComparison.OrdinalIgnoreCase));
+            if (match is not null)
+            {
+                return match;
+            }
+
+            page++;
+        }
     }
 
     private async Task<T> PostAsync<T>(string baseUrl, WooProvisioningSettings settings, string path, object payload, CancellationToken cancellationToken)
