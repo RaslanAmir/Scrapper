@@ -68,7 +68,14 @@ public class WooProvisioningServiceTests
         var productCall = handler.Calls.Single(call => call.Method == HttpMethod.Post && call.Path == "/wp-json/wc/v3/products");
         using (var doc = JsonDocument.Parse(productCall.Content))
         {
-            Assert.Equal("variable", doc.RootElement.GetProperty("type").GetString());
+            var root = doc.RootElement;
+            Assert.Equal("variable", root.GetProperty("type").GetString());
+            var attributes = root.GetProperty("attributes").EnumerateArray().ToList();
+            Assert.Single(attributes);
+            var attribute = attributes[0];
+            Assert.True(attribute.GetProperty("variation").GetBoolean());
+            Assert.True(attribute.GetProperty("visible").GetBoolean());
+            Assert.Equal(0, attribute.GetProperty("position").GetInt32());
         }
 
         var variationCall = handler.Calls.Single(call => call.Method == HttpMethod.Post && call.Path == "/wp-json/wc/v3/products/200/variations");

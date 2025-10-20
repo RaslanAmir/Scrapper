@@ -1657,7 +1657,63 @@ public sealed class WooProvisioningService : IDisposable
 
         var categoryRefs = BuildTaxonomyReferences(product.Categories, categoryMap);
         var tagRefs = BuildTaxonomyReferences(product.Tags, tagMap);
+        HashSet<int>? variationAttributeIds = null;
+        if (childVariations is { Count: > 0 })
+        {
+            foreach (var variation in childVariations)
+            {
+                if (variation?.Attributes is null || variation.Attributes.Count == 0)
+                {
+                    continue;
+                }
+
+                foreach (var attribute in variation.Attributes)
+                {
+                    if (attribute is null)
+                    {
+                        continue;
+                    }
+
+                    var key = NormalizeAttributeKey(attribute);
+                    if (key is null || !attributeMap.TryGetValue(key, out var attributeId))
+                    {
+                        continue;
+                    }
+
+                    variationAttributeIds ??= new HashSet<int>();
+                    variationAttributeIds.Add(attributeId);
+                }
+            }
+        }
+
         var attributePayload = BuildAttributePayload(product, attributeMap);
+        if (variationAttributeIds is { Count: > 0 })
+        {
+            for (var index = 0; index < attributePayload.Count; index++)
+            {
+                var attribute = attributePayload[index];
+                if (!attribute.TryGetValue("id", out var idValue) || idValue is not int attributeId)
+                {
+                    continue;
+                }
+
+                if (!variationAttributeIds.Contains(attributeId))
+                {
+                    continue;
+                }
+
+                attribute["variation"] = true;
+                if (!attribute.ContainsKey("visible"))
+                {
+                    attribute["visible"] = true;
+                }
+
+                if (!attribute.ContainsKey("position"))
+                {
+                    attribute["position"] = index;
+                }
+            }
+        }
         var imagePayload = await BuildImagePayloadAsync(baseUrl, settings, product, mediaCache, progress, cancellationToken);
 
         var payload = new Dictionary<string, object?>();
