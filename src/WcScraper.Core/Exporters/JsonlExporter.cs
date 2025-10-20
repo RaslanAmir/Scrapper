@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 
 namespace WcScraper.Core.Exporters;
 
@@ -31,7 +32,9 @@ public static class JsonlExporter
                 ["auto_update"] = p.AutoUpdate,
                 ["update_available_version"] = p.Update?.NewVersion,
                 ["update_package"] = p.Update?.Package,
+                ["option_data"] = CloneOptionData(p.OptionData),
                 ["option_keys"] = p.OptionKeys,
+                ["asset_manifest"] = CloneNode(p.AssetManifest),
                 ["asset_paths"] = p.AssetPaths
             });
 
@@ -53,10 +56,31 @@ public static class JsonlExporter
                 ["auto_update"] = t.AutoUpdate,
                 ["update_available_version"] = t.Update?.NewVersion,
                 ["update_package"] = t.Update?.Package,
+                ["option_data"] = CloneOptionData(t.OptionData),
                 ["option_keys"] = t.OptionKeys,
+                ["asset_manifest"] = CloneNode(t.AssetManifest),
                 ["asset_paths"] = t.AssetPaths
             });
 
         Write(path, rows);
+    }
+
+    private static JsonNode? CloneNode(JsonNode? node)
+        => node?.DeepClone();
+
+    private static JsonObject? CloneOptionData(Dictionary<string, JsonNode?> data)
+    {
+        if (data is null || data.Count == 0)
+        {
+            return null;
+        }
+
+        var obj = new JsonObject(StringComparer.OrdinalIgnoreCase);
+        foreach (var kvp in data)
+        {
+            obj[kvp.Key] = kvp.Value?.DeepClone();
+        }
+
+        return obj;
     }
 }

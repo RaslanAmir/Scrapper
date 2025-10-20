@@ -649,7 +649,7 @@ public sealed class WooScraper : IDisposable
         return result;
     }
 
-    public async Task<List<string>> FetchPluginAssetManifestAsync(
+    public async Task<ExtensionAssetSnapshot> FetchPluginAssetManifestAsync(
         string baseUrl,
         string username,
         string applicationPassword,
@@ -662,25 +662,27 @@ public sealed class WooScraper : IDisposable
         if (string.IsNullOrWhiteSpace(username) || string.IsNullOrWhiteSpace(applicationPassword))
         {
             log?.Report("Plugin manifest request skipped: missing credentials.");
-            return new();
+            return new ExtensionAssetSnapshot(null, null);
         }
 
         foreach (var endpoint in BuildPluginManifestEndpoints(plugin))
         {
-            var items = await TryFetchStringListAsync(baseUrl, endpoint, username, applicationPassword, log, $"Plugin manifest ({plugin.Name ?? plugin.Slug ?? plugin.PluginFile ?? "plugin"})");
-            if (items.Count > 0)
+            var snapshot = await TryFetchAssetSnapshotAsync(baseUrl, endpoint, username, applicationPassword, log,
+                $"Plugin manifest ({plugin.Name ?? plugin.Slug ?? plugin.PluginFile ?? "plugin"})");
+
+            if (snapshot.Paths.Count > 0 || !string.IsNullOrWhiteSpace(snapshot.ManifestJson))
             {
-                return items;
+                return snapshot;
             }
         }
 
         var slug = DeterminePluginSlug(plugin);
         if (!string.IsNullOrWhiteSpace(slug))
         {
-            return new List<string> { $"/wp-content/plugins/{slug}/" };
+            return new ExtensionAssetSnapshot(null, new[] { $"/wp-content/plugins/{slug}/" });
         }
 
-        return new();
+        return new ExtensionAssetSnapshot(null, null);
     }
 
     public async Task<bool> DownloadPluginArchiveAsync(
@@ -757,7 +759,7 @@ public sealed class WooScraper : IDisposable
         return result;
     }
 
-    public async Task<List<string>> FetchThemeAssetManifestAsync(
+    public async Task<ExtensionAssetSnapshot> FetchThemeAssetManifestAsync(
         string baseUrl,
         string username,
         string applicationPassword,
@@ -770,25 +772,26 @@ public sealed class WooScraper : IDisposable
         if (string.IsNullOrWhiteSpace(username) || string.IsNullOrWhiteSpace(applicationPassword))
         {
             log?.Report("Theme manifest request skipped: missing credentials.");
-            return new();
+            return new ExtensionAssetSnapshot(null, null);
         }
 
         foreach (var endpoint in BuildThemeManifestEndpoints(theme))
         {
-            var items = await TryFetchStringListAsync(baseUrl, endpoint, username, applicationPassword, log, $"Theme manifest ({theme.Name ?? theme.Slug ?? theme.Stylesheet ?? "theme"})");
-            if (items.Count > 0)
+            var snapshot = await TryFetchAssetSnapshotAsync(baseUrl, endpoint, username, applicationPassword, log,
+                $"Theme manifest ({theme.Name ?? theme.Slug ?? theme.Stylesheet ?? "theme"})");
+            if (snapshot.Paths.Count > 0 || !string.IsNullOrWhiteSpace(snapshot.ManifestJson))
             {
-                return items;
+                return snapshot;
             }
         }
 
         var slug = DetermineThemeSlug(theme);
         if (!string.IsNullOrWhiteSpace(slug))
         {
-            return new List<string> { $"/wp-content/themes/{slug}/" };
+            return new ExtensionAssetSnapshot(null, new[] { $"/wp-content/themes/{slug}/" });
         }
 
-        return new();
+        return new ExtensionAssetSnapshot(null, null);
     }
 
     public async Task<bool> DownloadThemeArchiveAsync(
@@ -2520,6 +2523,26 @@ public sealed class WooScraper : IDisposable
         return null;
     }
 
+    private async Task<ExtensionAssetSnapshot> TryFetchAssetSnapshotAsync(
+        string baseUrl,
+        string path,
+        string username,
+        string applicationPassword,
+        IProgress<string>? log,
+        string context)
+    {
+        var element = await TryFetchJsonAsync(baseUrl, path, username, applicationPassword, log, context);
+        if (element is not JsonElement json)
+        {
+            return new ExtensionAssetSnapshot(null, null);
+        }
+
+        var clone = json.Clone();
+        var raw = clone.GetRawText();
+        var paths = ExtractAssetPaths(clone);
+        return new ExtensionAssetSnapshot(raw, paths);
+    }
+
     private async Task<List<string>> TryFetchStringListAsync(
         string baseUrl,
         string path,
@@ -2903,6 +2926,71 @@ public sealed class WooScraper : IDisposable
             .Select(s => s.Trim())
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
+    }
+
+    private static List<string> ExtractAssetPaths(JsonElement element)
+    {
+        var paths = ExtractStringList(element);
+        if (paths.Count > 0)
+        {
+            return paths;
+        }
+
+        var results = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        void Harvest(JsonElement node)
+        {
+            switch (node.ValueKind)
+            {
+                case JsonValueKind.String:
+                {
+                    var value = node.GetString();
+                    if (!string.IsNullOrWhiteSpace(value))
+                    {
+                        results.Add(value);
+                    }
+                    break;
+                }
+                case JsonValueKind.Array:
+                {
+                    foreach (var child in node.EnumerateArray())
+                    {
+                        Harvest(child);
+                    }
+                    break;
+                }
+                case JsonValueKind.Object:
+                {
+                    foreach (var property in node.EnumerateObject())
+                    {
+                        if (IsPathLikeProperty(property.Name))
+                        {
+                            Harvest(property.Value);
+                        }
+                        else if (property.Value.ValueKind == JsonValueKind.Array || property.Value.ValueKind == JsonValueKind.Object)
+                        {
+                            Harvest(property.Value);
+                        }
+                    }
+                    break;
+                }
+            }
+        }
+
+        Harvest(element);
+        return results.ToList();
+    }
+
+    private static bool IsPathLikeProperty(string name)
+    {
+        return name.Equals("path", StringComparison.OrdinalIgnoreCase)
+               || name.Equals("paths", StringComparison.OrdinalIgnoreCase)
+               || name.Equals("file", StringComparison.OrdinalIgnoreCase)
+               || name.Equals("files", StringComparison.OrdinalIgnoreCase)
+               || name.Equals("href", StringComparison.OrdinalIgnoreCase)
+               || name.Equals("src", StringComparison.OrdinalIgnoreCase)
+               || name.Equals("relative_path", StringComparison.OrdinalIgnoreCase)
+               || name.Equals("url", StringComparison.OrdinalIgnoreCase);
     }
 
     private async Task<List<InstalledPlugin>> FetchPluginsViaAdminAsync(

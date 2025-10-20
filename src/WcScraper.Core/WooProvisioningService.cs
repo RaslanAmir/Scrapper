@@ -437,16 +437,27 @@ public sealed class WooProvisioningService : IDisposable
             ? new[] { "/wp-json/wc-scraper/v1/plugins/install", "/?rest_route=/wc-scraper/v1/plugins/install" }
             : new[] { "/wp-json/wc-scraper/v1/themes/install", "/?rest_route=/wc-scraper/v1/themes/install" };
 
+        var uploaded = false;
         foreach (var endpoint in endpoints)
         {
-            var uploaded = await TryUploadBundleAsync(settings, bundle, scope, endpoint, archivePath, manifestPath, optionsPath, progress, cancellationToken);
-            if (uploaded)
+            var success = await TryUploadBundleAsync(settings, bundle, scope, endpoint, archivePath, manifestPath, optionsPath, progress, cancellationToken);
+            if (success)
             {
-                return;
+                uploaded = true;
+                break;
             }
         }
 
-        progress?.Report($"No {scope} upload endpoint accepted '{bundle.Slug}'.");
+        if (!uploaded)
+        {
+            progress?.Report($"No {scope} upload endpoint accepted '{bundle.Slug}'.");
+            return;
+        }
+
+        if (!string.IsNullOrWhiteSpace(optionsPath) && File.Exists(optionsPath))
+        {
+            await TryRestoreOptionsAsync(settings, scope, bundle.Slug, optionsPath, progress, cancellationToken);
+        }
     }
 
     private async Task<bool> TryUploadBundleAsync(
@@ -511,6 +522,73 @@ public sealed class WooProvisioningService : IDisposable
         {
             archiveContent?.Dispose();
         }
+    }
+
+    private async Task TryRestoreOptionsAsync(
+        WooProvisioningSettings settings,
+        string scope,
+        string slug,
+        string optionsPath,
+        IProgress<string>? progress,
+        CancellationToken cancellationToken)
+    {
+        if (!File.Exists(optionsPath))
+        {
+            return;
+        }
+
+        string json;
+        try
+        {
+            json = await File.ReadAllTextAsync(optionsPath, Encoding.UTF8, cancellationToken);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            progress?.Report($"Skipping {scope} options restore for '{slug}': {ex.Message}.");
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(json))
+        {
+            return;
+        }
+
+        foreach (var endpoint in BuildOptionWriteEndpoints(scope, slug))
+        {
+            var url = BuildUrl(settings.BaseUrl, endpoint);
+            try
+            {
+                using var content = new StringContent(json, Encoding.UTF8, "application/json");
+                using var request = new HttpRequestMessage(HttpMethod.Post, url);
+                request.Headers.Authorization = CreateAuthHeader(settings);
+                request.Content = content;
+
+                using var response = await _httpClient.SendAsync(request, cancellationToken);
+                if (response.IsSuccessStatusCode)
+                {
+                    progress?.Report($"Restored {scope} options for '{slug}'.");
+                    return;
+                }
+
+                if (response.StatusCode == HttpStatusCode.NotFound)
+                {
+                    continue;
+                }
+
+                var body = await response.Content.ReadAsStringAsync(cancellationToken);
+                progress?.Report($"{scope} options restore failed for '{slug}' ({(int)response.StatusCode} {response.ReasonPhrase}): {body}");
+            }
+            catch (TaskCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                progress?.Report($"{scope} options restore timed out for '{slug}' via {endpoint}.");
+            }
+            catch (HttpRequestException ex)
+            {
+                progress?.Report($"{scope} options restore failed for '{slug}' via {endpoint}: {ex.Message}");
+            }
+        }
+
+        progress?.Report($"No {scope} options endpoint accepted captured data for '{slug}'.");
     }
 
     private sealed class MediaProvisioningResult
@@ -3460,6 +3538,32 @@ public sealed class WooProvisioningService : IDisposable
             builder.Append(Uri.EscapeDataString(settings.ConsumerSecret));
         }
         return builder.ToString();
+    }
+
+    private static IEnumerable<string> BuildOptionWriteEndpoints(string scope, string slug)
+    {
+        if (string.IsNullOrWhiteSpace(slug))
+        {
+            yield break;
+        }
+
+        var esc = Uri.EscapeDataString(slug);
+        if (string.Equals(scope, "plugin", StringComparison.OrdinalIgnoreCase))
+        {
+            yield return $"/wp-json/wc-scraper/v1/plugins/{esc}/options";
+            yield return $"/wp-json/wc-scraper/v1/plugin-options?slug={esc}";
+            yield return $"/?rest_route=/wc-scraper/v1/plugin-options&slug={esc}";
+            yield return $"/wp-json/{slug}/v1/options";
+            yield return $"/wp-json/{slug}/v1/settings";
+        }
+        else
+        {
+            yield return $"/wp-json/wc-scraper/v1/themes/{esc}/options";
+            yield return $"/wp-json/wc-scraper/v1/theme-options?slug={esc}";
+            yield return $"/?rest_route=/wc-scraper/v1/theme-options&slug={esc}";
+            yield return $"/wp-json/{slug}/v1/options";
+            yield return $"/wp-json/{slug}/v1/settings";
+        }
     }
 
     private static void AddIfValue(IDictionary<string, object?> dict, string key, object? value)

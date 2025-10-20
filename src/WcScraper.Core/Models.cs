@@ -1,6 +1,7 @@
 using System.IO;
 using System.Net;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 
@@ -135,7 +136,9 @@ public sealed class InstalledPlugin
     [JsonPropertyName("autoupdate")] public bool? AutoUpdate { get; set; }
     [JsonPropertyName("update_channel")] public string? UpdateChannel { get; set; }
     [JsonPropertyName("update")] public PluginUpdateInfo? Update { get; set; }
+    [JsonPropertyName("option_data")] public Dictionary<string, JsonNode?> OptionData { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     [JsonPropertyName("option_keys")] public List<string> OptionKeys { get; set; } = new();
+    [JsonPropertyName("asset_manifest")] public JsonNode? AssetManifest { get; set; }
     [JsonPropertyName("asset_paths")] public List<string> AssetPaths { get; set; } = new();
 
     public void Normalize()
@@ -192,7 +195,9 @@ public sealed class InstalledTheme
     [JsonPropertyName("autoupdate")] public bool? AutoUpdate { get; set; }
     [JsonPropertyName("update_channel")] public string? UpdateChannel { get; set; }
     [JsonPropertyName("update")] public ThemeUpdateInfo? Update { get; set; }
+    [JsonPropertyName("option_data")] public Dictionary<string, JsonNode?> OptionData { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     [JsonPropertyName("option_keys")] public List<string> OptionKeys { get; set; } = new();
+    [JsonPropertyName("asset_manifest")] public JsonNode? AssetManifest { get; set; }
     [JsonPropertyName("asset_paths")] public List<string> AssetPaths { get; set; } = new();
 
     public void Normalize()
