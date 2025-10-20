@@ -98,6 +98,102 @@ public class WooProvisioningServiceTests
     }
 
     [Fact]
+    public async Task ProvisionAsync_ExistingAttributeFoundOnLaterPage_UsesExistingAttributeAndTerm()
+    {
+        var handler = new RecordingHandler();
+        handler.AttributePages[1] = new List<RecordingHandler.AttributeRecord>
+        {
+            new() { Id = 21, Name = "Material", Slug = "material" }
+        };
+        handler.AttributePages[2] = new List<RecordingHandler.AttributeRecord>
+        {
+            new() { Id = 42, Name = "Color", Slug = "color" }
+        };
+        handler.AttributeTermPages[(42, 1)] = new List<RecordingHandler.TermRecord>
+        {
+            new() { Id = 301, Name = "Green", Slug = "green" }
+        };
+        handler.AttributeTermPages[(42, 2)] = new List<RecordingHandler.TermRecord>
+        {
+            new() { Id = 302, Name = "Blue", Slug = "blue" }
+        };
+
+        using var httpClient = new HttpClient(handler);
+        var service = new WooProvisioningService(httpClient);
+        var settings = new WooProvisioningSettings("https://target.example", "ck", "cs");
+
+        var parent = new StoreProduct
+        {
+            Id = 103,
+            Name = "Existing Attribute Parent",
+            Slug = "existing-attribute-parent",
+            Sku = "EXISTING-ATTRIBUTE",
+            Type = "variable",
+            Attributes =
+            {
+                new VariationAttribute { AttributeKey = "pa_color", Option = "Blue" }
+            }
+        };
+
+        var variation = new StoreProduct
+        {
+            Id = 402,
+            ParentId = 103,
+            Name = "Existing Attribute Parent - Blue",
+            Slug = "existing-attribute-parent-blue",
+            Sku = "EXISTING-ATTRIBUTE-BLU",
+            Prices = new PriceInfo { RegularPrice = "24.99" },
+            StockStatus = "instock",
+            Attributes =
+            {
+                new VariationAttribute { AttributeKey = "pa_color", Option = "Blue" }
+            }
+        };
+
+        await service.ProvisionAsync(
+            settings,
+            new[] { parent },
+            variableProducts: new[] { new ProvisioningVariableProduct(parent, new[] { variation }) });
+
+        Assert.Contains(
+            handler.Calls,
+            call => call.Method == HttpMethod.Get
+                && call.Path == "/wp-json/wc/v3/products/attributes"
+                && call.Query.Contains("page=2", StringComparison.Ordinal));
+        Assert.Contains(
+            handler.Calls,
+            call => call.Method == HttpMethod.Get
+                && call.Path == "/wp-json/wc/v3/products/attributes/42/terms"
+                && call.Query.Contains("page=2", StringComparison.Ordinal));
+        Assert.DoesNotContain(
+            handler.Calls,
+            call => call.Method == HttpMethod.Post && call.Path == "/wp-json/wc/v3/products/attributes");
+        Assert.DoesNotContain(
+            handler.Calls,
+            call => call.Method == HttpMethod.Post
+                && call.Path == "/wp-json/wc/v3/products/attributes/42/terms");
+
+        var productCall = handler.Calls.Single(call => call.Method == HttpMethod.Post && call.Path == "/wp-json/wc/v3/products");
+        using (var productDoc = JsonDocument.Parse(productCall.Content!))
+        {
+            var attributes = productDoc.RootElement.GetProperty("attributes").EnumerateArray().ToList();
+            Assert.Single(attributes);
+            var attribute = attributes[0];
+            Assert.Equal(42, attribute.GetProperty("id").GetInt32());
+        }
+
+        var variationCall = handler.Calls.Single(call => call.Method == HttpMethod.Post && call.Path == "/wp-json/wc/v3/products/200/variations");
+        using (var variationDoc = JsonDocument.Parse(variationCall.Content!))
+        {
+            var attributes = variationDoc.RootElement.GetProperty("attributes").EnumerateArray().ToList();
+            Assert.Single(attributes);
+            var attribute = attributes[0];
+            Assert.Equal(42, attribute.GetProperty("id").GetInt32());
+            Assert.Equal("Blue", attribute.GetProperty("option").GetString());
+        }
+    }
+
+    [Fact]
     public async Task ProvisionAsync_VariationsCollection_CreatesVariations()
     {
         var handler = new RecordingHandler();
@@ -862,6 +958,8 @@ public class WooProvisioningServiceTests
     {
         public List<(HttpMethod Method, string Path, string Query, string? Content, string? Authorization)> Calls { get; } = new();
         public List<TaxRateRecord> TaxRates { get; } = new();
+        public Dictionary<int, List<AttributeRecord>> AttributePages { get; } = new();
+        public Dictionary<(int AttributeId, int Page), List<TermRecord>> AttributeTermPages { get; } = new();
 
         private readonly Dictionary<string, int> _createdCategoryIds = new(StringComparer.OrdinalIgnoreCase);
         private int _nextCategoryId = 500;
@@ -1035,17 +1133,48 @@ public class WooProvisioningServiceTests
 
             if (request.Method == HttpMethod.Get && path == "/wp-json/wc/v3/products/attributes")
             {
+                var page = ParsePageNumber(query);
+                if (AttributePages.TryGetValue(page, out var records))
+                {
+                    var payload = JsonSerializer.Serialize(records.Select(record => new
+                    {
+                        id = record.Id,
+                        name = record.Name,
+                        slug = record.Slug
+                    }));
+                    return Task.FromResult(JsonResponse(payload));
+                }
+
+                return Task.FromResult(JsonResponse("[]"));
+            }
+
+            if (request.Method == HttpMethod.Get
+                && path.StartsWith("/wp-json/wc/v3/products/attributes/", StringComparison.Ordinal)
+                && path.EndsWith("/terms", StringComparison.Ordinal))
+            {
+                var segments = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
+                if (segments.Length >= 7
+                    && int.TryParse(segments[5], NumberStyles.Integer, CultureInfo.InvariantCulture, out var attributeId))
+                {
+                    var page = ParsePageNumber(query);
+                    if (AttributeTermPages.TryGetValue((attributeId, page), out var records))
+                    {
+                        var payload = JsonSerializer.Serialize(records.Select(record => new
+                        {
+                            id = record.Id,
+                            name = record.Name,
+                            slug = record.Slug
+                        }));
+                        return Task.FromResult(JsonResponse(payload));
+                    }
+                }
+
                 return Task.FromResult(JsonResponse("[]"));
             }
 
             if (request.Method == HttpMethod.Post && path == "/wp-json/wc/v3/products/attributes")
             {
                 return Task.FromResult(JsonResponse("{\"id\":10,\"name\":\"Color\",\"slug\":\"color\"}"));
-            }
-
-            if (request.Method == HttpMethod.Get && path == "/wp-json/wc/v3/products/attributes/10/terms")
-            {
-                return Task.FromResult(JsonResponse("[]"));
             }
 
             if (request.Method == HttpMethod.Post && path == "/wp-json/wc/v3/products/attributes/10/terms")
@@ -1209,6 +1338,14 @@ public class WooProvisioningServiceTests
                 : 0;
         }
 
+        private static int ParsePageNumber(string query)
+        {
+            var pageValue = GetQueryParameter(query, "page");
+            return int.TryParse(pageValue, NumberStyles.Integer, CultureInfo.InvariantCulture, out var page) && page > 0
+                ? page
+                : 1;
+        }
+
         private static string? GetQueryParameter(string query, string key)
         {
             if (string.IsNullOrEmpty(query))
@@ -1227,6 +1364,20 @@ public class WooProvisioningServiceTests
             }
 
             return null;
+        }
+
+        public sealed class AttributeRecord
+        {
+            public int Id { get; init; }
+            public string? Name { get; init; }
+            public string? Slug { get; init; }
+        }
+
+        public sealed class TermRecord
+        {
+            public int Id { get; init; }
+            public string? Name { get; init; }
+            public string? Slug { get; init; }
         }
 
         public sealed class TaxRateRecord
