@@ -143,6 +143,7 @@ public sealed class WooScraper : IDisposable
             await FetchWooSeoMetadataAsync(baseUrl, productsNeedingSeo, log);
         }
 
+        await PopulateCategoryMetadataAsync(baseUrl, all, log);
         return all;
     }
 
@@ -231,6 +232,72 @@ public sealed class WooScraper : IDisposable
         }
 
         return all;
+    }
+
+    private async Task PopulateCategoryMetadataAsync(string baseUrl, List<StoreProduct> products, IProgress<string>? log)
+    {
+        if (products.Count == 0)
+        {
+            return;
+        }
+
+        var categoryTerms = await FetchProductCategoriesAsync(baseUrl, log);
+        if (categoryTerms.Count == 0)
+        {
+            return;
+        }
+
+        var byId = categoryTerms
+            .Where(term => term.Id > 0)
+            .GroupBy(term => term.Id)
+            .ToDictionary(group => group.Key, group => group.First(), EqualityComparer<int>.Default);
+
+        foreach (var product in products)
+        {
+            if (product.Categories is null || product.Categories.Count == 0)
+            {
+                continue;
+            }
+
+            foreach (var category in product.Categories)
+            {
+                if (category is null || category.Id <= 0)
+                {
+                    continue;
+                }
+
+                if (!byId.TryGetValue(category.Id, out var metadata))
+                {
+                    continue;
+                }
+
+                category.Description = metadata.Description;
+                category.Display = metadata.Display;
+                category.ParentId = metadata.ParentId;
+                category.MenuOrder = metadata.MenuOrder;
+                category.Count = metadata.Count;
+                category.Image = metadata.Image is null
+                    ? null
+                    : new CategoryImage
+                    {
+                        Id = metadata.Image.Id,
+                        Src = metadata.Image.Src,
+                        Alt = metadata.Image.Alt,
+                        Name = metadata.Image.Name
+                    };
+
+                if (metadata.ParentId is > 0 && byId.TryGetValue(metadata.ParentId.Value, out var parentMetadata))
+                {
+                    category.ParentSlug = parentMetadata.Slug;
+                    category.ParentName = parentMetadata.Name;
+                }
+                else
+                {
+                    category.ParentSlug = null;
+                    category.ParentName = null;
+                }
+            }
+        }
     }
 
     public async Task<WordPressMenuCollection?> FetchWordPressMenusAsync(
@@ -1421,6 +1488,7 @@ public sealed class WooScraper : IDisposable
             }
         }
 
+        await PopulateCategoryMetadataAsync(baseUrl, all, log);
         return all;
     }
 

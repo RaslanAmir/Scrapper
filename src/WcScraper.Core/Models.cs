@@ -58,7 +58,22 @@ public sealed class Category
     [JsonPropertyName("id")] public int Id { get; set; }
     [JsonPropertyName("name")] public string? Name { get; set; }
     [JsonPropertyName("slug")] public string? Slug { get; set; }
+    [JsonPropertyName("description")] public string? Description { get; set; }
+    [JsonPropertyName("display")] public string? Display { get; set; }
     [JsonPropertyName("parent")] public int? ParentId { get; set; }
+    [JsonPropertyName("parent_slug")] public string? ParentSlug { get; set; }
+    [JsonPropertyName("parent_name")] public string? ParentName { get; set; }
+    [JsonPropertyName("menu_order")] public int? MenuOrder { get; set; }
+    [JsonPropertyName("count")] public int? Count { get; set; }
+    [JsonPropertyName("image")] public CategoryImage? Image { get; set; }
+}
+
+public sealed class CategoryImage
+{
+    [JsonPropertyName("id")] public int? Id { get; set; }
+    [JsonPropertyName("src")] public string? Src { get; set; }
+    [JsonPropertyName("alt")] public string? Alt { get; set; }
+    [JsonPropertyName("name")] public string? Name { get; set; }
 }
 
 public sealed class ProductTag
@@ -103,6 +118,11 @@ public sealed class TermItem
     [JsonPropertyName("name")] public string? Name { get; set; }
     [JsonPropertyName("slug")] public string? Slug { get; set; }
     [JsonPropertyName("parent")] public int? ParentId { get; set; }
+    [JsonPropertyName("description")] public string? Description { get; set; }
+    [JsonPropertyName("display")] public string? Display { get; set; }
+    [JsonPropertyName("menu_order")] public int? MenuOrder { get; set; }
+    [JsonPropertyName("count")] public int? Count { get; set; }
+    [JsonPropertyName("image")] public CategoryImage? Image { get; set; }
 }
 
 public sealed class InstalledPlugin

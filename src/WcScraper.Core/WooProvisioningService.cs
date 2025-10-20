@@ -272,7 +272,9 @@ public sealed class WooProvisioningService : IDisposable
                 c => c.Name,
                 c => c.Slug,
                 c => c.Id,
-                c => c.ParentId);
+                c => c.ParentId,
+                c => c.ParentSlug,
+                c => c.ParentName);
             var tagSeeds = CollectTaxonomySeeds(productList.SelectMany(p => p.Tags ?? Enumerable.Empty<ProductTag>()), t => t.Name, t => t.Slug);
             var attributeSeeds = CollectAttributeSeeds(productList.Concat(variationList));
 
@@ -3162,10 +3164,22 @@ public sealed class WooProvisioningService : IDisposable
             cancellationToken.ThrowIfCancellationRequested();
             int? parentId = null;
             if (!string.IsNullOrWhiteSpace(seed.ParentKey)
-                && resource.Equals("categories", StringComparison.OrdinalIgnoreCase)
-                && result.TryGetValue(seed.ParentKey, out var mappedParent))
+                && resource.Equals("categories", StringComparison.OrdinalIgnoreCase))
             {
-                parentId = mappedParent;
+                if (!result.TryGetValue(seed.ParentKey, out var mappedParent))
+                {
+                    var existingParent = await FindTaxonomyAsync(baseUrl, settings, resource, seed.ParentKey, cancellationToken);
+                    if (existingParent is not null)
+                    {
+                        mappedParent = existingParent.Id;
+                        result[seed.ParentKey] = mappedParent;
+                    }
+                }
+
+                if (result.TryGetValue(seed.ParentKey, out var ensuredParent))
+                {
+                    parentId = ensuredParent;
+                }
             }
 
             var id = await EnsureTaxonomyAsync(baseUrl, settings, resource, seed, parentId, progress, cancellationToken);
@@ -3663,7 +3677,9 @@ public sealed class WooProvisioningService : IDisposable
         Func<T, string?> getName,
         Func<T, string?> getSlug,
         Func<T, int?>? getId = null,
-        Func<T, int?>? getParentId = null)
+        Func<T, int?>? getParentId = null,
+        Func<T, string?>? getParentSlug = null,
+        Func<T, string?>? getParentName = null)
     {
         var result = new Dictionary<string, TaxonomySeed>(StringComparer.OrdinalIgnoreCase);
         var idLookup = new Dictionary<int, string>();
@@ -3685,7 +3701,10 @@ public sealed class WooProvisioningService : IDisposable
 
             if (!result.TryGetValue(normalizedSlug, out var seed))
             {
-                seed = new TaxonomySeed(normalizedSlug, name ?? slug ?? normalizedSlug, normalizedSlug);
+                var displayName = string.IsNullOrWhiteSpace(name)
+                    ? (string.IsNullOrWhiteSpace(slug) ? normalizedSlug : slug!)
+                    : name!;
+                seed = new TaxonomySeed(normalizedSlug, displayName, normalizedSlug);
                 result[normalizedSlug] = seed;
             }
 
@@ -3698,12 +3717,42 @@ public sealed class WooProvisioningService : IDisposable
                 }
             }
 
+            string? parentKey = null;
             if (getParentId is not null)
             {
                 var parentId = getParentId(item);
-                if (parentId is > 0 && !pendingParents.ContainsKey(seed.Key))
+                if (parentId is > 0)
                 {
-                    pendingParents[seed.Key] = parentId.Value;
+                    if (idLookup.TryGetValue(parentId.Value, out var mappedParent))
+                    {
+                        parentKey = mappedParent;
+                    }
+                    else if (!pendingParents.ContainsKey(seed.Key))
+                    {
+                        pendingParents[seed.Key] = parentId.Value;
+                    }
+                }
+            }
+
+            if (string.IsNullOrWhiteSpace(parentKey) && getParentSlug is not null)
+            {
+                var candidate = NormalizeSlug(getParentSlug(item));
+                if (!string.IsNullOrWhiteSpace(candidate))
+                {
+                    parentKey = candidate;
+                }
+            }
+
+            if (!string.IsNullOrWhiteSpace(parentKey))
+            {
+                seed.ParentKey = parentKey;
+                if (!result.ContainsKey(parentKey))
+                {
+                    var parentDisplayName = getParentName?.Invoke(item);
+                    var displayName = string.IsNullOrWhiteSpace(parentDisplayName)
+                        ? parentKey
+                        : parentDisplayName!;
+                    result[parentKey] = new TaxonomySeed(parentKey, displayName, parentKey);
                 }
             }
         }
@@ -3727,40 +3776,41 @@ public sealed class WooProvisioningService : IDisposable
         }
 
         var byKey = seeds.ToDictionary(s => s.Key, s => s, StringComparer.OrdinalIgnoreCase);
-        var depthCache = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var visiting = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var ordered = new List<TaxonomySeed>();
 
-        int ComputeDepth(TaxonomySeed seed, HashSet<string> path)
+        void Visit(TaxonomySeed seed)
         {
-            if (depthCache.TryGetValue(seed.Key, out var cached))
+            if (!visiting.Add(seed.Key))
             {
-                return cached;
+                return;
             }
 
-            if (string.IsNullOrWhiteSpace(seed.ParentKey) || !byKey.TryGetValue(seed.ParentKey, out var parent))
+            if (!string.IsNullOrWhiteSpace(seed.ParentKey)
+                && byKey.TryGetValue(seed.ParentKey, out var parent)
+                && !visited.Contains(parent.Key))
             {
-                depthCache[seed.Key] = 0;
-                return 0;
+                Visit(parent);
             }
 
-            if (!path.Add(seed.Key))
-            {
-                depthCache[seed.Key] = 0;
-                return 0;
-            }
+            visiting.Remove(seed.Key);
 
-            var depth = 1 + ComputeDepth(parent, path);
-            path.Remove(seed.Key);
-            depthCache[seed.Key] = depth;
-            return depth;
+            if (visited.Add(seed.Key))
+            {
+                ordered.Add(seed);
+            }
         }
 
-        int GetDepth(TaxonomySeed seed)
-            => ComputeDepth(seed, new HashSet<string>(StringComparer.OrdinalIgnoreCase));
+        foreach (var seed in seeds.OrderBy(s => s.Key, StringComparer.OrdinalIgnoreCase))
+        {
+            if (!visited.Contains(seed.Key))
+            {
+                Visit(seed);
+            }
+        }
 
-        return seeds
-            .OrderBy(GetDepth)
-            .ThenBy(seed => seed.Key, StringComparer.OrdinalIgnoreCase)
-            .ToList();
+        return ordered;
     }
 
     private static string? NormalizeAttributeKey(VariationAttribute attribute)
