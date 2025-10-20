@@ -250,6 +250,8 @@ public sealed class WooProvisioningService : IDisposable
         MediaProvisioningResult? mediaResult = null;
         Dictionary<int, int>? pageIdMap = null;
         Dictionary<int, int>? postIdMap = null;
+        WordPressMenuCollection? menuCollection = null;
+        WordPressWidgetSnapshot? widgetSnapshot = null;
 
         if (siteContent is not null)
         {
@@ -270,14 +272,15 @@ public sealed class WooProvisioningService : IDisposable
                 authorIdMap,
                 progress,
                 cancellationToken);
-            await EnsureMenusAsync(baseUrl, settings, siteContent.Menus, pageIdMap, postIdMap, mediaResult, progress, cancellationToken);
-            await EnsureWidgetsAsync(baseUrl, settings, siteContent.Widgets, progress, cancellationToken);
+            menuCollection = siteContent.Menus;
+            widgetSnapshot = siteContent.Widgets;
         }
 
         var productIdMap = new Dictionary<int, int>();
         var customerIdMap = new Dictionary<int, int>();
         var couponIdMap = new Dictionary<int, int>();
         var categoryIdMap = new Dictionary<int, int>();
+        var tagIdMap = new Dictionary<int, int>();
         var couponCodeMap = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
 
         if (productList.Count > 0)
@@ -297,6 +300,7 @@ public sealed class WooProvisioningService : IDisposable
             var categoryMap = await EnsureTaxonomiesAsync(baseUrl, settings, "categories", categorySeeds, progress, cancellationToken);
             categoryIdMap = BuildCategoryIdMap(productList, categoryMap);
             var tagMap = await EnsureTaxonomiesAsync(baseUrl, settings, "tags", tagSeeds, progress, cancellationToken);
+            tagIdMap = BuildTagIdMap(productList, tagMap);
             var attributeMap = await EnsureAttributesAsync(baseUrl, settings, attributeSeeds, progress, cancellationToken);
 
             progress?.Report("Provisioning products…");
@@ -393,6 +397,27 @@ public sealed class WooProvisioningService : IDisposable
         if (subscriptionList.Count > 0)
         {
             await EnsureSubscriptionsAsync(baseUrl, settings, subscriptionList, productIdMap, customerIdMap, progress, cancellationToken);
+        }
+
+        if (menuCollection is not null)
+        {
+            await EnsureMenusAsync(
+                baseUrl,
+                settings,
+                menuCollection,
+                pageIdMap,
+                postIdMap,
+                mediaResult,
+                productIdMap,
+                categoryIdMap,
+                tagIdMap,
+                progress,
+                cancellationToken);
+        }
+
+        if (widgetSnapshot is not null)
+        {
+            await EnsureWidgetsAsync(baseUrl, settings, widgetSnapshot, progress, cancellationToken);
         }
 
         progress?.Report("Provisioning complete.");
@@ -805,6 +830,9 @@ public sealed class WooProvisioningService : IDisposable
         IReadOnlyDictionary<int, int>? pageIdMap,
         IReadOnlyDictionary<int, int>? postIdMap,
         MediaProvisioningResult? mediaResult,
+        IReadOnlyDictionary<int, int>? productIdMap,
+        IReadOnlyDictionary<int, int>? categoryIdMap,
+        IReadOnlyDictionary<int, int>? tagIdMap,
         IProgress<string>? progress,
         CancellationToken cancellationToken)
     {
@@ -838,7 +866,21 @@ public sealed class WooProvisioningService : IDisposable
                 var orderedItems = menu.Items.OrderBy(i => i.Order ?? 0).ToList();
                 foreach (var item in orderedItems)
                 {
-                    await EnsureMenuItemRecursive(baseUrl, settings, item, ensuredId, null, pageIdMap, postIdMap, mediaResult, menuItemIdMap, progress, cancellationToken);
+                    await EnsureMenuItemRecursive(
+                        baseUrl,
+                        settings,
+                        item,
+                        ensuredId,
+                        null,
+                        pageIdMap,
+                        postIdMap,
+                        mediaResult,
+                        productIdMap,
+                        categoryIdMap,
+                        tagIdMap,
+                        menuItemIdMap,
+                        progress,
+                        cancellationToken);
                 }
             }
         }
@@ -1247,6 +1289,9 @@ public sealed class WooProvisioningService : IDisposable
         IReadOnlyDictionary<int, int>? pageIdMap,
         IReadOnlyDictionary<int, int>? postIdMap,
         MediaProvisioningResult? mediaResult,
+        IReadOnlyDictionary<int, int>? productIdMap,
+        IReadOnlyDictionary<int, int>? categoryIdMap,
+        IReadOnlyDictionary<int, int>? tagIdMap,
         Dictionary<int, int> menuItemIdMap,
         IProgress<string>? progress,
         CancellationToken cancellationToken)
@@ -1280,24 +1325,45 @@ public sealed class WooProvisioningService : IDisposable
 
         if (item.ObjectId.HasValue && item.ObjectId.Value > 0)
         {
-            if (!string.IsNullOrWhiteSpace(item.Object)
-                && pageIdMap is not null
-                && item.Object.Equals("page", StringComparison.OrdinalIgnoreCase)
-                && pageIdMap.TryGetValue(item.ObjectId.Value, out var mappedPage))
+            var objectType = item.Object;
+            int? resolvedObjectId = null;
+
+            if (!string.IsNullOrWhiteSpace(objectType))
             {
-                payload["object_id"] = mappedPage;
+                if (pageIdMap is not null
+                    && objectType.Equals("page", StringComparison.OrdinalIgnoreCase)
+                    && pageIdMap.TryGetValue(item.ObjectId.Value, out var mappedPage))
+                {
+                    resolvedObjectId = mappedPage;
+                }
+                else if (postIdMap is not null
+                    && objectType.Equals("post", StringComparison.OrdinalIgnoreCase)
+                    && postIdMap.TryGetValue(item.ObjectId.Value, out var mappedPost))
+                {
+                    resolvedObjectId = mappedPost;
+                }
+                else if (productIdMap is not null
+                    && (objectType.Equals("product", StringComparison.OrdinalIgnoreCase)
+                        || objectType.Equals("product_variation", StringComparison.OrdinalIgnoreCase))
+                    && productIdMap.TryGetValue(item.ObjectId.Value, out var mappedProduct))
+                {
+                    resolvedObjectId = mappedProduct;
+                }
+                else if (categoryIdMap is not null
+                    && objectType.Equals("product_cat", StringComparison.OrdinalIgnoreCase)
+                    && categoryIdMap.TryGetValue(item.ObjectId.Value, out var mappedCategory))
+                {
+                    resolvedObjectId = mappedCategory;
+                }
+                else if (tagIdMap is not null
+                    && objectType.Equals("product_tag", StringComparison.OrdinalIgnoreCase)
+                    && tagIdMap.TryGetValue(item.ObjectId.Value, out var mappedTag))
+                {
+                    resolvedObjectId = mappedTag;
+                }
             }
-            else if (!string.IsNullOrWhiteSpace(item.Object)
-                && postIdMap is not null
-                && item.Object.Equals("post", StringComparison.OrdinalIgnoreCase)
-                && postIdMap.TryGetValue(item.ObjectId.Value, out var mappedPost))
-            {
-                payload["object_id"] = mappedPost;
-            }
-            else
-            {
-                payload["object_id"] = item.ObjectId.Value;
-            }
+
+            payload["object_id"] = resolvedObjectId ?? item.ObjectId.Value;
         }
 
         if (item.Classes is { Count: > 0 })
@@ -1344,7 +1410,21 @@ public sealed class WooProvisioningService : IDisposable
                 {
                     foreach (var child in item.Children.OrderBy(i => i.Order ?? 0))
                     {
-                        await EnsureMenuItemRecursive(baseUrl, settings, child, menuId, newId, pageIdMap, postIdMap, mediaResult, menuItemIdMap, progress, cancellationToken);
+                        await EnsureMenuItemRecursive(
+                            baseUrl,
+                            settings,
+                            child,
+                            menuId,
+                            newId,
+                            pageIdMap,
+                            postIdMap,
+                            mediaResult,
+                            productIdMap,
+                            categoryIdMap,
+                            tagIdMap,
+                            menuItemIdMap,
+                            progress,
+                            cancellationToken);
                     }
                 }
             }
@@ -4087,6 +4167,38 @@ public sealed class WooProvisioningService : IDisposable
                 }
 
                 result[category.Id] = mappedId;
+            }
+        }
+
+        return result;
+    }
+
+    private static Dictionary<int, int> BuildTagIdMap(
+        IEnumerable<StoreProduct> products,
+        IReadOnlyDictionary<string, int> tagMap)
+    {
+        var result = new Dictionary<int, int>();
+        foreach (var product in products)
+        {
+            if (product?.Tags is null || product.Tags.Count == 0)
+            {
+                continue;
+            }
+
+            foreach (var tag in product.Tags)
+            {
+                if (tag is null || tag.Id <= 0)
+                {
+                    continue;
+                }
+
+                var key = BuildTaxonomyKey(tag.Slug, tag.Name);
+                if (key is null || !tagMap.TryGetValue(key, out var mappedId))
+                {
+                    continue;
+                }
+
+                result[tag.Id] = mappedId;
             }
         }
 

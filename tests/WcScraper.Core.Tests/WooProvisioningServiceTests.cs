@@ -520,6 +520,90 @@ public class WooProvisioningServiceTests
     }
 
     [Fact]
+    public async Task ProvisionAsync_MenuItem_UsesMappedObjectIds()
+    {
+        var handler = new RecordingHandler();
+        using var httpClient = new HttpClient(handler);
+        var service = new WooProvisioningService(httpClient);
+        var settings = new WooProvisioningSettings(
+            "https://target.example",
+            "ck",
+            "cs",
+            wordpressUsername: "wpuser",
+            wordpressApplicationPassword: "app-pass");
+
+        var category = new Category { Id = 654, Name = "Menu Category", Slug = "menu-category" };
+
+        var product = new StoreProduct
+        {
+            Id = 321,
+            Name = "Menu Product",
+            Slug = "menu-product",
+            Sku = "MENU-PROD",
+            Categories = { category }
+        };
+
+        var menu = new WordPressMenu
+        {
+            Id = 10,
+            Name = "Primary Menu",
+            Slug = "primary",
+            Items =
+            {
+                new WordPressMenuItem
+                {
+                    Id = 100,
+                    Order = 1,
+                    Title = new WordPressRenderedText { Rendered = "Product Link" },
+                    Object = "product",
+                    ObjectId = product.Id
+                },
+                new WordPressMenuItem
+                {
+                    Id = 101,
+                    Order = 2,
+                    Title = new WordPressRenderedText { Rendered = "Category Link" },
+                    Object = "product_cat",
+                    ObjectId = category.Id
+                }
+            }
+        };
+
+        var siteContent = new WordPressSiteContent
+        {
+            Menus = new WordPressMenuCollection
+            {
+                Menus = { menu }
+            }
+        };
+
+        await service.ProvisionAsync(
+            settings,
+            new[] { product },
+            siteContent: siteContent);
+
+        var menuItemCalls = handler.Calls
+            .Where(call => call.Method == HttpMethod.Post && call.Path == "/wp-json/wp/v2/menu-items")
+            .ToList();
+
+        Assert.Equal(2, menuItemCalls.Count);
+        Assert.All(menuItemCalls, call => Assert.False(string.IsNullOrWhiteSpace(call.Content)));
+
+        using (var productItemDoc = JsonDocument.Parse(menuItemCalls[0].Content!))
+        {
+            Assert.Equal(200, productItemDoc.RootElement.GetProperty("object_id").GetInt32());
+        }
+
+        var createdCategoryId = handler.GetCreatedCategoryId("menu-category");
+        Assert.True(createdCategoryId.HasValue, "Expected category to be created during provisioning.");
+
+        using (var categoryItemDoc = JsonDocument.Parse(menuItemCalls[1].Content!))
+        {
+            Assert.Equal(createdCategoryId.Value, categoryItemDoc.RootElement.GetProperty("object_id").GetInt32());
+        }
+    }
+
+    [Fact]
     public async Task ProvisionAsync_PageWithMappedAuthor_UsesMappedAuthor()
     {
         var handler = new RecordingHandler();
@@ -633,6 +717,8 @@ public class WooProvisioningServiceTests
 
         private readonly Dictionary<string, int> _createdCategoryIds = new(StringComparer.OrdinalIgnoreCase);
         private int _nextCategoryId = 500;
+        private int _nextMenuId = 4000;
+        private int _nextMenuItemId = 5000;
 
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
@@ -678,6 +764,16 @@ public class WooProvisioningServiceTests
             }
 
             if (request.Method == HttpMethod.Get && path == "/wp-json/wc/v3/products" && query.Contains("slug=mixed-image-product", StringComparison.Ordinal))
+            {
+                return Task.FromResult(JsonResponse("[]"));
+            }
+
+            if (request.Method == HttpMethod.Get && path == "/wp-json/wc/v3/products" && query.Contains("sku=MENU-PROD", StringComparison.Ordinal))
+            {
+                return Task.FromResult(JsonResponse("[]"));
+            }
+
+            if (request.Method == HttpMethod.Get && path == "/wp-json/wc/v3/products" && query.Contains("slug=menu-product", StringComparison.Ordinal))
             {
                 return Task.FromResult(JsonResponse("[]"));
             }
@@ -754,6 +850,38 @@ public class WooProvisioningServiceTests
             if (request.Method == HttpMethod.Post && path == "/wp-json/wc/v3/products")
             {
                 return Task.FromResult(JsonResponse("{\"id\":200,\"sku\":\"PARENT-SKU\",\"slug\":\"parent-product\"}"));
+            }
+
+            if (request.Method == HttpMethod.Get && path == "/wp-json/wp/v2/menus")
+            {
+                return Task.FromResult(JsonResponse("[]"));
+            }
+
+            if (request.Method == HttpMethod.Post && path == "/wp-json/wp/v2/menus")
+            {
+                var id = ++_nextMenuId;
+                return Task.FromResult(JsonResponse($"{{\"id\":{id}}}"));
+            }
+
+            if (request.Method == HttpMethod.Get && path == "/wp-json/wp/v2/menu-items")
+            {
+                return Task.FromResult(JsonResponse("[]"));
+            }
+
+            if (request.Method == HttpMethod.Post && path == "/wp-json/wp/v2/menu-items")
+            {
+                var id = ++_nextMenuItemId;
+                return Task.FromResult(JsonResponse($"{{\"id\":{id}}}"));
+            }
+
+            if (request.Method == HttpMethod.Delete && path.StartsWith("/wp-json/wp/v2/menu-items/", StringComparison.Ordinal))
+            {
+                return Task.FromResult(JsonResponse("{}"));
+            }
+
+            if (request.Method == HttpMethod.Post && path.StartsWith("/wp-json/wp/v2/menu-locations/", StringComparison.Ordinal))
+            {
+                return Task.FromResult(JsonResponse("{}"));
             }
 
             if (request.Method == HttpMethod.Post && path == "/wp-json/wc/v3/coupons")
