@@ -308,6 +308,15 @@ public sealed class WooProvisioningService : IDisposable
                         mediaCache[pair.Key] = pair.Value;
                     }
                 }
+
+                foreach (var pair in mediaResult.IdMap)
+                {
+                    var key = pair.Key.ToString(CultureInfo.InvariantCulture);
+                    if (!mediaCache.ContainsKey(key))
+                    {
+                        mediaCache[key] = pair.Value;
+                    }
+                }
             }
 
             var productLookup = productList
@@ -3119,6 +3128,34 @@ public sealed class WooProvisioningService : IDisposable
         {
             foreach (var img in product.Images)
             {
+                if (img is null)
+                {
+                    continue;
+                }
+
+                if (!string.IsNullOrWhiteSpace(img.Src)
+                    && mediaCache.TryGetValue(img.Src, out var cachedFromSrc))
+                {
+                    images.Add(new Dictionary<string, object?>
+                    {
+                        ["id"] = cachedFromSrc
+                    });
+                    continue;
+                }
+
+                if (img.Id > 0)
+                {
+                    var idKey = img.Id.ToString(CultureInfo.InvariantCulture);
+                    if (mediaCache.TryGetValue(idKey, out var cachedFromId))
+                    {
+                        images.Add(new Dictionary<string, object?>
+                        {
+                            ["id"] = cachedFromId
+                        });
+                        continue;
+                    }
+                }
+
                 if (string.IsNullOrWhiteSpace(img.Src))
                 {
                     continue;

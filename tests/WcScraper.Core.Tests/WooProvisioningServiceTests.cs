@@ -251,6 +251,75 @@ public class WooProvisioningServiceTests
     }
 
     [Fact]
+    public async Task ProvisionAsync_RemoteImageWithCachedMapping_UsesAttachmentId()
+    {
+        var handler = new RecordingHandler();
+        using var httpClient = new HttpClient(handler);
+        var service = new WooProvisioningService(httpClient);
+        var settings = new WooProvisioningSettings(
+            "https://target.example",
+            "ck",
+            "cs",
+            wordpressUsername: "wpuser",
+            wordpressApplicationPassword: "app-pass");
+
+        var tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+        var mediaFile = Path.Combine(tempDir, "gallery.jpg");
+        await File.WriteAllTextAsync(mediaFile, "exported image");
+
+        try
+        {
+            var exportedUrl = "https://source.example/wp-content/uploads/gallery.jpg";
+
+            var siteContent = new WordPressSiteContent
+            {
+                MediaRootDirectory = tempDir
+            };
+            siteContent.MediaLibrary.Add(new WordPressMediaItem
+            {
+                Id = 555,
+                SourceUrl = exportedUrl,
+                LocalFilePath = mediaFile
+            });
+
+            var product = new StoreProduct
+            {
+                Id = 888,
+                Name = "Remote Image Product",
+                Slug = "local-image-product",
+                Sku = "LOCAL-IMAGE-SKU",
+                Images =
+                {
+                    new ProductImage { Src = exportedUrl, Alt = "Gallery" }
+                }
+            };
+
+            await service.ProvisionAsync(
+                settings,
+                new[] { product },
+                siteContent: siteContent);
+
+            var productCall = handler.Calls.Single(call => call.Method == HttpMethod.Post && call.Path == "/wp-json/wc/v3/products");
+            Assert.NotNull(productCall.Content);
+            using var doc = JsonDocument.Parse(productCall.Content!);
+            var images = doc.RootElement.GetProperty("images").EnumerateArray().ToList();
+            Assert.Single(images);
+            var image = images[0];
+            Assert.True(image.TryGetProperty("id", out var idProperty));
+            Assert.Equal(301, idProperty.GetInt32());
+            Assert.False(image.TryGetProperty("src", out _));
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+            {
+                Directory.Delete(tempDir, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
     public async Task ProvisionAsync_PageWithoutMappedAuthor_DoesNotSendAuthorField()
     {
         var handler = new RecordingHandler();
@@ -409,6 +478,11 @@ public class WooProvisioningServiceTests
                 return Task.FromResult(JsonResponse("[]"));
             }
 
+            if (request.Method == HttpMethod.Get && path == "/wp-json/wp/v2/media")
+            {
+                return Task.FromResult(JsonResponse("[]"));
+            }
+
             if (request.Method == HttpMethod.Get && path == "/wp-json/wc/v3/products/attributes")
             {
                 return Task.FromResult(JsonResponse("[]"));
@@ -455,7 +529,7 @@ public class WooProvisioningServiceTests
 
             if (request.Method == HttpMethod.Post && path == "/wp-json/wp/v2/media")
             {
-                return Task.FromResult(JsonResponse("{\"id\":301}"));
+                return Task.FromResult(JsonResponse("{\"id\":301,\"source_url\":\"https://target.example/wp-content/uploads/gallery.jpg\"}"));
             }
 
             if (request.Method == HttpMethod.Post && path == "/wp-json/wc/v3/products")
