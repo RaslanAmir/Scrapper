@@ -320,6 +320,63 @@ public class WooProvisioningServiceTests
     }
 
     [Fact]
+    public async Task ProvisionAsync_LocalAndRemoteImages_PreservesGalleryEntries()
+    {
+        var handler = new RecordingHandler();
+        using var httpClient = new HttpClient(handler);
+        var service = new WooProvisioningService(httpClient);
+        var settings = new WooProvisioningSettings(
+            "https://target.example",
+            "ck",
+            "cs",
+            wordpressUsername: "wpuser",
+            wordpressApplicationPassword: "app-pass");
+
+        var tempFile = Path.Combine(Path.GetTempPath(), Guid.NewGuid() + ".jpg");
+        await File.WriteAllTextAsync(tempFile, "test image content");
+
+        try
+        {
+            var product = new StoreProduct
+            {
+                Id = 889,
+                Name = "Mixed Image Product",
+                Slug = "mixed-image-product",
+                Sku = "MIXED-IMAGE-SKU",
+                Images =
+                {
+                    new ProductImage { Src = "https://example.com/gallery1.jpg", Alt = "Gallery 1" },
+                    new ProductImage { Src = "https://example.com/gallery2.jpg", Alt = "Gallery 2" }
+                }
+            };
+            product.LocalImageFilePaths.Add(tempFile);
+
+            await service.ProvisionAsync(settings, new[] { product });
+
+            var productCall = handler.Calls.Single(call => call.Method == HttpMethod.Post && call.Path == "/wp-json/wc/v3/products");
+            Assert.NotNull(productCall.Content);
+            using var doc = JsonDocument.Parse(productCall.Content!);
+            var images = doc.RootElement.GetProperty("images").EnumerateArray().ToList();
+            Assert.Equal(3, images.Count);
+
+            Assert.Equal(301, images[0].GetProperty("id").GetInt32());
+
+            Assert.Equal("https://example.com/gallery1.jpg", images[1].GetProperty("src").GetString());
+            Assert.Equal("Gallery 1", images[1].GetProperty("alt").GetString());
+
+            Assert.Equal("https://example.com/gallery2.jpg", images[2].GetProperty("src").GetString());
+            Assert.Equal("Gallery 2", images[2].GetProperty("alt").GetString());
+        }
+        finally
+        {
+            if (File.Exists(tempFile))
+            {
+                File.Delete(tempFile);
+            }
+        }
+    }
+
+    [Fact]
     public async Task ProvisionAsync_PageWithoutMappedAuthor_DoesNotSendAuthorField()
     {
         var handler = new RecordingHandler();
@@ -474,6 +531,16 @@ public class WooProvisioningServiceTests
             }
 
             if (request.Method == HttpMethod.Get && path == "/wp-json/wc/v3/products" && query.Contains("slug=local-image-product", StringComparison.Ordinal))
+            {
+                return Task.FromResult(JsonResponse("[]"));
+            }
+
+            if (request.Method == HttpMethod.Get && path == "/wp-json/wc/v3/products" && query.Contains("sku=MIXED-IMAGE-SKU", StringComparison.Ordinal))
+            {
+                return Task.FromResult(JsonResponse("[]"));
+            }
+
+            if (request.Method == HttpMethod.Get && path == "/wp-json/wc/v3/products" && query.Contains("slug=mixed-image-product", StringComparison.Ordinal))
             {
                 return Task.FromResult(JsonResponse("[]"));
             }
