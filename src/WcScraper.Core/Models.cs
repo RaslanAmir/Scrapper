@@ -614,6 +614,7 @@ public abstract class WordPressContentBase
     [JsonPropertyName("status")] public string? Status { get; set; }
     [JsonPropertyName("type")] public string? Type { get; set; }
     [JsonPropertyName("link")] public string? Link { get; set; }
+    [JsonPropertyName("guid")] public WordPressRenderedText? Guid { get; set; }
     [JsonPropertyName("title")] public WordPressRenderedText? Title { get; set; }
     [JsonPropertyName("content")] public WordPressRenderedText? Content { get; set; }
     [JsonPropertyName("excerpt")] public WordPressRenderedText? Excerpt { get; set; }
@@ -626,7 +627,9 @@ public abstract class WordPressContentBase
     [JsonIgnore] public string? RenderedHtml => Content?.Rendered;
     [JsonIgnore] public string? RenderedExcerpt => Excerpt?.Rendered;
     [JsonPropertyName("referenced_media_urls")] public List<string> ReferencedMediaUrls { get; set; } = new();
+    [JsonPropertyName("referenced_media_files")] public List<string> ReferencedMediaFiles { get; set; } = new();
     [JsonPropertyName("featured_media_url")] public string? FeaturedMediaUrl { get; set; }
+    [JsonPropertyName("featured_media_file")] public string? FeaturedMediaFile { get; set; }
 
     public virtual void Normalize()
     {
@@ -852,9 +855,38 @@ public sealed class WordPressMenu
 
 public sealed class WordPressMenuItem
 {
+    private int? _order;
+    private int? _parentId;
+
     [JsonPropertyName("id")] public int Id { get; set; }
-    [JsonPropertyName("order")] public int? Order { get; set; }
-    [JsonPropertyName("parent")] public int? ParentId { get; set; }
+    [JsonPropertyName("order")] public int? Order
+    {
+        get => _order;
+        set => _order = value;
+    }
+
+    [JsonPropertyName("menu_order")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? MenuOrderAlias
+    {
+        get => _order;
+        set => _order = value;
+    }
+
+    [JsonPropertyName("parent")] public int? ParentId
+    {
+        get => _parentId;
+        set => _parentId = value;
+    }
+
+    [JsonPropertyName("menu_item_parent")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? MenuItemParentAlias
+    {
+        get => _parentId;
+        set => _parentId = value;
+    }
+
     [JsonPropertyName("title")] public WordPressRenderedText? Title { get; set; }
     [JsonPropertyName("url")] public string? Url { get; set; }
     [JsonPropertyName("attr_title")] public string? AttrTitle { get; set; }

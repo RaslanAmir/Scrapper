@@ -9,6 +9,7 @@ using System.Linq;
 using System.Net.Http;
 using System.Runtime.CompilerServices;
 using System.Text;
+using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Threading.Tasks;
@@ -601,6 +602,13 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 else
                 {
                     Append("Media download skipped (no entries).");
+                }
+
+                var contentItems = pages.Cast<WordPressContentBase>().Concat(posts).ToList();
+                if (contentItems.Count > 0)
+                {
+                    Append("Resolving content media references…");
+                    await PopulateContentMediaReferencesAsync(contentItems, mediaLibrary, mediaFolder, mediaReferenceMap, logger);
                 }
 
                 var contentFolder = Path.Combine(storeOutputFolder, "content");
@@ -1326,6 +1334,186 @@ public sealed class MainViewModel : INotifyPropertyChanged
         return map;
     }
 
+    private async Task PopulateContentMediaReferencesAsync(
+        List<WordPressContentBase> contentItems,
+        List<WordPressMediaItem> mediaLibrary,
+        string mediaRoot,
+        IDictionary<string, MediaReference> mediaMap,
+        IProgress<string>? logger)
+    {
+        var existingByUrl = mediaLibrary
+            .Where(m => !string.IsNullOrWhiteSpace(m.SourceUrl))
+            .GroupBy(m => m.SourceUrl!, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+
+        foreach (var content in contentItems)
+        {
+            if (content is null)
+            {
+                continue;
+            }
+
+            content.ReferencedMediaFiles.Clear();
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var url in content.ReferencedMediaUrls)
+            {
+                if (string.IsNullOrWhiteSpace(url) || !seen.Add(url))
+                {
+                    continue;
+                }
+
+                var reference = await EnsureMediaReferenceAsync(url, mediaRoot, mediaMap, logger);
+                if (reference is null)
+                {
+                    continue;
+                }
+
+                content.ReferencedMediaFiles.Add(reference.RelativePath);
+                EnsureMediaLibraryEntry(url, reference, existingByUrl, mediaLibrary);
+            }
+
+            if (!string.IsNullOrWhiteSpace(content.FeaturedMediaUrl))
+            {
+                var reference = await EnsureMediaReferenceAsync(content.FeaturedMediaUrl!, mediaRoot, mediaMap, logger);
+                if (reference is not null)
+                {
+                    content.FeaturedMediaFile = reference.RelativePath;
+                    EnsureMediaLibraryEntry(content.FeaturedMediaUrl!, reference, existingByUrl, mediaLibrary);
+                }
+                else
+                {
+                    content.FeaturedMediaFile = null;
+                }
+            }
+            else
+            {
+                content.FeaturedMediaFile = null;
+            }
+        }
+    }
+
+    private async Task<MediaReference?> EnsureMediaReferenceAsync(
+        string url,
+        string mediaRoot,
+        IDictionary<string, MediaReference> mediaMap,
+        IProgress<string>? logger)
+    {
+        if (string.IsNullOrWhiteSpace(url))
+        {
+            return null;
+        }
+
+        if (mediaMap.TryGetValue(url, out var cached))
+        {
+            return cached;
+        }
+
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri))
+        {
+            return null;
+        }
+
+        var extension = Path.GetExtension(uri.AbsolutePath);
+        if (string.IsNullOrWhiteSpace(extension) || extension.Length > 10)
+        {
+            extension = ".bin";
+        }
+
+        var baseName = Path.GetFileNameWithoutExtension(uri.AbsolutePath);
+        if (string.IsNullOrWhiteSpace(baseName))
+        {
+            baseName = "asset";
+        }
+        baseName = SanitizeSegment(baseName);
+        var hash = ComputeShortHash(url);
+        var fileName = $"{baseName}-{hash}{extension}";
+
+        var contentFolder = Path.Combine(mediaRoot, "content");
+        Directory.CreateDirectory(contentFolder);
+
+        var absolutePath = Path.Combine(contentFolder, fileName);
+        var relativePath = NormalizeRelativePath(Path.Combine("media", "content", fileName));
+
+        if (!File.Exists(absolutePath))
+        {
+            try
+            {
+                logger?.Report($"Downloading {url} -> {relativePath}");
+                using var response = await _httpClient.GetAsync(uri);
+                if (!response.IsSuccessStatusCode)
+                {
+                    logger?.Report($"Failed to download {url}: {(int)response.StatusCode} ({response.ReasonPhrase}).");
+                    return null;
+                }
+
+                await using var input = await response.Content.ReadAsStreamAsync();
+                await using var output = File.Create(absolutePath);
+                await input.CopyToAsync(output);
+            }
+            catch (Exception ex)
+            {
+                logger?.Report($"Failed to download {url}: {ex.Message}");
+                return null;
+            }
+        }
+
+        var reference = new MediaReference(relativePath, absolutePath);
+        mediaMap[url] = reference;
+        return reference;
+    }
+
+    private void EnsureMediaLibraryEntry(
+        string url,
+        MediaReference reference,
+        IDictionary<string, WordPressMediaItem> existing,
+        List<WordPressMediaItem> mediaLibrary)
+    {
+        if (existing.TryGetValue(url, out var current))
+        {
+            current.RelativeFilePath ??= reference.RelativePath;
+            current.LocalFilePath ??= reference.AbsolutePath;
+            return;
+        }
+
+        var placeholder = CreateContentMediaPlaceholder(url, reference);
+        mediaLibrary.Add(placeholder);
+        existing[url] = placeholder;
+    }
+
+    private WordPressMediaItem CreateContentMediaPlaceholder(string url, MediaReference reference)
+    {
+        var fileName = Path.GetFileName(reference.AbsolutePath);
+        var baseName = string.IsNullOrWhiteSpace(fileName)
+            ? $"asset-{ComputeShortHash(url)}"
+            : Path.GetFileNameWithoutExtension(fileName);
+        baseName = SanitizeSegment(baseName);
+        var extension = Path.GetExtension(fileName);
+        var mimeType = GuessMimeTypeFromExtension(extension);
+        var mediaType = GuessMediaType(mimeType);
+
+        var item = new WordPressMediaItem
+        {
+            Id = 0,
+            SourceUrl = url,
+            Slug = baseName,
+            Title = new WordPressRenderedText { Rendered = baseName },
+            Status = "inherit",
+            Type = "attachment",
+            MediaType = mediaType,
+            MimeType = mimeType,
+            RelativeFilePath = reference.RelativePath,
+            LocalFilePath = reference.AbsolutePath,
+            MediaDetails = new WordPressMediaDetails
+            {
+                File = TrimMediaRoot(reference.RelativePath)
+            }
+        };
+
+        item.Normalize();
+        return item;
+    }
+
     private void Append(string message)
     {
         App.Current?.Dispatcher.Invoke(() => Logs.Add(message));
@@ -1364,6 +1552,87 @@ public sealed class MainViewModel : INotifyPropertyChanged
             .ToArray();
 
         return Path.Combine(folderParts.Append($"{baseName}{extension}").ToArray());
+    }
+
+    private static readonly Dictionary<string, string> s_knownMimeTypes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        [".jpg"] = "image/jpeg",
+        [".jpeg"] = "image/jpeg",
+        [".png"] = "image/png",
+        [".gif"] = "image/gif",
+        [".webp"] = "image/webp",
+        [".svg"] = "image/svg+xml",
+        [".bmp"] = "image/bmp",
+        [".ico"] = "image/vnd.microsoft.icon",
+        [".heic"] = "image/heic",
+        [".mp4"] = "video/mp4",
+        [".mov"] = "video/quicktime",
+        [".webm"] = "video/webm",
+        [".ogv"] = "video/ogg",
+        [".mp3"] = "audio/mpeg",
+        [".wav"] = "audio/wav",
+        [".ogg"] = "audio/ogg",
+        [".m4a"] = "audio/mp4",
+        [".pdf"] = "application/pdf",
+        [".json"] = "application/json",
+        [".xml"] = "application/xml",
+        [".css"] = "text/css",
+        [".js"] = "application/javascript",
+        [".woff"] = "font/woff",
+        [".woff2"] = "font/woff2",
+        [".ttf"] = "font/ttf",
+        [".otf"] = "font/otf"
+    };
+
+    private static string GuessMimeTypeFromExtension(string? extension)
+    {
+        if (string.IsNullOrWhiteSpace(extension))
+        {
+            return "application/octet-stream";
+        }
+
+        return s_knownMimeTypes.TryGetValue(extension, out var known)
+            ? known
+            : "application/octet-stream";
+    }
+
+    private static string GuessMediaType(string? mimeType)
+    {
+        if (string.IsNullOrWhiteSpace(mimeType))
+        {
+            return "file";
+        }
+
+        if (mimeType.StartsWith("image/", StringComparison.OrdinalIgnoreCase))
+        {
+            return "image";
+        }
+
+        if (mimeType.StartsWith("video/", StringComparison.OrdinalIgnoreCase))
+        {
+            return "video";
+        }
+
+        if (mimeType.StartsWith("audio/", StringComparison.OrdinalIgnoreCase))
+        {
+            return "audio";
+        }
+
+        return "file";
+    }
+
+    private static string TrimMediaRoot(string relativePath)
+    {
+        var normalized = NormalizeRelativePath(relativePath);
+        return normalized.StartsWith("media/", StringComparison.OrdinalIgnoreCase)
+            ? normalized["media/".Length..]
+            : normalized;
+    }
+
+    private static string ComputeShortHash(string value)
+    {
+        var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(value));
+        return Convert.ToHexString(bytes)[..8].ToLowerInvariant(CultureInfo.InvariantCulture);
     }
 
     private static JsonNode? TryCloneJsonNode(JsonElement element)
