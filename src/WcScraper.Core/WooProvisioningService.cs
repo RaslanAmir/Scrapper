@@ -1521,7 +1521,7 @@ public sealed class WooProvisioningService : IDisposable
 
             var url = BuildUrl(baseUrl, "/wp-json/wp/v2/media");
             using var request = new HttpRequestMessage(HttpMethod.Post, url);
-            request.Headers.Authorization = CreateBasicAuthHeader(settings.WordPressUsername!, settings.WordPressApplicationPassword!);
+            request.Headers.Authorization = CreateMediaAuthHeader(settings);
             if (!string.IsNullOrWhiteSpace(item.Slug))
             {
                 request.Headers.Add("Slug", item.Slug);
@@ -3110,7 +3110,7 @@ public sealed class WooProvisioningService : IDisposable
             form.Add(content, "file", Path.GetFileName(filePath));
 
             var request = new HttpRequestMessage(HttpMethod.Post, BuildUrl(baseUrl, "/wp-json/wp/v2/media"));
-            request.Headers.Authorization = CreateAuthHeader(settings);
+            request.Headers.Authorization = CreateMediaAuthHeader(settings);
             request.Headers.Accept.ParseAdd("application/json");
             request.Content = form;
 
@@ -3705,9 +3705,25 @@ public sealed class WooProvisioningService : IDisposable
         return result;
     }
 
+    private static AuthenticationHeaderValue CreateMediaAuthHeader(WooProvisioningSettings settings)
+    {
+        if (settings.HasWordPressCredentials)
+        {
+            return CreateBasicAuthHeader(settings.WordPressUsername!, settings.WordPressApplicationPassword!);
+        }
+
+        return CreateAuthHeader(settings);
+    }
+
     private static AuthenticationHeaderValue CreateAuthHeader(WooProvisioningSettings settings)
     {
         var credentials = Convert.ToBase64String(Encoding.UTF8.GetBytes($"{settings.ConsumerKey}:{settings.ConsumerSecret}"));
+        return new AuthenticationHeaderValue("Basic", credentials);
+    }
+
+    private static AuthenticationHeaderValue CreateBasicAuthHeader(string username, string password)
+    {
+        var credentials = Convert.ToBase64String(Encoding.UTF8.GetBytes($"{username}:{password}"));
         return new AuthenticationHeaderValue("Basic", credentials);
     }
 
