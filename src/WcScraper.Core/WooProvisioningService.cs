@@ -1536,6 +1536,10 @@ public sealed class WooProvisioningService : IDisposable
         if (hasChildVariations)
         {
             payload["type"] = "variable";
+            if (attributePayload.Count == 0)
+            {
+                attributePayload = BuildAttributePayloadFromVariations(childVariations!, attributeMap);
+            }
         }
         else
         {
@@ -3616,6 +3620,75 @@ public sealed class WooProvisioningService : IDisposable
             {
                 ["id"] = attributeId,
                 ["options"] = options
+            });
+        }
+
+        return payload;
+    }
+
+    private static List<Dictionary<string, object?>> BuildAttributePayloadFromVariations(
+        IReadOnlyList<StoreProduct> variations,
+        IReadOnlyDictionary<string, int> attributeMap)
+    {
+        var payload = new List<Dictionary<string, object?>>();
+        if (variations.Count == 0)
+        {
+            return payload;
+        }
+
+        var order = new List<int>();
+        var aggregated = new Dictionary<int, (HashSet<string> Seen, List<string> Options)>();
+
+        foreach (var variation in variations)
+        {
+            if (variation.Attributes is null || variation.Attributes.Count == 0)
+            {
+                continue;
+            }
+
+            foreach (var attribute in variation.Attributes)
+            {
+                var key = NormalizeAttributeKey(attribute);
+                if (key is null || !attributeMap.TryGetValue(key, out var attributeId))
+                {
+                    continue;
+                }
+
+                var value = ResolveAttributeValue(attribute);
+                if (string.IsNullOrWhiteSpace(value))
+                {
+                    continue;
+                }
+
+                if (!aggregated.TryGetValue(attributeId, out var entry))
+                {
+                    entry = (new HashSet<string>(StringComparer.OrdinalIgnoreCase), new List<string>());
+                    aggregated[attributeId] = entry;
+                    order.Add(attributeId);
+                }
+
+                var normalized = value.Trim();
+                if (entry.Seen.Add(normalized))
+                {
+                    entry.Options.Add(normalized);
+                }
+
+                aggregated[attributeId] = entry;
+            }
+        }
+
+        foreach (var attributeId in order)
+        {
+            var entry = aggregated[attributeId];
+            if (entry.Options.Count == 0)
+            {
+                continue;
+            }
+
+            payload.Add(new Dictionary<string, object?>
+            {
+                ["id"] = attributeId,
+                ["options"] = entry.Options
             });
         }
 
