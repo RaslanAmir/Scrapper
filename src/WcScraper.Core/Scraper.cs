@@ -2973,7 +2973,7 @@ public sealed class WooScraper : IDisposable
                         }
                         else if (property.Value.ValueKind == JsonValueKind.Array)
                         {
-                            Harvest(property.Value, false);
+                            Harvest(property.Value, allowString);
                         }
                     }
                     break;
