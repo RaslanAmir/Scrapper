@@ -368,6 +368,56 @@ public class WooProvisioningServiceTests
     }
 
     [Fact]
+    public async Task ProvisionAsync_CouponCategoryMetadataWithoutProducts_MapsCategoryIds()
+    {
+        var handler = new RecordingHandler();
+        using var httpClient = new HttpClient(handler);
+        var service = new WooProvisioningService(httpClient);
+        var settings = new WooProvisioningSettings("https://target.example", "ck", "cs");
+
+        var coupon = new WooCoupon
+        {
+            Id = 51,
+            Code = "ACCESS10",
+            Amount = "10",
+            DiscountType = "percent",
+            ProductCategories = { 500 }
+        };
+
+        var metadata = new List<TermItem>
+        {
+            new() { Id = 500, Name = "Accessories", Slug = "accessories" }
+        };
+
+        await service.ProvisionAsync(
+            settings,
+            Array.Empty<StoreProduct>(),
+            coupons: new[] { coupon },
+            categoryMetadata: metadata);
+
+        var categoryCall = handler.Calls.Single(call => call.Method == HttpMethod.Post && call.Path == "/wp-json/wc/v3/products/categories");
+        Assert.NotNull(categoryCall.Content);
+        using (var categoryDoc = JsonDocument.Parse(categoryCall.Content!))
+        {
+            Assert.Equal("accessories", categoryDoc.RootElement.GetProperty("slug").GetString());
+        }
+
+        var couponCall = handler.Calls.Single(call => call.Method == HttpMethod.Post && call.Path == "/wp-json/wc/v3/coupons");
+        Assert.NotNull(couponCall.Content);
+        using var couponDoc = JsonDocument.Parse(couponCall.Content!);
+        var mappedCategories = couponDoc.RootElement
+            .GetProperty("product_categories")
+            .EnumerateArray()
+            .Select(element => element.GetInt32())
+            .ToList();
+
+        var createdCategoryId = handler.GetCreatedCategoryId("accessories");
+        Assert.NotNull(createdCategoryId);
+        Assert.Single(mappedCategories);
+        Assert.Equal(createdCategoryId.Value, mappedCategories[0]);
+    }
+
+    [Fact]
     public async Task ProvisionAsync_LocalImageUploads_UsesWordPressCredentials()
     {
         var handler = new RecordingHandler();
