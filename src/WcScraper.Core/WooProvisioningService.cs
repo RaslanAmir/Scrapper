@@ -3879,7 +3879,7 @@ public sealed class WooProvisioningService : IDisposable
         foreach (var zone in zones)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (zone.Id <= 0)
+            if (zone is null)
             {
                 continue;
             }
@@ -3898,6 +3898,11 @@ public sealed class WooProvisioningService : IDisposable
                 }
                 catch (WooProvisioningException ex) when (ex.StatusCode == HttpStatusCode.NotFound)
                 {
+                    if (zone.Id == 0)
+                    {
+                        throw;
+                    }
+
                     var createPayload = new Dictionary<string, object?>(zonePayload);
                     if (!createPayload.ContainsKey("name"))
                     {

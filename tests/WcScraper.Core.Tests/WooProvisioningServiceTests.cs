@@ -1101,6 +1101,78 @@ public class WooProvisioningServiceTests
     }
 
     [Fact]
+    public async Task ProvisionAsync_DefaultShippingZone_UpdatesLocationsAndMethods()
+    {
+        var handler = new RecordingHandler();
+        using var httpClient = new HttpClient(handler);
+        var service = new WooProvisioningService(httpClient);
+        var settings = new WooProvisioningSettings("https://target.example", "ck", "cs");
+
+        var configuration = new StoreConfiguration
+        {
+            ShippingZones =
+            {
+                new ShippingZoneSetting
+                {
+                    Id = 0,
+                    Name = "Rest of the World",
+                    Order = 2,
+                    Locations =
+                    {
+                        new ShippingZoneLocation { Code = "US:CA", Type = "state" }
+                    },
+                    Methods =
+                    {
+                        new ShippingZoneMethodSetting
+                        {
+                            InstanceId = 45,
+                            MethodId = "flat_rate",
+                            Title = "Flat Rate",
+                            Enabled = true,
+                            Order = 3
+                        }
+                    }
+                }
+            }
+        };
+
+        await service.ProvisionAsync(
+            settings,
+            Array.Empty<StoreProduct>(),
+            configuration: configuration);
+
+        Assert.DoesNotContain(
+            handler.Calls,
+            call => call.Method == HttpMethod.Post && call.Path == "/wp-json/wc/v3/shipping/zones");
+
+        Assert.Contains(
+            handler.Calls,
+            call => call.Method == HttpMethod.Put && call.Path == "/wp-json/wc/v3/shipping/zones/0");
+
+        var locationCall = handler.Calls.Single(call => call.Method == HttpMethod.Put
+            && call.Path == "/wp-json/wc/v3/shipping/zones/0/locations");
+        Assert.NotNull(locationCall.Content);
+        using (var doc = JsonDocument.Parse(locationCall.Content!))
+        {
+            var locations = doc.RootElement.EnumerateArray().ToList();
+            var location = Assert.Single(locations);
+            Assert.Equal("state", location.GetProperty("type").GetString());
+            Assert.Equal("US:CA", location.GetProperty("code").GetString());
+        }
+
+        var methodCall = handler.Calls.Single(call => call.Method == HttpMethod.Put
+            && call.Path == "/wp-json/wc/v3/shipping/zones/0/methods/45");
+        Assert.NotNull(methodCall.Content);
+        using (var doc = JsonDocument.Parse(methodCall.Content!))
+        {
+            var root = doc.RootElement;
+            Assert.Equal("Flat Rate", root.GetProperty("title").GetString());
+            Assert.True(root.GetProperty("enabled").GetBoolean());
+            Assert.Equal(3, root.GetProperty("order").GetInt32());
+        }
+    }
+
+    [Fact]
     public async Task ProvisionAsync_MissingShippingZone_CreatesZoneAndUsesNewId()
     {
         var handler = new RecordingHandler
