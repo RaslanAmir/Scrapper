@@ -3486,16 +3486,33 @@ public sealed class WooProvisioningService : IDisposable
             var zonePayload = new Dictionary<string, object?>();
             AddIfValue(zonePayload, "name", zone.Name);
             AddIfValue(zonePayload, "order", zone.Order);
+            var targetZoneId = zone.Id;
             if (zonePayload.Count > 0)
             {
                 progress?.Report($"Updating shipping zone '{zoneLabel}'…");
-                await PutAsync<ShippingZoneSetting>(baseUrl, settings, $"/wp-json/wc/v3/shipping/zones/{zone.Id}", zonePayload, cancellationToken);
+                try
+                {
+                    await PutAsync<ShippingZoneSetting>(baseUrl, settings, $"/wp-json/wc/v3/shipping/zones/{zone.Id}", zonePayload, cancellationToken);
+                }
+                catch (WooProvisioningException ex) when (ex.StatusCode == HttpStatusCode.NotFound)
+                {
+                    var createPayload = new Dictionary<string, object?>(zonePayload);
+                    if (!createPayload.ContainsKey("name"))
+                    {
+                        createPayload["name"] = zone.Name ?? zoneLabel;
+                    }
+
+                    progress?.Report($"Creating shipping zone '{zoneLabel}'…");
+                    var createdZone = await PostAsync<ShippingZoneSetting>(baseUrl, settings, "/wp-json/wc/v3/shipping/zones", createPayload, cancellationToken);
+                    targetZoneId = createdZone.Id;
+                    zone.Id = createdZone.Id;
+                }
             }
 
             if (zone.Locations is { Count: > 0 })
             {
                 progress?.Report($"Updating shipping zone '{zoneLabel}' locations…");
-                await PutAsync<List<ShippingZoneLocation>>(baseUrl, settings, $"/wp-json/wc/v3/shipping/zones/{zone.Id}/locations", zone.Locations, cancellationToken);
+                await PutAsync<List<ShippingZoneLocation>>(baseUrl, settings, $"/wp-json/wc/v3/shipping/zones/{targetZoneId}/locations", zone.Locations, cancellationToken);
             }
 
             if (zone.Methods is { Count: > 0 })
@@ -3534,7 +3551,7 @@ public sealed class WooProvisioningService : IDisposable
                         progress?.Report($"Updating shipping method '{methodLabel}' in zone '{zoneLabel}'…");
                         try
                         {
-                            await PutAsync<ShippingZoneMethodSetting>(baseUrl, settings, $"/wp-json/wc/v3/shipping/zones/{zone.Id}/methods/{method.InstanceId}", methodPayload, cancellationToken);
+                            await PutAsync<ShippingZoneMethodSetting>(baseUrl, settings, $"/wp-json/wc/v3/shipping/zones/{targetZoneId}/methods/{method.InstanceId}", methodPayload, cancellationToken);
                             continue;
                         }
                         catch (WooProvisioningException ex) when (ex.StatusCode == HttpStatusCode.NotFound)
@@ -3555,7 +3572,7 @@ public sealed class WooProvisioningService : IDisposable
                         }
 
                         progress?.Report($"Creating shipping method '{methodLabel}' in zone '{zoneLabel}'…");
-                        await PostAsync<ShippingZoneMethodSetting>(baseUrl, settings, $"/wp-json/wc/v3/shipping/zones/{zone.Id}/methods", createPayload, cancellationToken);
+                        await PostAsync<ShippingZoneMethodSetting>(baseUrl, settings, $"/wp-json/wc/v3/shipping/zones/{targetZoneId}/methods", createPayload, cancellationToken);
                     }
                 }
             }

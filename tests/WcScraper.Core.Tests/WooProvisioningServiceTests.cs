@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Net;
@@ -711,6 +712,84 @@ public class WooProvisioningServiceTests
         Assert.True(doc.RootElement.GetProperty("set_paid").GetBoolean());
     }
 
+    [Fact]
+    public async Task ProvisionAsync_MissingShippingZone_CreatesZoneAndUsesNewId()
+    {
+        var handler = new RecordingHandler
+        {
+            SimulateMissingShippingZone = true,
+            MissingShippingZoneId = 321
+        };
+        using var httpClient = new HttpClient(handler);
+        var service = new WooProvisioningService(httpClient);
+        var settings = new WooProvisioningSettings("https://target.example", "ck", "cs");
+
+        var configuration = new StoreConfiguration
+        {
+            ShippingZones =
+            {
+                new ShippingZoneSetting
+                {
+                    Id = handler.MissingShippingZoneId,
+                    Name = "Sample Zone",
+                    Order = 12,
+                    Locations =
+                    {
+                        new ShippingZoneLocation { Code = "US", Type = "country" }
+                    },
+                    Methods =
+                    {
+                        new ShippingZoneMethodSetting
+                        {
+                            InstanceId = 45,
+                            MethodId = "flat_rate",
+                            Title = "Flat Rate",
+                            Enabled = true,
+                            Order = 3
+                        }
+                    }
+                }
+            }
+        };
+
+        await service.ProvisionAsync(
+            settings,
+            Array.Empty<StoreProduct>(),
+            configuration: configuration);
+
+        Assert.Contains(
+            handler.Calls,
+            call => call.Method == HttpMethod.Put
+                && call.Path == $"/wp-json/wc/v3/shipping/zones/{handler.MissingShippingZoneId}");
+
+        var createdZoneId = handler.LastCreatedShippingZoneId;
+        Assert.NotNull(createdZoneId);
+
+        var zonePost = handler.Calls.Single(call => call.Method == HttpMethod.Post && call.Path == "/wp-json/wc/v3/shipping/zones");
+        Assert.NotNull(zonePost.Content);
+        using (var doc = JsonDocument.Parse(zonePost.Content!))
+        {
+            var root = doc.RootElement;
+            Assert.Equal("Sample Zone", root.GetProperty("name").GetString());
+            Assert.Equal(12, root.GetProperty("order").GetInt32());
+        }
+
+        Assert.DoesNotContain(
+            handler.Calls,
+            call => call.Method == HttpMethod.Put
+                && call.Path == $"/wp-json/wc/v3/shipping/zones/{handler.MissingShippingZoneId}/locations");
+
+        Assert.Contains(
+            handler.Calls,
+            call => call.Method == HttpMethod.Put
+                && call.Path == $"/wp-json/wc/v3/shipping/zones/{createdZoneId}/locations");
+
+        Assert.Contains(
+            handler.Calls,
+            call => call.Method == HttpMethod.Put
+                && call.Path == $"/wp-json/wc/v3/shipping/zones/{createdZoneId}/methods/45");
+    }
+
     private sealed class RecordingHandler : HttpMessageHandler
     {
         public List<(HttpMethod Method, string Path, string Query, string? Content, string? Authorization)> Calls { get; } = new();
@@ -719,6 +798,16 @@ public class WooProvisioningServiceTests
         private int _nextCategoryId = 500;
         private int _nextMenuId = 4000;
         private int _nextMenuItemId = 5000;
+        private int _nextShippingZoneId = 6000;
+        private int _nextShippingMethodInstanceId = 7000;
+        private int? _lastCreatedShippingZoneId;
+        private bool _shippingZoneCreated;
+
+        public bool SimulateMissingShippingZone { get; set; }
+
+        public int MissingShippingZoneId { get; set; }
+
+        public int? LastCreatedShippingZoneId => _lastCreatedShippingZoneId;
 
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
@@ -727,6 +816,69 @@ public class WooProvisioningServiceTests
             var content = request.Content is null ? null : request.Content.ReadAsStringAsync(cancellationToken).GetAwaiter().GetResult();
             var authorization = request.Headers.Authorization?.ToString();
             Calls.Add((request.Method, path, query, content, authorization));
+
+            if (request.Method == HttpMethod.Post && path == "/wp-json/wc/v3/shipping/zones")
+            {
+                var id = ++_nextShippingZoneId;
+                _lastCreatedShippingZoneId = id;
+                _shippingZoneCreated = true;
+                var responsePayload = new
+                {
+                    id,
+                    name = ExtractZoneName(content),
+                    order = ExtractZoneOrder(content),
+                    locations = Array.Empty<object>(),
+                    methods = Array.Empty<object>()
+                };
+                return Task.FromResult(JsonResponse(JsonSerializer.Serialize(responsePayload)));
+            }
+
+            if (path.StartsWith("/wp-json/wc/v3/shipping/zones/", StringComparison.Ordinal))
+            {
+                var suffix = path.Substring("/wp-json/wc/v3/shipping/zones/".Length);
+                if (request.Method == HttpMethod.Put && !suffix.Contains('/', StringComparison.Ordinal))
+                {
+                    if (SimulateMissingShippingZone
+                        && !_shippingZoneCreated
+                        && suffix == MissingShippingZoneId.ToString(CultureInfo.InvariantCulture))
+                    {
+                        return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound)
+                        {
+                            Content = new StringContent("{\"message\":\"Zone not found\"}", Encoding.UTF8, "application/json")
+                        });
+                    }
+
+                    var zoneId = int.TryParse(suffix, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedZoneId)
+                        ? parsedZoneId
+                        : 0;
+                    return Task.FromResult(JsonResponse(JsonSerializer.Serialize(new { id = zoneId })));
+                }
+
+                if (request.Method == HttpMethod.Put && suffix.EndsWith("/locations", StringComparison.Ordinal))
+                {
+                    return Task.FromResult(JsonResponse(string.IsNullOrWhiteSpace(content)
+                        ? JsonSerializer.Serialize(Array.Empty<object>())
+                        : content!));
+                }
+
+                if (suffix.Contains("/methods", StringComparison.Ordinal))
+                {
+                    var segments = suffix.Split('/', StringSplitOptions.RemoveEmptyEntries);
+                    if (request.Method == HttpMethod.Put && segments.Length >= 3)
+                    {
+                        var instanceId = int.TryParse(segments[^1], NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedInstanceId)
+                            ? parsedInstanceId
+                            : 0;
+                        return Task.FromResult(JsonResponse(JsonSerializer.Serialize(new { id = "method", instance_id = parsedInstanceId })));
+                    }
+
+                    if (request.Method == HttpMethod.Post && segments.Length >= 2)
+                    {
+                        var instanceId = ++_nextShippingMethodInstanceId;
+                        return Task.FromResult(JsonResponse(JsonSerializer.Serialize(new { id = "method", instance_id = instanceId })));
+                    }
+                }
+            }
 
             if (request.Method == HttpMethod.Get && path == "/wp-json/wc/v3/products" && query.Contains("sku=PARENT-SKU", StringComparison.Ordinal))
             {
@@ -943,6 +1095,30 @@ public class WooProvisioningServiceTests
             {
                 Content = new StringContent(json, Encoding.UTF8, "application/json")
             };
+        }
+
+        private static string ExtractZoneName(string? content)
+        {
+            if (string.IsNullOrWhiteSpace(content))
+            {
+                return string.Empty;
+            }
+
+            using var doc = JsonDocument.Parse(content);
+            return doc.RootElement.TryGetProperty("name", out var nameProperty) ? nameProperty.GetString() ?? string.Empty : string.Empty;
+        }
+
+        private static int ExtractZoneOrder(string? content)
+        {
+            if (string.IsNullOrWhiteSpace(content))
+            {
+                return 0;
+            }
+
+            using var doc = JsonDocument.Parse(content);
+            return doc.RootElement.TryGetProperty("order", out var orderProperty) && orderProperty.ValueKind == JsonValueKind.Number
+                ? orderProperty.GetInt32()
+                : 0;
         }
     }
 }
