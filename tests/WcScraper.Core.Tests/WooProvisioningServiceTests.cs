@@ -831,6 +831,69 @@ public class WooProvisioningServiceTests
     }
 
     [Fact]
+    public async Task ProvisionAsync_MenuTagWithoutProducts_MapsTagId()
+    {
+        var handler = new RecordingHandler();
+        using var httpClient = new HttpClient(handler);
+        var service = new WooProvisioningService(httpClient);
+        var settings = new WooProvisioningSettings(
+            "https://target.example",
+            "ck",
+            "cs",
+            wordpressUsername: "wpuser",
+            wordpressApplicationPassword: "app-pass");
+
+        var menuTagItem = new WordPressMenuItem
+        {
+            Id = 406,
+            Order = 1,
+            Title = new WordPressRenderedText { Rendered = "Menu Only Tag" },
+            Object = "product_tag",
+            ObjectId = 889,
+            Url = "https://source.example/product-tag/menu-only-tag/"
+        };
+
+        var menuCollection = new WordPressMenuCollection
+        {
+            Menus =
+            {
+                new WordPressMenu
+                {
+                    Id = 55,
+                    Name = "Navigation",
+                    Slug = "navigation",
+                    Items = { menuTagItem }
+                }
+            }
+        };
+
+        var siteContent = new WordPressSiteContent
+        {
+            Menus = menuCollection
+        };
+
+        await service.ProvisionAsync(
+            settings,
+            Array.Empty<StoreProduct>(),
+            siteContent: siteContent);
+
+        var createdTagId = handler.GetCreatedTagId("menu-only-tag");
+        Assert.True(
+            createdTagId.HasValue,
+            "Expected tag to be created for the menu item when no products are provided.");
+
+        Assert.Contains(
+            handler.Calls,
+            call => call.Method == HttpMethod.Post && call.Path == "/wp-json/wc/v3/products/tags");
+
+        var menuItemCall = handler.Calls.Single(call => call.Method == HttpMethod.Post && call.Path == "/wp-json/wp/v2/menu-items");
+        Assert.False(string.IsNullOrWhiteSpace(menuItemCall.Content));
+
+        using var doc = JsonDocument.Parse(menuItemCall.Content!);
+        Assert.Equal(createdTagId.Value, doc.RootElement.GetProperty("object_id").GetInt32());
+    }
+
+    [Fact]
     public async Task ProvisionAsync_PageWithMappedAuthor_UsesMappedAuthor()
     {
         var handler = new RecordingHandler();
@@ -1123,7 +1186,9 @@ public class WooProvisioningServiceTests
         public Dictionary<(int AttributeId, int Page), List<TermRecord>> AttributeTermPages { get; } = new();
 
         private readonly Dictionary<string, int> _createdCategoryIds = new(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<string, int> _createdTagIds = new(StringComparer.OrdinalIgnoreCase);
         private int _nextCategoryId = 500;
+        private int _nextTagId = 1500;
         private int _nextMenuId = 4000;
         private int _nextMenuItemId = 5000;
         private int _nextShippingZoneId = 6000;
@@ -1348,6 +1413,11 @@ public class WooProvisioningServiceTests
                 return Task.FromResult(JsonResponse("[]"));
             }
 
+            if (request.Method == HttpMethod.Get && path == "/wp-json/wc/v3/products/tags")
+            {
+                return Task.FromResult(JsonResponse("[]"));
+            }
+
             if (request.Method == HttpMethod.Get && path == "/wp-json/wc/v3/coupons")
             {
                 return Task.FromResult(JsonResponse("[]"));
@@ -1369,6 +1439,25 @@ public class WooProvisioningServiceTests
 
                 var id = ++_nextCategoryId;
                 _createdCategoryIds[slug!] = id;
+                return Task.FromResult(JsonResponse($"{{\"id\":{id},\"slug\":\"{slug}\",\"name\":\"{slug}\"}}"));
+            }
+
+            if (request.Method == HttpMethod.Post && path == "/wp-json/wc/v3/products/tags")
+            {
+                if (string.IsNullOrWhiteSpace(content))
+                {
+                    throw new InvalidOperationException("Tag payload was empty.");
+                }
+
+                using var doc = JsonDocument.Parse(content);
+                var slug = doc.RootElement.GetProperty("slug").GetString();
+                if (string.IsNullOrWhiteSpace(slug))
+                {
+                    throw new InvalidOperationException("Tag slug missing in payload.");
+                }
+
+                var id = ++_nextTagId;
+                _createdTagIds[slug!] = id;
                 return Task.FromResult(JsonResponse($"{{\"id\":{id},\"slug\":\"{slug}\",\"name\":\"{slug}\"}}"));
             }
 
@@ -1465,6 +1554,11 @@ public class WooProvisioningServiceTests
         public int? GetCreatedCategoryId(string slug)
         {
             return _createdCategoryIds.TryGetValue(slug, out var id) ? id : null;
+        }
+
+        public int? GetCreatedTagId(string slug)
+        {
+            return _createdTagIds.TryGetValue(slug, out var id) ? id : null;
         }
 
         private static HttpResponseMessage JsonResponse(string json)
