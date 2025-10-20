@@ -3823,11 +3823,9 @@ public sealed class WooProvisioningService : IDisposable
                 }
             }
 
-            if (zone.Locations is { Count: > 0 })
-            {
-                progress?.Report($"Updating shipping zone '{zoneLabel}' locations…");
-                await PutAsync<List<ShippingZoneLocation>>(baseUrl, settings, $"/wp-json/wc/v3/shipping/zones/{targetZoneId}/locations", zone.Locations, cancellationToken);
-            }
+            var locationsPayload = zone.Locations ?? new List<ShippingZoneLocation>();
+            progress?.Report($"Updating shipping zone '{zoneLabel}' locations…");
+            await PutAsync<List<ShippingZoneLocation>>(baseUrl, settings, $"/wp-json/wc/v3/shipping/zones/{targetZoneId}/locations", locationsPayload, cancellationToken);
 
             if (zone.Methods is { Count: > 0 })
             {
