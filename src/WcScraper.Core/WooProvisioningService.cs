@@ -251,7 +251,8 @@ public sealed class WooProvisioningService : IDisposable
         Dictionary<int, int>? pageIdMap = null;
         Dictionary<int, int>? postIdMap = null;
         WordPressMenuCollection? menuCollection = null;
-        var menuCategorySeedSources = new List<MenuCategorySeedSource>();
+        var menuCategorySeedSources = new List<MenuTaxonomySeedSource>();
+        var menuTagSeedSources = new List<MenuTaxonomySeedSource>();
         WordPressWidgetSnapshot? widgetSnapshot = null;
 
         if (siteContent is not null)
@@ -277,6 +278,7 @@ public sealed class WooProvisioningService : IDisposable
             if (menuCollection is not null)
             {
                 menuCategorySeedSources = CollectMenuCategorySeedSources(menuCollection);
+                menuTagSeedSources = CollectMenuTagSeedSources(menuCollection);
             }
             widgetSnapshot = siteContent.Widgets;
         }
@@ -327,13 +329,36 @@ public sealed class WooProvisioningService : IDisposable
             categoryMap = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         }
 
+        var tagSeeds = CollectTaxonomySeeds(
+            productList.SelectMany(p => p.Tags ?? Enumerable.Empty<ProductTag>()),
+            t => t.Name,
+            t => t.Slug);
+        if (menuTagSeedSources.Count > 0)
+        {
+            tagSeeds = CollectTaxonomySeeds(
+                menuTagSeedSources,
+                s => s.Name,
+                s => s.Slug,
+                s => s.Id,
+                existing: tagSeeds);
+        }
+
+        var tagSeedList = tagSeeds.ToList();
+        Dictionary<string, int> tagMap;
+        if (tagSeedList.Count > 0)
+        {
+            tagMap = await EnsureTaxonomiesAsync(baseUrl, settings, "tags", tagSeedList, progress, cancellationToken);
+            tagIdMap = BuildTagIdMap(productList, tagMap, tagSeeds.SourceIdLookup);
+        }
+        else
+        {
+            tagMap = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        }
+
         if (productList.Count > 0)
         {
-            var tagSeeds = CollectTaxonomySeeds(productList.SelectMany(p => p.Tags ?? Enumerable.Empty<ProductTag>()), t => t.Name, t => t.Slug).ToList();
             var attributeSeeds = CollectAttributeSeeds(productList.Concat(variationList));
 
-            var tagMap = await EnsureTaxonomiesAsync(baseUrl, settings, "tags", tagSeeds, progress, cancellationToken);
-            tagIdMap = BuildTagIdMap(productList, tagMap);
             var attributeMap = await EnsureAttributesAsync(baseUrl, settings, attributeSeeds, progress, cancellationToken);
 
             progress?.Report("Provisioning products…");
@@ -947,12 +972,12 @@ public sealed class WooProvisioningService : IDisposable
         }
     }
 
-    private static List<MenuCategorySeedSource> CollectMenuCategorySeedSources(WordPressMenuCollection menuCollection)
+    private static List<MenuTaxonomySeedSource> CollectMenuCategorySeedSources(WordPressMenuCollection menuCollection)
     {
-        var result = new Dictionary<int, MenuCategorySeedSource>();
+        var result = new Dictionary<int, MenuTaxonomySeedSource>();
         if (menuCollection?.Menus is null || menuCollection.Menus.Count == 0)
         {
-            return new List<MenuCategorySeedSource>();
+            return new List<MenuTaxonomySeedSource>();
         }
 
         void CollectFromItem(WordPressMenuItem? item)
@@ -970,7 +995,7 @@ public sealed class WooProvisioningService : IDisposable
                 var slug = ResolveMenuCategorySlug(item);
                 if (!string.IsNullOrWhiteSpace(slug))
                 {
-                    result[objectId] = new MenuCategorySeedSource(objectId, item.Title?.Rendered, slug!);
+                    result[objectId] = new MenuTaxonomySeedSource(objectId, item.Title?.Rendered, slug!);
                 }
             }
 
@@ -1001,6 +1026,68 @@ public sealed class WooProvisioningService : IDisposable
 
     private static string? ResolveMenuCategorySlug(WordPressMenuItem item)
     {
+        return ResolveMenuTaxonomySlug(item, "product-category");
+    }
+
+    private static List<MenuTaxonomySeedSource> CollectMenuTagSeedSources(WordPressMenuCollection menuCollection)
+    {
+        var result = new Dictionary<int, MenuTaxonomySeedSource>();
+        if (menuCollection?.Menus is null || menuCollection.Menus.Count == 0)
+        {
+            return new List<MenuTaxonomySeedSource>();
+        }
+
+        void CollectFromItem(WordPressMenuItem? item)
+        {
+            if (item is null)
+            {
+                return;
+            }
+
+            if (item.ObjectId is int objectId
+                && objectId > 0
+                && !string.IsNullOrWhiteSpace(item.Object)
+                && item.Object.Equals("product_tag", StringComparison.OrdinalIgnoreCase))
+            {
+                var slug = ResolveMenuTagSlug(item);
+                if (!string.IsNullOrWhiteSpace(slug))
+                {
+                    result[objectId] = new MenuTaxonomySeedSource(objectId, item.Title?.Rendered, slug!);
+                }
+            }
+
+            if (item.Children is { Count: > 0 })
+            {
+                foreach (var child in item.Children)
+                {
+                    CollectFromItem(child);
+                }
+            }
+        }
+
+        foreach (var menu in menuCollection.Menus)
+        {
+            if (menu?.Items is null)
+            {
+                continue;
+            }
+
+            foreach (var item in menu.Items)
+            {
+                CollectFromItem(item);
+            }
+        }
+
+        return result.Values.ToList();
+    }
+
+    private static string? ResolveMenuTagSlug(WordPressMenuItem item)
+    {
+        return ResolveMenuTaxonomySlug(item, "product-tag");
+    }
+
+    private static string? ResolveMenuTaxonomySlug(WordPressMenuItem item, string reservedSegment)
+    {
         if (item is null)
         {
             return null;
@@ -1027,7 +1114,8 @@ public sealed class WooProvisioningService : IDisposable
                         continue;
                     }
 
-                    if (string.Equals(normalized, "product-category", StringComparison.OrdinalIgnoreCase))
+                    if (!string.IsNullOrWhiteSpace(reservedSegment)
+                        && string.Equals(normalized, reservedSegment, StringComparison.OrdinalIgnoreCase))
                     {
                         continue;
                     }
@@ -4546,7 +4634,8 @@ public sealed class WooProvisioningService : IDisposable
 
     private static Dictionary<int, int> BuildTagIdMap(
         IEnumerable<StoreProduct> products,
-        IReadOnlyDictionary<string, int> tagMap)
+        IReadOnlyDictionary<string, int> tagMap,
+        IReadOnlyDictionary<int, string>? tagSeedLookup)
     {
         var result = new Dictionary<int, int>();
         foreach (var product in products)
@@ -4570,6 +4659,23 @@ public sealed class WooProvisioningService : IDisposable
                 }
 
                 result[tag.Id] = mappedId;
+            }
+        }
+
+        if (tagSeedLookup is not null)
+        {
+            foreach (var pair in tagSeedLookup)
+            {
+                if (result.ContainsKey(pair.Key))
+                {
+                    continue;
+                }
+
+                if (!string.IsNullOrWhiteSpace(pair.Value)
+                    && tagMap.TryGetValue(pair.Value, out var mappedId))
+                {
+                    result[pair.Key] = mappedId;
+                }
             }
         }
 
@@ -4929,9 +5035,9 @@ public sealed class WooProvisioningService : IDisposable
         public HttpStatusCode StatusCode { get; }
     }
 
-    private sealed class MenuCategorySeedSource
+    private sealed class MenuTaxonomySeedSource
     {
-        public MenuCategorySeedSource(int id, string? name, string slug)
+        public MenuTaxonomySeedSource(int id, string? name, string slug)
         {
             Id = id;
             Name = name;
