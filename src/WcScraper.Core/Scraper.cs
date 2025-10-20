@@ -19,6 +19,7 @@ public sealed class WooScraper : IDisposable
 {
     private readonly HttpClient _http;
     private readonly bool _ownsClient;
+    private List<TermItem> _lastProductCategoryTerms = new();
     private readonly JsonSerializerOptions _jsonOptions = new()
     {
         PropertyNameCaseInsensitive = true,
@@ -58,6 +59,8 @@ public sealed class WooScraper : IDisposable
 
         GC.SuppressFinalize(this);
     }
+
+    public IReadOnlyList<TermItem> LastFetchedProductCategories => _lastProductCategoryTerms;
 
     public static string CleanBaseUrl(string baseUrl)
     {
@@ -239,6 +242,7 @@ public sealed class WooScraper : IDisposable
     {
         if (products.Count == 0)
         {
+            _lastProductCategoryTerms = new List<TermItem>();
             return;
         }
 
@@ -1423,26 +1427,32 @@ public sealed class WooScraper : IDisposable
             if (!resp.IsSuccessStatusCode) return new();
 
             var text = await resp.Content.ReadAsStringAsync();
-            return DeserializeListWithRecovery<TermItem>(text, "product categories", log);
+            var list = DeserializeListWithRecovery<TermItem>(text, "product categories", log);
+            _lastProductCategoryTerms = new List<TermItem>(list);
+            return list;
         }
         catch (TaskCanceledException ex)
         {
             log?.Report($"Categories request timed out: {ex.Message}");
+            _lastProductCategoryTerms = new List<TermItem>();
             return new();
         }
         catch (AuthenticationException ex)
         {
             log?.Report($"Categories request TLS handshake failed: {ex.Message}");
+            _lastProductCategoryTerms = new List<TermItem>();
             return new();
         }
         catch (IOException ex)
         {
             log?.Report($"Categories request I/O failure: {ex.Message}");
+            _lastProductCategoryTerms = new List<TermItem>();
             return new();
         }
         catch (HttpRequestException ex)
         {
             log?.Report($"Categories request failed: {ex.Message}");
+            _lastProductCategoryTerms = new List<TermItem>();
             return new();
         }
     }

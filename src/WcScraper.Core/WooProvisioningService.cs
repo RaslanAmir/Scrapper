@@ -105,6 +105,7 @@ public sealed class WooProvisioningService : IDisposable
         IEnumerable<WooOrder>? orders = null,
         IEnumerable<WooSubscription>? subscriptions = null,
         WordPressSiteContent? siteContent = null,
+        IEnumerable<TermItem>? categoryMetadata = null,
         IReadOnlyDictionary<int, int>? authorIdMap = null,
         IProgress<string>? progress = null,
         CancellationToken cancellationToken = default)
@@ -153,6 +154,37 @@ public sealed class WooProvisioningService : IDisposable
         var couponList = coupons?.Where(c => c is not null).ToList() ?? new List<WooCoupon>();
         var orderList = orders?.Where(o => o is not null).ToList() ?? new List<WooOrder>();
         var subscriptionList = subscriptions?.Where(s => s is not null).ToList() ?? new List<WooSubscription>();
+        var couponCategoryIds = new HashSet<int>();
+        void CaptureCouponCategories(IEnumerable<int>? source)
+        {
+            if (source is null)
+            {
+                return;
+            }
+
+            foreach (var id in source)
+            {
+                if (id > 0)
+                {
+                    couponCategoryIds.Add(id);
+                }
+            }
+        }
+
+        foreach (var coupon in couponList)
+        {
+            CaptureCouponCategories(coupon?.ProductCategories);
+            CaptureCouponCategories(coupon?.ExcludedProductCategories);
+        }
+
+        Dictionary<int, TermItem>? categoryMetadataById = null;
+        if (categoryMetadata is not null)
+        {
+            categoryMetadataById = categoryMetadata
+                .Where(term => term is not null && term.Id > 0)
+                .GroupBy(term => term!.Id)
+                .ToDictionary(group => group.Key, group => group.First()!, EqualityComparer<int>.Default);
+        }
         var variationsByParentId = variationList
             .Where(v => v?.ParentId is int id && id > 0)
             .GroupBy(v => v!.ParentId!.Value)
@@ -306,6 +338,70 @@ public sealed class WooProvisioningService : IDisposable
                 s => s.Slug,
                 s => s.Id,
                 result: categorySeeds);
+        }
+
+        if (couponCategoryIds.Count > 0 && categoryMetadataById is not null && categoryMetadataById.Count > 0)
+        {
+            var collectedMetadata = new List<TermItem>();
+            var visitedMetadataIds = new HashSet<int>();
+
+            void CollectMetadataTerm(int id)
+            {
+                if (id <= 0 || !visitedMetadataIds.Add(id))
+                {
+                    return;
+                }
+
+                if (!categoryMetadataById.TryGetValue(id, out var term))
+                {
+                    return;
+                }
+
+                collectedMetadata.Add(term);
+
+                if (term.ParentId is int parentId && parentId > 0)
+                {
+                    CollectMetadataTerm(parentId);
+                }
+            }
+
+            foreach (var id in couponCategoryIds)
+            {
+                CollectMetadataTerm(id);
+            }
+
+            if (collectedMetadata.Count > 0)
+            {
+                string? ResolveParentSlug(TermItem term)
+                {
+                    if (term.ParentId is int parentId && categoryMetadataById.TryGetValue(parentId, out var parent))
+                    {
+                        return parent.Slug;
+                    }
+
+                    return null;
+                }
+
+                string? ResolveParentName(TermItem term)
+                {
+                    if (term.ParentId is int parentId && categoryMetadataById.TryGetValue(parentId, out var parent))
+                    {
+                        return parent.Name;
+                    }
+
+                    return null;
+                }
+
+                categorySeeds = CollectTaxonomySeeds(
+                    collectedMetadata,
+                    term => term.Name,
+                    term => term.Slug,
+                    term => term.Id,
+                    term => term.ParentId,
+                    ResolveParentSlug,
+                    ResolveParentName,
+                    categorySeeds);
+            }
         }
 
         var categorySeedList = categorySeeds.ToList();

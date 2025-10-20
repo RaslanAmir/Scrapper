@@ -362,6 +362,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
             bool attemptedOrderFetch = false;
             bool attemptedCouponFetch = false;
             bool attemptedSubscriptionFetch = false;
+            List<TermItem> categoryTerms = new();
             List<WordPressPage> pages = new();
             List<WordPressPost> posts = new();
             List<WordPressMediaItem> mediaLibrary = new();
@@ -388,6 +389,16 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 }
 
                 Append($"Found {prods.Count} products.");
+
+                var lastCategoryTerms = _wooScraper.LastFetchedProductCategories;
+                if (lastCategoryTerms.Count > 0)
+                {
+                    categoryTerms = lastCategoryTerms.Where(term => term is not null).Select(term => term!).ToList();
+                }
+                else
+                {
+                    categoryTerms = await _wooScraper.FetchProductCategoriesAsync(targetUrl, logger);
+                }
 
                 // Variations for variable products
                 var parentIds = prods.Where(p => string.Equals(p.Type, "variable", StringComparison.OrdinalIgnoreCase) || p.HasOptions == true)
@@ -884,7 +895,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 }
             }
 
-            SetProvisioningContext(prods, variations, configuration, pluginBundles, themeBundles, customers, coupons, orders, subscriptions, siteContent);
+            SetProvisioningContext(prods, variations, configuration, pluginBundles, themeBundles, customers, coupons, orders, subscriptions, siteContent, categoryTerms);
 
             Append("All done.");
         }
@@ -1700,7 +1711,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
         List<WooCoupon> coupons,
         List<WooOrder> orders,
         List<WooSubscription> subscriptions,
-        WordPressSiteContent? siteContent)
+        WordPressSiteContent? siteContent,
+        List<TermItem> categoryTerms)
     {
         var productSnapshots = CloneProductsWithMedia(products);
         var variationSnapshots = CloneProductsWithMedia(variations);
@@ -1709,6 +1721,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         var couponSnapshots = CloneRecords(coupons);
         var orderSnapshots = CloneRecords(orders);
         var subscriptionSnapshots = CloneRecords(subscriptions);
+        var categorySnapshots = CloneRecords(categoryTerms);
         _lastProvisioningContext = new ProvisioningContext(
             productSnapshots,
             variationSnapshots,
@@ -1720,7 +1733,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
             couponSnapshots,
             orderSnapshots,
             subscriptionSnapshots,
-            siteContent);
+            siteContent,
+            categorySnapshots);
         OnPropertyChanged(nameof(CanReplicate));
         ReplicateCommand.RaiseCanExecuteChanged();
     }
@@ -1904,6 +1918,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 _lastProvisioningContext.Orders,
                 subscriptions: _lastProvisioningContext.Subscriptions,
                 siteContent: _lastProvisioningContext.SiteContent,
+                categoryMetadata: _lastProvisioningContext.ProductCategories,
                 progress: logger);
         }
         catch (Exception ex)
@@ -1929,7 +1944,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
             List<WooCoupon> coupons,
             List<WooOrder> orders,
             List<WooSubscription> subscriptions,
-            WordPressSiteContent? siteContent)
+            WordPressSiteContent? siteContent,
+            List<TermItem> productCategories)
         {
             Products = products;
             Variations = variations;
@@ -1942,6 +1958,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
             Orders = orders;
             Subscriptions = subscriptions;
             SiteContent = siteContent;
+            ProductCategories = productCategories;
         }
 
         public List<StoreProduct> Products { get; }
@@ -1955,6 +1972,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         public List<WooOrder> Orders { get; }
         public List<WooSubscription> Subscriptions { get; }
         public WordPressSiteContent? SiteContent { get; }
+        public List<TermItem> ProductCategories { get; }
     }
 
     private sealed record MediaReference(string RelativePath, string AbsolutePath);
