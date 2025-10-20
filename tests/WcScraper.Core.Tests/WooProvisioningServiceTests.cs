@@ -559,6 +559,74 @@ public class WooProvisioningServiceTests
         Assert.Equal(654, doc.RootElement.GetProperty("author").GetInt32());
     }
 
+    [Fact]
+    public async Task ProvisionAsync_OnHoldOrderWithoutPayment_LeavesSetPaidFalse()
+    {
+        var handler = new RecordingHandler();
+        using var httpClient = new HttpClient(handler);
+        var service = new WooProvisioningService(httpClient);
+        var settings = new WooProvisioningSettings("https://target.example", "ck", "cs");
+
+        var order = new WooOrder
+        {
+            Id = 501,
+            Status = "on-hold",
+            LineItems =
+            {
+                new WooOrderLineItem
+                {
+                    Name = "Sample Item",
+                    Quantity = 1,
+                    Total = "9.99"
+                }
+            }
+        };
+
+        await service.ProvisionAsync(
+            settings,
+            Array.Empty<StoreProduct>(),
+            orders: new[] { order });
+
+        var orderCall = handler.Calls.Single(call => call.Method == HttpMethod.Post && call.Path == "/wp-json/wc/v3/orders");
+        Assert.NotNull(orderCall.Content);
+        using var doc = JsonDocument.Parse(orderCall.Content!);
+        Assert.False(doc.RootElement.GetProperty("set_paid").GetBoolean());
+    }
+
+    [Fact]
+    public async Task ProvisionAsync_CompletedOrder_DefaultsSetPaidTrue()
+    {
+        var handler = new RecordingHandler();
+        using var httpClient = new HttpClient(handler);
+        var service = new WooProvisioningService(httpClient);
+        var settings = new WooProvisioningSettings("https://target.example", "ck", "cs");
+
+        var order = new WooOrder
+        {
+            Id = 601,
+            Status = "completed",
+            LineItems =
+            {
+                new WooOrderLineItem
+                {
+                    Name = "Finished Item",
+                    Quantity = 2,
+                    Total = "19.98"
+                }
+            }
+        };
+
+        await service.ProvisionAsync(
+            settings,
+            Array.Empty<StoreProduct>(),
+            orders: new[] { order });
+
+        var orderCall = handler.Calls.Single(call => call.Method == HttpMethod.Post && call.Path == "/wp-json/wc/v3/orders");
+        Assert.NotNull(orderCall.Content);
+        using var doc = JsonDocument.Parse(orderCall.Content!);
+        Assert.True(doc.RootElement.GetProperty("set_paid").GetBoolean());
+    }
+
     private sealed class RecordingHandler : HttpMessageHandler
     {
         public List<(HttpMethod Method, string Path, string Query, string? Content, string? Authorization)> Calls { get; } = new();
@@ -691,6 +759,16 @@ public class WooProvisioningServiceTests
             if (request.Method == HttpMethod.Post && path == "/wp-json/wc/v3/coupons")
             {
                 return Task.FromResult(JsonResponse("{\"id\":900,\"code\":\"APPAREL10\"}"));
+            }
+
+            if (request.Method == HttpMethod.Post && path == "/wp-json/wc/v3/orders")
+            {
+                if (string.IsNullOrWhiteSpace(content))
+                {
+                    throw new InvalidOperationException("Order payload was empty.");
+                }
+
+                return Task.FromResult(JsonResponse("{\"id\":1001}"));
             }
 
             if (request.Method == HttpMethod.Get && path == "/wp-json/wp/v2/pages")
