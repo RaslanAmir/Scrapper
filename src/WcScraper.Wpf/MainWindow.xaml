@@ -118,6 +118,10 @@
                     <CheckBox Content="Themes CSV" IsChecked="{Binding ExportThemesCsv}" Margin="0,0,16,0"/>
                     <CheckBox Content="Themes JSONL" IsChecked="{Binding ExportThemesJsonl}"/>
                 </WrapPanel>
+                <CheckBox Content="Capture store configuration (settings, shipping, payments)"
+                          IsChecked="{Binding ExportStoreConfiguration}"
+                          Margin="0,8,0,0"
+                          Visibility="{Binding IsWooCommerce, Converter={StaticResource BoolToVisibility}}"/>
             </StackPanel>
         </GroupBox>
 
@@ -131,6 +135,12 @@
                 <TextBlock Text="Consumer secret:" Margin="0,8,0,4"/>
                 <TextBox Text="{Binding TargetConsumerSecret, UpdateSourceTrigger=PropertyChanged}"/>
                 <TextBlock Text="Run an export, then configure the target WooCommerce REST credentials and click Replicate store." TextWrapping="Wrap" Margin="0,12,0,8"/>
+                <CheckBox Content="Apply captured store configuration before provisioning"
+                          IsChecked="{Binding ImportStoreConfiguration}"
+                          Margin="0,0,0,4"/>
+                <TextBlock Text="Requires an export with store configuration enabled and WordPress credentials."
+                           TextWrapping="Wrap"
+                           Margin="0,0,0,8"/>
                 <TextBlock Text="{Binding CanReplicate, StringFormat=Export ready: {0}}" Margin="0,0,0,4"/>
                 <Button Content="Replicate store" HorizontalAlignment="Right" Padding="16,6" Command="{Binding ReplicateCommand}" />
             </StackPanel>

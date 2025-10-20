@@ -3075,12 +3075,6 @@ public sealed class WooScraper : IDisposable
         return new AuthenticationHeaderValue("Basic", token);
     }
 
-    private sealed class WooSettingGroup
-    {
-        [JsonPropertyName("id")] public string? Id { get; set; }
-        [JsonPropertyName("label")] public string? Label { get; set; }
-    }
-
     private static List<InstalledPlugin> ParsePluginsFromHtml(string html)
     {
         var list = new List<InstalledPlugin>();
