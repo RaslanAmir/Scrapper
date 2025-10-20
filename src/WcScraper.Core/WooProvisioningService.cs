@@ -3093,6 +3093,41 @@ public sealed class WooProvisioningService : IDisposable
         CancellationToken cancellationToken)
     {
         var images = new List<Dictionary<string, object?>>();
+        var seenIdentifiers = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        void AddImageById(int id)
+        {
+            if (id <= 0)
+            {
+                return;
+            }
+
+            if (!seenIdentifiers.Add($"id:{id}"))
+            {
+                return;
+            }
+
+            images.Add(new Dictionary<string, object?> { ["id"] = id });
+        }
+
+        void AddImageBySource(string? src, string? alt)
+        {
+            if (string.IsNullOrWhiteSpace(src))
+            {
+                return;
+            }
+
+            if (!seenIdentifiers.Add($"src:{src}"))
+            {
+                return;
+            }
+
+            images.Add(new Dictionary<string, object?>
+            {
+                ["src"] = src,
+                ["alt"] = alt
+            });
+        }
 
         if (product.LocalImageFilePaths.Count > 0)
         {
@@ -3111,7 +3146,7 @@ public sealed class WooProvisioningService : IDisposable
 
                 if (mediaCache.TryGetValue(path, out var cachedId))
                 {
-                    images.Add(new Dictionary<string, object?> { ["id"] = cachedId });
+                    AddImageById(cachedId);
                     continue;
                 }
 
@@ -3119,12 +3154,12 @@ public sealed class WooProvisioningService : IDisposable
                 if (uploaded.HasValue)
                 {
                     mediaCache[path] = uploaded.Value;
-                    images.Add(new Dictionary<string, object?> { ["id"] = uploaded.Value });
+                    AddImageById(uploaded.Value);
                 }
             }
         }
 
-        if (images.Count == 0 && product.Images is { Count: > 0 })
+        if (product.Images is { Count: > 0 })
         {
             foreach (var img in product.Images)
             {
@@ -3136,10 +3171,7 @@ public sealed class WooProvisioningService : IDisposable
                 if (!string.IsNullOrWhiteSpace(img.Src)
                     && mediaCache.TryGetValue(img.Src, out var cachedFromSrc))
                 {
-                    images.Add(new Dictionary<string, object?>
-                    {
-                        ["id"] = cachedFromSrc
-                    });
+                    AddImageById(cachedFromSrc);
                     continue;
                 }
 
@@ -3148,24 +3180,12 @@ public sealed class WooProvisioningService : IDisposable
                     var idKey = img.Id.ToString(CultureInfo.InvariantCulture);
                     if (mediaCache.TryGetValue(idKey, out var cachedFromId))
                     {
-                        images.Add(new Dictionary<string, object?>
-                        {
-                            ["id"] = cachedFromId
-                        });
+                        AddImageById(cachedFromId);
                         continue;
                     }
                 }
 
-                if (string.IsNullOrWhiteSpace(img.Src))
-                {
-                    continue;
-                }
-
-                images.Add(new Dictionary<string, object?>
-                {
-                    ["src"] = img.Src,
-                    ["alt"] = img.Alt
-                });
+                AddImageBySource(img.Src, img.Alt);
             }
         }
 
