@@ -209,6 +209,68 @@ public class WooProvisioningServiceTests
     }
 
     [Fact]
+    public async Task ProvisionAsync_CouponWithCategoryRestrictions_MapsCategoryIds()
+    {
+        var handler = new RecordingHandler();
+        using var httpClient = new HttpClient(handler);
+        var service = new WooProvisioningService(httpClient);
+        var settings = new WooProvisioningSettings("https://target.example", "ck", "cs");
+
+        var product = new StoreProduct
+        {
+            Id = 123,
+            Name = "Coupon Product",
+            Slug = "coupon-product",
+            Sku = "COUPON-PROD",
+            Categories =
+            {
+                new Category { Id = 300, Name = "Apparel", Slug = "apparel" },
+                new Category { Id = 400, Name = "Clearance", Slug = "clearance" }
+            }
+        };
+
+        var coupon = new WooCoupon
+        {
+            Id = 50,
+            Code = "APPAREL10",
+            Amount = "10",
+            DiscountType = "percent",
+            ProductCategories = { 300 },
+            ExcludedProductCategories = { 400 }
+        };
+
+        await service.ProvisionAsync(
+            settings,
+            new[] { product },
+            coupons: new[] { coupon });
+
+        var couponCall = handler.Calls.Single(call => call.Method == HttpMethod.Post && call.Path == "/wp-json/wc/v3/coupons");
+        Assert.NotNull(couponCall.Content);
+        using var doc = JsonDocument.Parse(couponCall.Content!);
+        var root = doc.RootElement;
+
+        var included = root
+            .GetProperty("product_categories")
+            .EnumerateArray()
+            .Select(element => element.GetInt32())
+            .ToList();
+        var excluded = root
+            .GetProperty("excluded_product_categories")
+            .EnumerateArray()
+            .Select(element => element.GetInt32())
+            .ToList();
+
+        var includedId = handler.GetCreatedCategoryId("apparel");
+        var excludedId = handler.GetCreatedCategoryId("clearance");
+        Assert.NotNull(includedId);
+        Assert.NotNull(excludedId);
+        Assert.Single(included);
+        Assert.Equal(includedId.Value, included[0]);
+        Assert.Single(excluded);
+        Assert.Equal(excludedId.Value, excluded[0]);
+    }
+
+    [Fact]
     public async Task ProvisionAsync_LocalImageUploads_UsesWordPressCredentials()
     {
         var handler = new RecordingHandler();
@@ -552,6 +614,16 @@ public class WooProvisioningServiceTests
                 return Task.FromResult(JsonResponse("[]"));
             }
 
+            if (request.Method == HttpMethod.Get && path == "/wp-json/wc/v3/products" && query.Contains("sku=COUPON-PROD", StringComparison.Ordinal))
+            {
+                return Task.FromResult(JsonResponse("[]"));
+            }
+
+            if (request.Method == HttpMethod.Get && path == "/wp-json/wc/v3/products" && query.Contains("slug=coupon-product", StringComparison.Ordinal))
+            {
+                return Task.FromResult(JsonResponse("[]"));
+            }
+
             if (request.Method == HttpMethod.Get && path == "/wp-json/wp/v2/media")
             {
                 return Task.FromResult(JsonResponse("[]"));
@@ -578,6 +650,11 @@ public class WooProvisioningServiceTests
             }
 
             if (request.Method == HttpMethod.Get && path == "/wp-json/wc/v3/products/categories")
+            {
+                return Task.FromResult(JsonResponse("[]"));
+            }
+
+            if (request.Method == HttpMethod.Get && path == "/wp-json/wc/v3/coupons")
             {
                 return Task.FromResult(JsonResponse("[]"));
             }
@@ -609,6 +686,11 @@ public class WooProvisioningServiceTests
             if (request.Method == HttpMethod.Post && path == "/wp-json/wc/v3/products")
             {
                 return Task.FromResult(JsonResponse("{\"id\":200,\"sku\":\"PARENT-SKU\",\"slug\":\"parent-product\"}"));
+            }
+
+            if (request.Method == HttpMethod.Post && path == "/wp-json/wc/v3/coupons")
+            {
+                return Task.FromResult(JsonResponse("{\"id\":900,\"code\":\"APPAREL10\"}"));
             }
 
             if (request.Method == HttpMethod.Get && path == "/wp-json/wp/v2/pages")
