@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
@@ -2241,7 +2242,18 @@ public sealed class WooScraper : IDisposable
             }
 
             var detailed = await FetchMenuDetailAsync(baseUrl, endpoint, menu, log);
-            menus.Add(detailed ?? menu);
+            var resolved = detailed ?? menu;
+
+            if (resolved.Items is null || resolved.Items.Count == 0)
+            {
+                var fallbackItems = await FetchMenuItemsAsync(baseUrl, resolved, log);
+                if (fallbackItems.Count > 0)
+                {
+                    resolved.Items = fallbackItems;
+                }
+            }
+
+            menus.Add(resolved);
         }
 
         return menus;
@@ -2333,6 +2345,197 @@ public sealed class WooScraper : IDisposable
         }
 
         return null;
+    }
+
+    private async Task<List<WordPressMenuItem>> FetchMenuItemsAsync(
+        string baseUrl,
+        WordPressMenu menu,
+        IProgress<string>? log)
+    {
+        if (menu is null)
+        {
+            return new List<WordPressMenuItem>();
+        }
+
+        var candidates = new List<string>
+        {
+            "/wp-json/wp/v2/menu-items",
+            "/wp-json/wp-api-menus/v2/menu-items",
+            "/wp-json/menus/v1/menu-items"
+        };
+
+        foreach (var candidate in candidates)
+        {
+            var items = await FetchMenuItemsFromEndpointAsync(baseUrl, candidate, menu, log);
+            if (items.Count > 0)
+            {
+                return BuildMenuTree(items);
+            }
+        }
+
+        return new List<WordPressMenuItem>();
+    }
+
+    private async Task<List<WordPressMenuItem>> FetchMenuItemsFromEndpointAsync(
+        string baseUrl,
+        string endpoint,
+        WordPressMenu menu,
+        IProgress<string>? log)
+    {
+        var queries = BuildMenuItemQueryCandidates(menu);
+        var results = new List<WordPressMenuItem>();
+
+        foreach (var query in queries)
+        {
+            var collected = new List<WordPressMenuItem>();
+
+            for (var page = 1; page <= 50; page++)
+            {
+                var baseEndpoint = CombineEndpoint(baseUrl, endpoint);
+                var separator = baseEndpoint.Contains('?', StringComparison.Ordinal) ? '&' : '?';
+                var url = $"{baseEndpoint}{separator}per_page=100&page={page}";
+                if (!string.IsNullOrWhiteSpace(query))
+                {
+                    url += $"&{query}";
+                }
+
+                try
+                {
+                    log?.Report($"GET {url}");
+                    using var resp = await _http.GetAsync(url);
+                    if (!resp.IsSuccessStatusCode)
+                    {
+                        if ((int)resp.StatusCode is 400 or 404)
+                        {
+                            break;
+                        }
+
+                        resp.EnsureSuccessStatusCode();
+                    }
+
+                    var text = await resp.Content.ReadAsStringAsync();
+                    if (string.IsNullOrWhiteSpace(text))
+                    {
+                        break;
+                    }
+
+                    var batch = DeserializeListWithRecovery<WordPressMenuItem>(text, "menu items", log);
+                    if (batch.Count == 0)
+                    {
+                        break;
+                    }
+
+                    collected.AddRange(batch);
+                    if (batch.Count < 100)
+                    {
+                        break;
+                    }
+                }
+                catch (TaskCanceledException ex)
+                {
+                    log?.Report($"Menu items request timed out for {endpoint}: {ex.Message}");
+                    break;
+                }
+                catch (AuthenticationException ex)
+                {
+                    log?.Report($"Menu items TLS failure for {endpoint}: {ex.Message}");
+                    break;
+                }
+                catch (IOException ex)
+                {
+                    log?.Report($"Menu items I/O failure for {endpoint}: {ex.Message}");
+                    break;
+                }
+                catch (HttpRequestException ex)
+                {
+                    log?.Report($"Menu items request failed for {endpoint}: {ex.Message}");
+                    break;
+                }
+            }
+
+            if (collected.Count > 0)
+            {
+                results = collected;
+                break;
+            }
+        }
+
+        return results;
+    }
+
+    private static List<string> BuildMenuItemQueryCandidates(WordPressMenu menu)
+    {
+        var queries = new List<string>();
+        if (menu.Id > 0)
+        {
+            queries.Add($"menus={menu.Id}");
+            queries.Add($"menu={menu.Id}");
+        }
+
+        if (!string.IsNullOrWhiteSpace(menu.Slug))
+        {
+            var encoded = Uri.EscapeDataString(menu.Slug);
+            queries.Add($"slug={encoded}");
+            queries.Add($"menu_slug={encoded}");
+        }
+
+        queries.Add(string.Empty);
+        return queries
+            .Where(q => q is not null)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    private static List<WordPressMenuItem> BuildMenuTree(List<WordPressMenuItem> flatItems)
+    {
+        if (flatItems.Count == 0)
+        {
+            return flatItems;
+        }
+
+        var byId = flatItems
+            .Where(i => i.Id > 0)
+            .ToDictionary(i => i.Id, i => i, EqualityComparer<int>.Default);
+
+        foreach (var item in flatItems)
+        {
+            item.Children = new List<WordPressMenuItem>();
+        }
+
+        var roots = new List<WordPressMenuItem>();
+
+        foreach (var item in flatItems)
+        {
+            if (item.ParentId is int parent && parent > 0 && byId.TryGetValue(parent, out var parentItem) && !ReferenceEquals(parentItem, item))
+            {
+                parentItem.Children.Add(item);
+            }
+            else
+            {
+                roots.Add(item);
+            }
+        }
+
+        void SortChildren(WordPressMenuItem node)
+        {
+            node.Children = node.Children
+                .OrderBy(child => child.Order ?? child.Id)
+                .ToList();
+
+            foreach (var child in node.Children)
+            {
+                SortChildren(child);
+            }
+        }
+
+        foreach (var root in roots)
+        {
+            SortChildren(root);
+        }
+
+        return roots
+            .OrderBy(item => item.Order ?? item.Id)
+            .ToList();
     }
 
     private async Task<List<WordPressMenuLocation>> FetchMenuLocationsAsync(string baseUrl, IProgress<string>? log)
