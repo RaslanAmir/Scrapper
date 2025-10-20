@@ -3083,7 +3083,7 @@ public sealed class WooProvisioningService : IDisposable
         }
 
         var status = order.Status?.Trim().ToLowerInvariant();
-        return status is "completed" or "processing" or "on-hold";
+        return status is "completed" or "processing";
     }
 
     private static List<Dictionary<string, object?>> BuildMetaDataPayload(IEnumerable<StoreMetaData>? metaData)
