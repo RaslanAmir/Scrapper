@@ -2212,14 +2212,15 @@ public sealed class WooProvisioningService : IDisposable
                 continue;
             }
 
-            var parentProduct = group.Parent ?? (productLookup.TryGetValue(group.ParentId, out var existing) ? existing : null);
+            var parentProduct = group.Parent
+                ?? (productLookup.TryGetValue(group.ParentId, out var existingProduct) ? existingProduct : null);
             var parentLabel = BuildParentLabel(parentProduct, group.ParentId);
             progress?.Report($"Provisioning {group.Variations.Count} variations for '{parentLabel}' (ID {mappedParentId}).");
 
-            var existing = await FetchExistingVariationsAsync(baseUrl, settings, mappedParentId, cancellationToken);
+            var existingVariations = await FetchExistingVariationsAsync(baseUrl, settings, mappedParentId, cancellationToken);
             var existingBySku = new Dictionary<string, WooVariationResponse>(StringComparer.OrdinalIgnoreCase);
             var existingByAttributes = new Dictionary<string, WooVariationResponse>(StringComparer.OrdinalIgnoreCase);
-            foreach (var item in existing)
+            foreach (var item in existingVariations)
             {
                 if (!string.IsNullOrWhiteSpace(item.Sku))
                 {
