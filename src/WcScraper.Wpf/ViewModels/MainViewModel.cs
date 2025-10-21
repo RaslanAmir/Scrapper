@@ -842,8 +842,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
             if (ExportShopify)
             {
                 var rows = (variations.Count > 0)
-                    ? Mappers.ToShopifyCsvWithVariants(prods, variations, StoreUrl).ToList()
-                    : Mappers.ToShopifyCsv(prods, StoreUrl).ToList();
+                    ? Mappers.ToShopifyCsvWithVariants(prods, variations, targetUrl).ToList()
+                    : Mappers.ToShopifyCsv(prods, targetUrl).ToList();
                 var path = Path.Combine(storeOutputFolder, $"{storeId}_{timestamp}_shopify_products.csv");
                 CsvExporter.Write(path, rows);
                 Append($"Wrote {path}");
