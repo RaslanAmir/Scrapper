@@ -161,8 +161,35 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public string ShopifyStorefrontAccessToken { get => _shopifyStorefrontAccessToken; set { _shopifyStorefrontAccessToken = value; OnPropertyChanged(); } }
     public string ShopifyApiKey { get => _shopifyApiKey; set { _shopifyApiKey = value; OnPropertyChanged(); } }
     public string ShopifyApiSecret { get => _shopifyApiSecret; set { _shopifyApiSecret = value; OnPropertyChanged(); } }
-    public string WordPressUsername { get => _wordPressUsername; set { _wordPressUsername = value; OnPropertyChanged(); } }
-    public string WordPressApplicationPassword { get => _wordPressApplicationPassword; set { _wordPressApplicationPassword = value; OnPropertyChanged(); } }
+    public string WordPressUsername
+    {
+        get => _wordPressUsername;
+        set
+        {
+            _wordPressUsername = value;
+            OnPropertyChanged();
+            OnWordPressCredentialsChanged();
+        }
+    }
+
+    public string WordPressApplicationPassword
+    {
+        get => _wordPressApplicationPassword;
+        set
+        {
+            _wordPressApplicationPassword = value;
+            OnPropertyChanged();
+            OnWordPressCredentialsChanged();
+        }
+    }
+
+    public bool HasWordPressCredentials =>
+        !string.IsNullOrWhiteSpace(_wordPressUsername) &&
+        !string.IsNullOrWhiteSpace(_wordPressApplicationPassword);
+
+    public bool CanExportExtensions => HasWordPressCredentials;
+
+    public bool CanExportStoreConfiguration => HasWordPressCredentials;
     public string TargetStoreUrl { get => _targetStoreUrl; set { _targetStoreUrl = value; OnPropertyChanged(); } }
     public string TargetConsumerKey { get => _targetConsumerKey; set { _targetConsumerKey = value; OnPropertyChanged(); } }
     public string TargetConsumerSecret { get => _targetConsumerSecret; set { _targetConsumerSecret = value; OnPropertyChanged(); } }
@@ -2104,6 +2131,13 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public event PropertyChangedEventHandler? PropertyChanged;
     private void OnPropertyChanged([CallerMemberName] string? name = null)
         => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
+
+    private void OnWordPressCredentialsChanged()
+    {
+        OnPropertyChanged(nameof(HasWordPressCredentials));
+        OnPropertyChanged(nameof(CanExportExtensions));
+        OnPropertyChanged(nameof(CanExportStoreConfiguration));
+    }
 }
 
 // Helper wrapper for selectable filters
