@@ -3021,11 +3021,12 @@ public sealed class WooProvisioningService : IDisposable
                     continue;
                 }
 
-                if (!string.IsNullOrWhiteSpace(rate.RateCode)
-                    && requiredCodes.Contains(rate.RateCode)
-                    && !mappedByCode.ContainsKey(rate.RateCode))
+                foreach (var code in EnumerateTaxRateCodes(rate))
                 {
-                    mappedByCode[rate.RateCode] = rate.Id;
+                    if (requiredCodes.Contains(code) && !mappedByCode.ContainsKey(code))
+                    {
+                        mappedByCode[code] = rate.Id;
+                    }
                 }
 
                 if (requiredIds.Contains(rate.Id) && !mappedById.ContainsKey(rate.Id))
@@ -3097,6 +3098,70 @@ public sealed class WooProvisioningService : IDisposable
         }
 
         return new TaxRateLookup(mappedByCode, mappedById);
+    }
+
+    private static IEnumerable<string> EnumerateTaxRateCodes(WooTaxRate rate)
+    {
+        if (!string.IsNullOrWhiteSpace(rate.RateCode))
+        {
+            yield return rate.RateCode!;
+            yield break;
+        }
+
+        var normalizedClass = NormalizeTaxClass(rate.Class);
+        if (string.IsNullOrWhiteSpace(normalizedClass))
+        {
+            yield break;
+        }
+
+        static string NormalizeSegment(string? value)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                return "*";
+            }
+
+            var trimmed = value.Trim();
+            return trimmed.Length == 0 ? "*" : trimmed.ToUpperInvariant();
+        }
+
+        var segments = new[]
+        {
+            NormalizeSegment(rate.Country),
+            NormalizeSegment(rate.State),
+            NormalizeSegment(rate.Postcode),
+            NormalizeSegment(rate.City)
+        };
+
+        var synthesized = string.Join('-', segments) + "-" + normalizedClass;
+        yield return synthesized;
+
+        var wildcard = string.Join('-', new[] { "*", "*", "*", "*", normalizedClass });
+        if (!string.Equals(synthesized, wildcard, StringComparison.OrdinalIgnoreCase))
+        {
+            yield return wildcard;
+        }
+    }
+
+    private static string NormalizeTaxClass(string? taxClass)
+    {
+        if (string.IsNullOrWhiteSpace(taxClass))
+        {
+            return "STANDARD RATE";
+        }
+
+        var trimmed = taxClass.Trim();
+        if (trimmed.Length == 0)
+        {
+            return "STANDARD RATE";
+        }
+
+        if (string.Equals(trimmed, "standard", StringComparison.OrdinalIgnoreCase))
+        {
+            return "STANDARD RATE";
+        }
+
+        return trimmed.Replace('-', ' ').ToUpperInvariant();
     }
 
     private async Task EnsureOrdersAsync(
@@ -5129,6 +5194,11 @@ public sealed class WooProvisioningService : IDisposable
     {
         [JsonPropertyName("id")] public int Id { get; set; }
         [JsonPropertyName("rate_code")] public string? RateCode { get; set; }
+        [JsonPropertyName("country")] public string? Country { get; set; }
+        [JsonPropertyName("state")] public string? State { get; set; }
+        [JsonPropertyName("postcode")] public string? Postcode { get; set; }
+        [JsonPropertyName("city")] public string? City { get; set; }
+        [JsonPropertyName("class")] public string? Class { get; set; }
     }
 
     private sealed class WooProvisioningException : Exception

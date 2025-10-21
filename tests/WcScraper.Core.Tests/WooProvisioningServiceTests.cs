@@ -1174,6 +1174,122 @@ public class WooProvisioningServiceTests
     }
 
     [Fact]
+    public async Task ProvisionAsync_OrderTaxLines_TaxRateMissingState_MapsSynthesizedCodes()
+    {
+        var handler = new RecordingHandler();
+        handler.TaxRates.Add(new RecordingHandler.TaxRateRecord
+        {
+            Id = 321,
+            Country = "US",
+            Class = "standard"
+        });
+
+        using var httpClient = new HttpClient(handler);
+        var service = new WooProvisioningService(httpClient);
+        var settings = new WooProvisioningSettings("https://target.example", "ck", "cs");
+
+        var order = new WooOrder
+        {
+            Id = 702,
+            LineItems =
+            {
+                new WooOrderLineItem
+                {
+                    Name = "Wildcard State Item",
+                    Quantity = 1,
+                    Total = "15.00"
+                }
+            },
+            TaxLines =
+            {
+                new WooOrderTaxLine
+                {
+                    RateCode = "US-*-*-*-STANDARD RATE",
+                    Label = "US Tax",
+                    TaxTotal = "1.50"
+                },
+                new WooOrderTaxLine
+                {
+                    RateCode = "*-*-*-*-STANDARD RATE",
+                    Label = "Fallback Tax",
+                    TaxTotal = "0.25"
+                }
+            }
+        };
+
+        await service.ProvisionAsync(
+            settings,
+            Array.Empty<StoreProduct>(),
+            orders: new[] { order });
+
+        var orderCall = handler.Calls.Single(call => call.Method == HttpMethod.Post && call.Path == "/wp-json/wc/v3/orders");
+        Assert.NotNull(orderCall.Content);
+        using var doc = JsonDocument.Parse(orderCall.Content!);
+        var taxLines = doc.RootElement.GetProperty("tax_lines").EnumerateArray().ToList();
+        Assert.Equal(2, taxLines.Count);
+
+        var stateWildcard = Assert.Single(taxLines.Where(element => element.GetProperty("rate_code").GetString() == "US-*-*-*-STANDARD RATE"));
+        Assert.Equal(321, stateWildcard.GetProperty("rate_id").GetInt32());
+
+        var fullyWildcard = Assert.Single(taxLines.Where(element => element.GetProperty("rate_code").GetString() == "*-*-*-*-STANDARD RATE"));
+        Assert.Equal(321, fullyWildcard.GetProperty("rate_id").GetInt32());
+    }
+
+    [Fact]
+    public async Task ProvisionAsync_OrderTaxLines_TaxRateMissingCountry_MapsSynthesizedCode()
+    {
+        var handler = new RecordingHandler();
+        handler.TaxRates.Add(new RecordingHandler.TaxRateRecord
+        {
+            Id = 654,
+            State = "CA",
+            Class = "standard"
+        });
+
+        using var httpClient = new HttpClient(handler);
+        var service = new WooProvisioningService(httpClient);
+        var settings = new WooProvisioningSettings("https://target.example", "ck", "cs");
+
+        var order = new WooOrder
+        {
+            Id = 703,
+            LineItems =
+            {
+                new WooOrderLineItem
+                {
+                    Name = "Wildcard Country Item",
+                    Quantity = 1,
+                    Total = "20.00"
+                }
+            },
+            TaxLines =
+            {
+                new WooOrderTaxLine
+                {
+                    RateCode = "*-CA-*-*-STANDARD RATE",
+                    Label = "CA Tax",
+                    TaxTotal = "1.80"
+                }
+            }
+        };
+
+        await service.ProvisionAsync(
+            settings,
+            Array.Empty<StoreProduct>(),
+            orders: new[] { order });
+
+        var orderCall = handler.Calls.Single(call => call.Method == HttpMethod.Post && call.Path == "/wp-json/wc/v3/orders");
+        Assert.NotNull(orderCall.Content);
+        using var doc = JsonDocument.Parse(orderCall.Content!);
+        var taxLines = doc.RootElement.GetProperty("tax_lines").EnumerateArray().ToList();
+        Assert.Single(taxLines);
+
+        var countryWildcard = taxLines[0];
+        Assert.Equal("*-CA-*-*-STANDARD RATE", countryWildcard.GetProperty("rate_code").GetString());
+        Assert.Equal(654, countryWildcard.GetProperty("rate_id").GetInt32());
+    }
+
+    [Fact]
     public async Task ProvisionAsync_ShippingZoneWithEmptyLocations_CallsLocationsEndpointWithEmptyArray()
     {
         var handler = new RecordingHandler();
@@ -1400,7 +1516,11 @@ public class WooProvisioningServiceTests
                     rate_code = rate.RateCode,
                     rate = rate.Rate,
                     name = rate.Name,
-                    @class = rate.Class
+                    @class = rate.Class,
+                    country = rate.Country,
+                    state = rate.State,
+                    postcode = rate.Postcode,
+                    city = rate.City
                 }));
                 return Task.FromResult(JsonResponse(payload));
             }
@@ -1838,6 +1958,10 @@ public class WooProvisioningServiceTests
             public string? Rate { get; init; }
             public string? Name { get; init; }
             public string? Class { get; init; }
+            public string? Country { get; init; }
+            public string? State { get; init; }
+            public string? Postcode { get; init; }
+            public string? City { get; init; }
         }
     }
 }
