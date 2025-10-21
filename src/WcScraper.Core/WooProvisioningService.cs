@@ -306,7 +306,7 @@ public sealed class WooProvisioningService : IDisposable
                     s => s.Name,
                     s => s.Slug,
                     s => s.Id,
-                    existing: categorySeeds);
+                    result: categorySeeds);
             }
 
             var categorySeedList = categorySeeds.ToList();
