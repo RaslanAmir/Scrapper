@@ -652,6 +652,164 @@ public class MainViewModelTests
         }
     }
 
+    [Fact]
+    public async Task OnRunAsync_Shopify_ExportsVendorFromStoreDomain()
+    {
+        const string baseUrl = "https://example.myshopify.com";
+        const string collectionsResponse = """
+        {
+          "collections": []
+        }
+        """;
+
+        const string productsPageOne = """
+        {
+          "products": [
+            {
+              "id": 501,
+              "title": "Shopify Sample",
+              "body_html": "<p>Sample</p>",
+              "product_type": "Apparel",
+              "handle": "shopify-sample",
+              "status": "active",
+              "variants": [
+                {
+                  "id": 601,
+                  "sku": "SKU-500",
+                  "price": "10.00",
+                  "inventory_quantity": 3
+                }
+              ],
+              "options": [
+                {
+                  "name": "Title",
+                  "values": ["Default Title"]
+                }
+              ],
+              "images": [
+                {
+                  "id": 701,
+                  "src": "https://example.myshopify.com/cdn/sample.png",
+                  "alt": "Sample"
+                }
+              ]
+            }
+          ]
+        }
+        """;
+
+        const string productsPageTwo = """
+        {
+          "products": []
+        }
+        """;
+
+        using var handler = new StubHttpMessageHandler(request =>
+        {
+            var uri = request.RequestUri ?? throw new InvalidOperationException("Missing URI");
+
+            if (uri.AbsoluteUri.Equals("https://example.myshopify.com/cdn/sample.png", StringComparison.Ordinal))
+            {
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new ByteArrayContent(new byte[] { 1, 2, 3 })
+                };
+            }
+
+            Assert.Equal(HttpMethod.Get, request.Method);
+
+            if (uri.AbsolutePath.EndsWith("/collections.json", StringComparison.Ordinal))
+            {
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(collectionsResponse, Encoding.UTF8, "application/json")
+                };
+            }
+
+            if (uri.AbsolutePath.EndsWith("/products.json", StringComparison.Ordinal))
+            {
+                var payload = uri.Query.Contains("page=1", StringComparison.Ordinal)
+                    ? productsPageOne
+                    : productsPageTwo;
+
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(payload, Encoding.UTF8, "application/json")
+                };
+            }
+
+            throw new InvalidOperationException($"Unexpected request: {uri}");
+        });
+
+        using var httpClient = new HttpClient(handler);
+        using var wooScraper = new WooScraper();
+        using var shopifyScraper = new ShopifyScraper(httpClient);
+
+        var ctor = typeof(MainViewModel).GetConstructor(
+            BindingFlags.NonPublic | BindingFlags.Instance,
+            binder: null,
+            new[] { typeof(IDialogService), typeof(WooScraper), typeof(ShopifyScraper), typeof(HttpClient) },
+            modifiers: null);
+        Assert.NotNull(ctor);
+
+        var viewModel = (MainViewModel)ctor!.Invoke(new object[]
+        {
+            new StubDialogService(),
+            wooScraper,
+            shopifyScraper,
+            httpClient
+        });
+
+        var tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+
+        try
+        {
+            viewModel.OutputFolder = tempDir;
+            viewModel.ShopifyStoreUrl = baseUrl;
+            viewModel.SelectedPlatform = PlatformMode.Shopify;
+            viewModel.ExportCsv = false;
+            viewModel.ExportJsonl = false;
+            viewModel.ExportShopify = true;
+            viewModel.ExportWoo = false;
+            viewModel.ExportReviews = false;
+            viewModel.ExportXlsx = false;
+
+            var onRun = typeof(MainViewModel)
+                .GetMethod("OnRunAsync", BindingFlags.NonPublic | BindingFlags.Instance);
+            Assert.NotNull(onRun);
+
+            var task = (Task)onRun!.Invoke(viewModel, Array.Empty<object>())!;
+            await task;
+
+            var storeIdMethod = typeof(MainViewModel)
+                .GetMethod("BuildStoreIdentifier", BindingFlags.NonPublic | BindingFlags.Static);
+            Assert.NotNull(storeIdMethod);
+
+            var storeId = (string)storeIdMethod!.Invoke(null, new object[] { baseUrl })!;
+            var storeFolder = Path.Combine(tempDir, storeId);
+            Assert.True(Directory.Exists(storeFolder));
+
+            var shopifyCsv = Directory.GetFiles(storeFolder, $"{storeId}_*_shopify_products.csv");
+            var shopifyPath = Assert.Single(shopifyCsv);
+
+            var lines = File.ReadAllLines(shopifyPath);
+            Assert.True(lines.Length >= 2, "Shopify CSV should contain header and at least one row.");
+
+            var headers = lines[0].Split(',');
+            var vendorIndex = Array.FindIndex(headers, h => string.Equals(h.Trim('"'), "Vendor", StringComparison.Ordinal));
+            Assert.True(vendorIndex >= 0, "Vendor column was not found in Shopify CSV header.");
+
+            var values = lines[1].Split(',');
+            Assert.InRange(vendorIndex, 0, values.Length - 1);
+            Assert.Equal("example.myshopify.com", values[vendorIndex].Trim('"'));
+        }
+        finally
+        {
+            Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
     private sealed class StubDialogService : IDialogService
     {
         public string? BrowseForFolder(string? initial = null) => null;
