@@ -4787,31 +4787,54 @@ public sealed class WooProvisioningService : IDisposable
                 yield break;
             }
 
-            var primary = BuildCode(
-                Normalize,
-                Normalize,
-                NormalizeWildcard,
-                NormalizeWildcard,
-                Normalize);
+            var yielded = new HashSet<string>(StringComparer.Ordinal);
 
-            if (!string.IsNullOrWhiteSpace(primary))
+            foreach (var candidate in EnumerateCandidates())
             {
-                yield return primary;
+                if (!string.IsNullOrWhiteSpace(candidate)
+                    && yielded.Add(candidate))
+                {
+                    yield return candidate;
+                }
             }
 
-            if (string.IsNullOrWhiteSpace(Country) || string.IsNullOrWhiteSpace(State))
+            IEnumerable<string> EnumerateCandidates()
             {
-                var alternate = BuildCode(
-                    NormalizeWildcard,
-                    NormalizeWildcard,
+                yield return BuildCode(
+                    Normalize,
+                    Normalize,
                     NormalizeWildcard,
                     NormalizeWildcard,
                     Normalize);
 
-                if (!string.IsNullOrWhiteSpace(alternate)
-                    && !string.Equals(primary, alternate, StringComparison.Ordinal))
+                if (string.IsNullOrWhiteSpace(Country))
                 {
-                    yield return alternate;
+                    yield return BuildCode(
+                        NormalizeWildcard,
+                        Normalize,
+                        NormalizeWildcard,
+                        NormalizeWildcard,
+                        Normalize);
+                }
+
+                if (string.IsNullOrWhiteSpace(State))
+                {
+                    yield return BuildCode(
+                        Normalize,
+                        NormalizeWildcard,
+                        NormalizeWildcard,
+                        NormalizeWildcard,
+                        Normalize);
+                }
+
+                if (string.IsNullOrWhiteSpace(Country) || string.IsNullOrWhiteSpace(State))
+                {
+                    yield return BuildCode(
+                        NormalizeWildcard,
+                        NormalizeWildcard,
+                        NormalizeWildcard,
+                        NormalizeWildcard,
+                        Normalize);
                 }
             }
         }
