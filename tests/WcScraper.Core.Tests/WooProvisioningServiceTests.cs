@@ -719,7 +719,11 @@ public class WooProvisioningServiceTests
         handler.TaxRates.Add(new RecordingHandler.TaxRateRecord
         {
             Id = 987,
-            RateCode = "US-CA-STATE TAX"
+            Country = "US",
+            State = "CA",
+            Postcode = string.Empty,
+            City = string.Empty,
+            Name = "State Tax"
         });
 
         using var httpClient = new HttpClient(handler);
@@ -742,7 +746,7 @@ public class WooProvisioningServiceTests
             {
                 new WooOrderTaxLine
                 {
-                    RateCode = "US-CA-STATE TAX",
+                    RateCode = "US-CA-*-*-STATE TAX",
                     RateId = 123,
                     Label = "CA State Tax",
                     TaxTotal = "0.80"
@@ -773,7 +777,7 @@ public class WooProvisioningServiceTests
         var taxLines = doc.RootElement.GetProperty("tax_lines").EnumerateArray().ToList();
         Assert.Equal(2, taxLines.Count);
 
-        var mappedLine = Assert.Single(taxLines.Where(element => element.GetProperty("rate_code").GetString() == "US-CA-STATE TAX"));
+        var mappedLine = Assert.Single(taxLines.Where(element => element.GetProperty("rate_code").GetString() == "US-CA-*-*-STATE TAX"));
         Assert.Equal(987, mappedLine.GetProperty("rate_id").GetInt32());
 
         var missingLine = Assert.Single(taxLines.Where(element => element.GetProperty("rate_code").GetString() == "MISSING-CODE"));
@@ -897,7 +901,10 @@ public class WooProvisioningServiceTests
                 var payload = JsonSerializer.Serialize(TaxRates.Select(rate => new
                 {
                     id = rate.Id,
-                    rate_code = rate.RateCode,
+                    country = rate.Country,
+                    state = rate.State,
+                    postcode = rate.Postcode,
+                    city = rate.City,
                     rate = rate.Rate,
                     name = rate.Name,
                     @class = rate.Class
@@ -1232,7 +1239,10 @@ public class WooProvisioningServiceTests
         public sealed class TaxRateRecord
         {
             public int Id { get; init; }
-            public string? RateCode { get; init; }
+            public string? Country { get; init; }
+            public string? State { get; init; }
+            public string? Postcode { get; init; }
+            public string? City { get; init; }
             public string? Rate { get; init; }
             public string? Name { get; init; }
             public string? Class { get; init; }
