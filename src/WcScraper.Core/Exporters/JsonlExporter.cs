@@ -75,7 +75,7 @@ public static class JsonlExporter
             return null;
         }
 
-        var obj = new JsonObject(StringComparer.OrdinalIgnoreCase);
+        var obj = new JsonObject(new JsonNodeOptions { PropertyNameCaseInsensitive = true });
         foreach (var kvp in data)
         {
             obj[kvp.Key] = kvp.Value?.DeepClone();
