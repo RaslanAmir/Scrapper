@@ -605,7 +605,7 @@ public sealed class WooRow
 public abstract class WordPressContentBase
 {
     private static readonly Regex MediaReferenceRegex = new(
-        @"(?:src|data-src|poster)\s*=\s*""(?<url>[^""#?]+[^""\s])""",
+        "(?:src|data-src|poster)\\s*=\\s*\"(?<url>[^\\"#?]+[^\\"\\s])\"",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
     [JsonPropertyName("id")] public int Id { get; set; }
