@@ -1743,7 +1743,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
     private static string NormalizeRelativePath(string path)
     {
-        return path.Replace('\', '/');
+        return path.Replace("\\", "/");
     }
 
     private static string SanitizeSegment(string? value)
