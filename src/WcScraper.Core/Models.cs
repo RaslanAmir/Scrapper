@@ -604,7 +604,7 @@ public sealed class WooRow
 
 public abstract class WordPressContentBase
 {
-    private static readonly Regex MediaReferenceRegex = new("(?i)(?:src|data-src|poster)\\s*=\\s*\"(?<url>[^\"#?]+[^\"\s])\"", RegexOptions.Compiled);
+    private static readonly Regex MediaReferenceRegex = new(@"(?i)(?:src|data-src|poster)\s*=\s*""(?<url>[^""#?]+[^""\s])""", RegexOptions.Compiled);
 
     [JsonPropertyName("id")] public int Id { get; set; }
     [JsonPropertyName("date")] public DateTimeOffset? Date { get; set; }
