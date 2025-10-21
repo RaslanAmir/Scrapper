@@ -259,10 +259,26 @@ public sealed class WooStoreSetting
 
 public sealed class ShippingZoneSetting
 {
+    private List<ShippingZoneLocation>? _locations;
+
     [JsonPropertyName("id")] public int Id { get; set; }
     [JsonPropertyName("name")] public string? Name { get; set; }
     [JsonPropertyName("order")] public int Order { get; set; }
-    [JsonPropertyName("locations")] public List<ShippingZoneLocation> Locations { get; set; } = new();
+
+    [JsonPropertyName("locations")]
+    public List<ShippingZoneLocation> Locations
+    {
+        get => _locations ??= new();
+        set
+        {
+            LocationsSpecified = true;
+            _locations = value ?? new List<ShippingZoneLocation>();
+        }
+    }
+
+    [JsonIgnore]
+    public bool LocationsSpecified { get; private set; }
+
     [JsonPropertyName("methods")] public List<ShippingZoneMethodSetting> Methods { get; set; } = new();
 }
 
