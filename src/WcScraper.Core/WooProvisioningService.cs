@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
@@ -2705,11 +2706,16 @@ public sealed class WooProvisioningService : IDisposable
                     continue;
                 }
 
-                if (!string.IsNullOrWhiteSpace(rate.RateCode)
-                    && requiredCodes.Contains(rate.RateCode)
-                    && !mappedByCode.ContainsKey(rate.RateCode))
+                foreach (var rateCode in rate.GetCandidateRateCodes())
                 {
-                    mappedByCode[rate.RateCode] = rate.Id;
+                    if (string.IsNullOrWhiteSpace(rateCode)
+                        || !requiredCodes.Contains(rateCode)
+                        || mappedByCode.ContainsKey(rateCode))
+                    {
+                        continue;
+                    }
+
+                    mappedByCode[rateCode] = rate.Id;
                 }
 
                 if (requiredIds.Contains(rate.Id) && !mappedById.ContainsKey(rate.Id))
@@ -4768,7 +4774,89 @@ public sealed class WooProvisioningService : IDisposable
     private sealed class WooTaxRate
     {
         [JsonPropertyName("id")] public int Id { get; set; }
-        [JsonPropertyName("rate_code")] public string? RateCode { get; set; }
+        [JsonPropertyName("country")] public string? Country { get; set; }
+        [JsonPropertyName("state")] public string? State { get; set; }
+        [JsonPropertyName("postcode")] public string? Postcode { get; set; }
+        [JsonPropertyName("city")] public string? City { get; set; }
+        [JsonPropertyName("name")] public string? Name { get; set; }
+
+        public IEnumerable<string> GetCandidateRateCodes()
+        {
+            if (string.IsNullOrWhiteSpace(Name))
+            {
+                yield break;
+            }
+
+            var primary = BuildCode(
+                Normalize,
+                Normalize,
+                NormalizeWildcard,
+                NormalizeWildcard,
+                Normalize);
+
+            if (!string.IsNullOrWhiteSpace(primary))
+            {
+                yield return primary;
+            }
+
+            if (string.IsNullOrWhiteSpace(Country) || string.IsNullOrWhiteSpace(State))
+            {
+                var alternate = BuildCode(
+                    NormalizeWildcard,
+                    NormalizeWildcard,
+                    NormalizeWildcard,
+                    NormalizeWildcard,
+                    Normalize);
+
+                if (!string.IsNullOrWhiteSpace(alternate)
+                    && !string.Equals(primary, alternate, StringComparison.Ordinal))
+                {
+                    yield return alternate;
+                }
+            }
+        }
+
+        private string BuildCode(
+            Func<string?, string> countrySelector,
+            Func<string?, string> stateSelector,
+            Func<string?, string> postcodeSelector,
+            Func<string?, string> citySelector,
+            Func<string?, string> nameSelector)
+        {
+            var countrySegment = countrySelector(Country);
+            var stateSegment = stateSelector(State);
+            var postcodeSegment = postcodeSelector(Postcode);
+            var citySegment = citySelector(City);
+            var nameSegment = nameSelector(Name);
+
+            if (string.IsNullOrWhiteSpace(nameSegment))
+            {
+                return string.Empty;
+            }
+
+            return string.Join('-', new[]
+            {
+                countrySegment,
+                stateSegment,
+                postcodeSegment,
+                citySegment,
+                nameSegment
+            });
+        }
+
+        private static string Normalize(string? value)
+        {
+            return string.IsNullOrWhiteSpace(value)
+                ? string.Empty
+                : value.Trim().ToUpperInvariant();
+        }
+
+        private static string NormalizeWildcard(string? value)
+        {
+            return string.IsNullOrWhiteSpace(value)
+                ? "*"
+                : value.Trim().ToUpperInvariant();
+        }
     }
 
     private sealed class WooProvisioningException : Exception
