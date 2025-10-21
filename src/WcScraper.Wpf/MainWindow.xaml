@@ -10,6 +10,14 @@
         Title="WC Local Scraper (WPF)" Height="580" Width="900">
     <Window.Resources>
         <BooleanToVisibilityConverter x:Key="BoolToVisibility" />
+        <Style x:Key="CredentialDependentCheckBoxStyle" TargetType="CheckBox">
+            <Setter Property="ToolTip" Value="{x:Null}" />
+            <Style.Triggers>
+                <Trigger Property="IsEnabled" Value="False">
+                    <Setter Property="ToolTip" Value="Requires WordPress admin username and application password." />
+                </Trigger>
+            </Style.Triggers>
+        </Style>
     </Window.Resources>
     <Window.DataContext>
         <vm:MainViewModel>
@@ -67,11 +75,16 @@
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto"/>
                     <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
                 </Grid.RowDefinitions>
                 <TextBlock Text="Admin username:" Margin="0,0,8,4" VerticalAlignment="Center"/>
                 <TextBox Grid.Column="1" Text="{Binding WordPressUsername, UpdateSourceTrigger=PropertyChanged}"/>
                 <TextBlock Grid.Row="1" Text="Application password:" Margin="0,8,8,0" VerticalAlignment="Center"/>
                 <TextBox Grid.Row="1" Grid.Column="1" Text="{Binding WordPressApplicationPassword, UpdateSourceTrigger=PropertyChanged}"/>
+                <TextBlock Grid.Row="2" Grid.ColumnSpan="2"
+                           Text="Plugins, themes, and configuration exports require a WordPress application password."
+                           TextWrapping="Wrap"
+                           Margin="0,8,0,0"/>
             </Grid>
         </GroupBox>
 
@@ -113,13 +126,30 @@
                 </WrapPanel>
                 <WrapPanel Margin="0,8,0,0"
                            Visibility="{Binding IsWooCommerce, Converter={StaticResource BoolToVisibility}}">
-                    <CheckBox Content="Plugins CSV" IsChecked="{Binding ExportPluginsCsv}" Margin="0,0,16,0"/>
-                    <CheckBox Content="Plugins JSONL" IsChecked="{Binding ExportPluginsJsonl}" Margin="0,0,16,0"/>
-                    <CheckBox Content="Themes CSV" IsChecked="{Binding ExportThemesCsv}" Margin="0,0,16,0"/>
-                    <CheckBox Content="Themes JSONL" IsChecked="{Binding ExportThemesJsonl}"/>
+                    <CheckBox Content="Plugins CSV"
+                              IsChecked="{Binding ExportPluginsCsv}"
+                              IsEnabled="{Binding CanExportExtensions}"
+                              Margin="0,0,16,0"
+                              Style="{StaticResource CredentialDependentCheckBoxStyle}"/>
+                    <CheckBox Content="Plugins JSONL"
+                              IsChecked="{Binding ExportPluginsJsonl}"
+                              IsEnabled="{Binding CanExportExtensions}"
+                              Margin="0,0,16,0"
+                              Style="{StaticResource CredentialDependentCheckBoxStyle}"/>
+                    <CheckBox Content="Themes CSV"
+                              IsChecked="{Binding ExportThemesCsv}"
+                              IsEnabled="{Binding CanExportExtensions}"
+                              Margin="0,0,16,0"
+                              Style="{StaticResource CredentialDependentCheckBoxStyle}"/>
+                    <CheckBox Content="Themes JSONL"
+                              IsChecked="{Binding ExportThemesJsonl}"
+                              IsEnabled="{Binding CanExportExtensions}"
+                              Style="{StaticResource CredentialDependentCheckBoxStyle}"/>
                 </WrapPanel>
                 <CheckBox Content="Capture store configuration (settings, shipping, payments)"
                           IsChecked="{Binding ExportStoreConfiguration}"
+                          IsEnabled="{Binding CanExportStoreConfiguration}"
+                          Style="{StaticResource CredentialDependentCheckBoxStyle}"
                           Margin="0,8,0,0"
                           Visibility="{Binding IsWooCommerce, Converter={StaticResource BoolToVisibility}}"/>
             </StackPanel>
