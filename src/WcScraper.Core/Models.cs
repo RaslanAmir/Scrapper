@@ -15,6 +15,7 @@ public sealed class StoreProduct
     [JsonPropertyName("permalink")] public string? Permalink { get; set; }
     [JsonPropertyName("sku")] public string? Sku { get; set; }
     [JsonPropertyName("type")] public string? Type { get; set; }
+    [JsonPropertyName("status")] public string? Status { get; set; }
     [JsonPropertyName("vendor")] public string? Vendor { get; set; }
     [JsonPropertyName("description")] public string? Description { get; set; }
     [JsonPropertyName("short_description")] public string? ShortDescription { get; set; }

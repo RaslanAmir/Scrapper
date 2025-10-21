@@ -2144,7 +2144,13 @@ public sealed class WooProvisioningService : IDisposable
             AddIfValue(payload, "type", string.IsNullOrWhiteSpace(product.Type) ? "simple" : product.Type);
         }
         AddIfValue(payload, "sku", string.IsNullOrWhiteSpace(product.Sku) ? null : product.Sku);
-        AddIfValue(payload, "status", "publish");
+        var status = product.Status?.Trim();
+        if (string.IsNullOrEmpty(status))
+        {
+            status = "publish";
+        }
+
+        AddIfValue(payload, "status", status);
         AddIfValue(payload, "regular_price", ResolvePrice(product.Prices));
         AddIfValue(payload, "sale_price", ResolveSalePrice(product.Prices));
         AddIfValue(payload, "description", product.Description);
