@@ -1646,7 +1646,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private static string ComputeShortHash(string value)
     {
         var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(value));
-        return Convert.ToHexString(bytes)[..8].ToLowerInvariant(CultureInfo.InvariantCulture);
+        return Convert.ToHexString(bytes)[..8].ToLowerInvariant();
     }
 
     private static JsonNode? TryCloneJsonNode(JsonElement element)
