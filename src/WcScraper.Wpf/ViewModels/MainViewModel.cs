@@ -895,6 +895,57 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 }
             }
 
+            if (SelectedPlatform == PlatformMode.WooCommerce)
+            {
+                if (customers.Count > 0)
+                {
+                    var path = Path.Combine(storeOutputFolder, $"{storeId}_{timestamp}_customers.json");
+                    var json = JsonSerializer.Serialize(customers, _artifactWriteOptions);
+                    await File.WriteAllTextAsync(path, json, Encoding.UTF8);
+                    Append($"Wrote {path}");
+                }
+                else if (attemptedCustomerFetch)
+                {
+                    Append("Customers export skipped (no customer data).");
+                }
+
+                if (coupons.Count > 0)
+                {
+                    var path = Path.Combine(storeOutputFolder, $"{storeId}_{timestamp}_coupons.json");
+                    var json = JsonSerializer.Serialize(coupons, _artifactWriteOptions);
+                    await File.WriteAllTextAsync(path, json, Encoding.UTF8);
+                    Append($"Wrote {path}");
+                }
+                else if (attemptedCouponFetch)
+                {
+                    Append("Coupons export skipped (no coupon data).");
+                }
+
+                if (orders.Count > 0)
+                {
+                    var path = Path.Combine(storeOutputFolder, $"{storeId}_{timestamp}_orders.json");
+                    var json = JsonSerializer.Serialize(orders, _artifactWriteOptions);
+                    await File.WriteAllTextAsync(path, json, Encoding.UTF8);
+                    Append($"Wrote {path}");
+                }
+                else if (attemptedOrderFetch)
+                {
+                    Append("Orders export skipped (no order data).");
+                }
+
+                if (subscriptions.Count > 0)
+                {
+                    var path = Path.Combine(storeOutputFolder, $"{storeId}_{timestamp}_subscriptions.json");
+                    var json = JsonSerializer.Serialize(subscriptions, _artifactWriteOptions);
+                    await File.WriteAllTextAsync(path, json, Encoding.UTF8);
+                    Append($"Wrote {path}");
+                }
+                else if (attemptedSubscriptionFetch)
+                {
+                    Append("Subscriptions export skipped (no subscription data).");
+                }
+            }
+
             SetProvisioningContext(prods, variations, configuration, pluginBundles, themeBundles, customers, coupons, orders, subscriptions, siteContent, categoryTerms);
 
             Append("All done.");
@@ -2078,53 +2129,3 @@ public enum PlatformMode
     WooCommerce,
     Shopify
 }
-            if (SelectedPlatform == PlatformMode.WooCommerce)
-            {
-                if (customers.Count > 0)
-                {
-                    var path = Path.Combine(storeOutputFolder, $"{storeId}_{timestamp}_customers.json");
-                    var json = JsonSerializer.Serialize(customers, _artifactWriteOptions);
-                    await File.WriteAllTextAsync(path, json, Encoding.UTF8);
-                    Append($"Wrote {path}");
-                }
-                else if (attemptedCustomerFetch)
-                {
-                    Append("Customers export skipped (no customer data).");
-                }
-
-                if (coupons.Count > 0)
-                {
-                    var path = Path.Combine(storeOutputFolder, $"{storeId}_{timestamp}_coupons.json");
-                    var json = JsonSerializer.Serialize(coupons, _artifactWriteOptions);
-                    await File.WriteAllTextAsync(path, json, Encoding.UTF8);
-                    Append($"Wrote {path}");
-                }
-                else if (attemptedCouponFetch)
-                {
-                    Append("Coupons export skipped (no coupon data).");
-                }
-
-                if (orders.Count > 0)
-                {
-                    var path = Path.Combine(storeOutputFolder, $"{storeId}_{timestamp}_orders.json");
-                    var json = JsonSerializer.Serialize(orders, _artifactWriteOptions);
-                    await File.WriteAllTextAsync(path, json, Encoding.UTF8);
-                    Append($"Wrote {path}");
-                }
-                else if (attemptedOrderFetch)
-                {
-                    Append("Orders export skipped (no order data).");
-                }
-
-                if (subscriptions.Count > 0)
-                {
-                    var path = Path.Combine(storeOutputFolder, $"{storeId}_{timestamp}_subscriptions.json");
-                    var json = JsonSerializer.Serialize(subscriptions, _artifactWriteOptions);
-                    await File.WriteAllTextAsync(path, json, Encoding.UTF8);
-                    Append($"Wrote {path}");
-                }
-                else if (attemptedSubscriptionFetch)
-                {
-                    Append("Subscriptions export skipped (no subscription data).");
-                }
-            }
