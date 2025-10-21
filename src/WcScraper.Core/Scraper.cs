@@ -939,8 +939,7 @@ public sealed class WooScraper : IDisposable
 
             var locationsUrl = $"{baseUrl}/wp-json/wc/v3/shipping/zones/{zone.Id}/locations";
             var locations = await FetchAuthenticatedListAsync<ShippingZoneLocation>(locationsUrl, $"shipping zone {zone.Id} locations", username, applicationPassword, log);
-            zone.Locations.Clear();
-            zone.Locations.AddRange(locations);
+            zone.Locations = locations;
 
             var methodsUrl = $"{baseUrl}/wp-json/wc/v3/shipping/zones/{zone.Id}/methods";
             var methods = await FetchAuthenticatedListAsync<ShippingZoneMethodSetting>(methodsUrl, $"shipping zone {zone.Id} methods", username, applicationPassword, log);
