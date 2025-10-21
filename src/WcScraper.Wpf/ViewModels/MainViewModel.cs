@@ -1268,7 +1268,10 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 await File.WriteAllBytesAsync(absolutePath, bytes);
                 relativePaths.Add(relativePath);
                 absolutePaths.Add(absolutePath);
-                mediaMap?[src] = new MediaReference(relativePath, absolutePath);
+                if (mediaMap is not null)
+                {
+                    mediaMap[src] = new MediaReference(relativePath, absolutePath);
+                }
                 index++;
             }
             catch (Exception ex)
