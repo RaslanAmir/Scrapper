@@ -1372,6 +1372,7 @@ public sealed class WooScraper : IDisposable
                         Permalink = link,
                         Sku = "",
                         Type = "simple",
+                        Status = it.GetPropertyOrDefault("status")?.GetString()?.Trim(),
                         Description = content,
                         ShortDescription = excerpt,
                         Prices = null,

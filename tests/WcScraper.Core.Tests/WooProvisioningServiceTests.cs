@@ -17,6 +17,60 @@ namespace WcScraper.Core.Tests;
 public class WooProvisioningServiceTests
 {
     [Fact]
+    public async Task ProvisionAsync_DraftProduct_PreservesDraftStatus()
+    {
+        var handler = new RecordingHandler();
+        using var httpClient = new HttpClient(handler);
+        var service = new WooProvisioningService(httpClient);
+        var settings = new WooProvisioningSettings("https://target.example", "ck", "cs");
+
+        var product = new StoreProduct
+        {
+            Id = 501,
+            Name = "Draft Product",
+            Slug = "draft-product",
+            Sku = "DRAFT-PROD",
+            Status = "draft"
+        };
+
+        await service.ProvisionAsync(settings, new[] { product });
+
+        var productCall = handler.Calls.Single(
+            call => call.Method == HttpMethod.Post && call.Path == "/wp-json/wc/v3/products");
+
+        Assert.False(string.IsNullOrWhiteSpace(productCall.Content));
+        using var doc = JsonDocument.Parse(productCall.Content!);
+        Assert.Equal("draft", doc.RootElement.GetProperty("status").GetString());
+    }
+
+    [Fact]
+    public async Task ProvisionAsync_PublishedProduct_PublishesByDefault()
+    {
+        var handler = new RecordingHandler();
+        using var httpClient = new HttpClient(handler);
+        var service = new WooProvisioningService(httpClient);
+        var settings = new WooProvisioningSettings("https://target.example", "ck", "cs");
+
+        var product = new StoreProduct
+        {
+            Id = 502,
+            Name = "Published Product",
+            Slug = "published-product",
+            Sku = "PUBLISH-PROD",
+            Status = "publish"
+        };
+
+        await service.ProvisionAsync(settings, new[] { product });
+
+        var productCall = handler.Calls.Single(
+            call => call.Method == HttpMethod.Post && call.Path == "/wp-json/wc/v3/products");
+
+        Assert.False(string.IsNullOrWhiteSpace(productCall.Content));
+        using var doc = JsonDocument.Parse(productCall.Content!);
+        Assert.Equal("publish", doc.RootElement.GetProperty("status").GetString());
+    }
+
+    [Fact]
     public async Task ProvisionAsync_VariableProduct_CreatesVariations()
     {
         var handler = new RecordingHandler();
@@ -1419,7 +1473,27 @@ public class WooProvisioningServiceTests
                 return Task.FromResult(JsonResponse("[]"));
             }
 
+            if (request.Method == HttpMethod.Get && path == "/wp-json/wc/v3/products" && query.Contains("sku=DRAFT-PROD", StringComparison.Ordinal))
+            {
+                return Task.FromResult(JsonResponse("[]"));
+            }
+
+            if (request.Method == HttpMethod.Get && path == "/wp-json/wc/v3/products" && query.Contains("sku=PUBLISH-PROD", StringComparison.Ordinal))
+            {
+                return Task.FromResult(JsonResponse("[]"));
+            }
+
             if (request.Method == HttpMethod.Get && path == "/wp-json/wc/v3/products" && query.Contains("slug=parent-product", StringComparison.Ordinal))
+            {
+                return Task.FromResult(JsonResponse("[]"));
+            }
+
+            if (request.Method == HttpMethod.Get && path == "/wp-json/wc/v3/products" && query.Contains("slug=draft-product", StringComparison.Ordinal))
+            {
+                return Task.FromResult(JsonResponse("[]"));
+            }
+
+            if (request.Method == HttpMethod.Get && path == "/wp-json/wc/v3/products" && query.Contains("slug=published-product", StringComparison.Ordinal))
             {
                 return Task.FromResult(JsonResponse("[]"));
             }
