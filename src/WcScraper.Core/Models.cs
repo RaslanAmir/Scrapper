@@ -1,3 +1,4 @@
+using System.Collections.ObjectModel;
 using System.IO;
 using System.Net;
 using System.Text.Json;
@@ -259,20 +260,25 @@ public sealed class WooStoreSetting
 
 public sealed class ShippingZoneSetting
 {
-    private List<ShippingZoneLocation>? _locations;
+    private TrackingCollection? _locations;
 
     [JsonPropertyName("id")] public int Id { get; set; }
     [JsonPropertyName("name")] public string? Name { get; set; }
     [JsonPropertyName("order")] public int Order { get; set; }
 
     [JsonPropertyName("locations")]
-    public List<ShippingZoneLocation> Locations
+    public IList<ShippingZoneLocation> Locations
     {
-        get => _locations ??= new();
+        get => EnsureLocationsCollection();
         set
         {
             LocationsSpecified = true;
-            _locations = value ?? new List<ShippingZoneLocation>();
+            _locations = value switch
+            {
+                TrackingCollection tracking when tracking.Owner == this => tracking,
+                null => new TrackingCollection(this),
+                _ => new TrackingCollection(this, value)
+            };
         }
     }
 
@@ -280,6 +286,67 @@ public sealed class ShippingZoneSetting
     public bool LocationsSpecified { get; private set; }
 
     [JsonPropertyName("methods")] public List<ShippingZoneMethodSetting> Methods { get; set; } = new();
+
+    private TrackingCollection EnsureLocationsCollection()
+    {
+        return _locations ??= new TrackingCollection(this);
+    }
+
+    private sealed class TrackingCollection : Collection<ShippingZoneLocation>
+    {
+        private readonly ShippingZoneSetting _owner;
+
+        public TrackingCollection(ShippingZoneSetting owner)
+            : base(new List<ShippingZoneLocation>())
+        {
+            _owner = owner;
+        }
+
+        public TrackingCollection(ShippingZoneSetting owner, IEnumerable<ShippingZoneLocation> items)
+            : base(new List<ShippingZoneLocation>(items ?? System.Array.Empty<ShippingZoneLocation>()))
+        {
+            _owner = owner;
+            if (Count > 0)
+            {
+                MarkSpecified();
+            }
+        }
+
+        public ShippingZoneSetting Owner => _owner;
+
+        protected override void InsertItem(int index, ShippingZoneLocation item)
+        {
+            base.InsertItem(index, item);
+            MarkSpecified();
+        }
+
+        protected override void SetItem(int index, ShippingZoneLocation item)
+        {
+            base.SetItem(index, item);
+            MarkSpecified();
+        }
+
+        protected override void RemoveItem(int index)
+        {
+            base.RemoveItem(index);
+            MarkSpecified();
+        }
+
+        protected override void ClearItems()
+        {
+            var hadItems = Count > 0;
+            base.ClearItems();
+            if (hadItems)
+            {
+                MarkSpecified();
+            }
+        }
+
+        private void MarkSpecified()
+        {
+            _owner.LocationsSpecified = true;
+        }
+    }
 }
 
 public sealed class ShippingZoneLocation
