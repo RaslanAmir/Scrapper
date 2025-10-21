@@ -1352,7 +1352,7 @@ public sealed class WooProvisioningService : IDisposable
             payload["featured_media"] = mappedFromUrl;
         }
 
-        var existing = await FindExistingContentAsync(baseUrl, settings, resource, slug, progress, cancellationToken);
+        var existing = await FindExistingContentAsync<T>(baseUrl, settings, resource, slug, progress, cancellationToken);
         var url = existing is not null
             ? $"{baseUrl}/wp-json/wp/v2/{resource}/{existing.Id}"
             : $"{baseUrl}/wp-json/wp/v2/{resource}";
