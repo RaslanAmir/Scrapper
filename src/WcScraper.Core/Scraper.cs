@@ -245,18 +245,45 @@ public sealed class WooScraper : IDisposable
         return all;
     }
 
-    public async Task<List<PublicExtensionFootprint>> FetchPublicExtensionFootprintsAsync(
+    private static readonly IReadOnlyList<string> DefaultPublicExtensionEntryPaths = new[]
+    {
+        "/shop/",
+        "/product/sample/",
+        "/cart/",
+        "/checkout/",
+        "/my-account/"
+    };
+
+    public Task<List<PublicExtensionFootprint>> FetchPublicExtensionFootprintsAsync(
         string baseUrl,
         bool includeLinkedAssets = true,
         IProgress<string>? log = null)
+        => FetchPublicExtensionFootprintsAsync(baseUrl, includeLinkedAssets, log, additionalEntryUrls: null);
+
+    public async Task<List<PublicExtensionFootprint>> FetchPublicExtensionFootprintsAsync(
+        string baseUrl,
+        bool includeLinkedAssets,
+        IProgress<string>? log,
+        IEnumerable<string>? additionalEntryUrls)
     {
         baseUrl = CleanBaseUrl(baseUrl);
+
+        var entryCandidates = DefaultPublicExtensionEntryPaths.AsEnumerable();
+        if (additionalEntryUrls is not null)
+        {
+            entryCandidates = entryCandidates.Concat(additionalEntryUrls);
+        }
+
+        var entryList = entryCandidates
+            .Where(url => !string.IsNullOrWhiteSpace(url))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
 
         try
         {
             using var detector = new PublicExtensionDetector(_http);
             var findings = await detector
-                .DetectAsync(baseUrl, includeLinkedAssets, log)
+                .DetectAsync(baseUrl, includeLinkedAssets, log, entryList)
                 .ConfigureAwait(false);
 
             return findings

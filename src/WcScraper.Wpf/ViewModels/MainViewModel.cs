@@ -45,6 +45,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private bool _expThemesCsv = false;
     private bool _expThemesJsonl = false;
     private bool _expPublicExtensionFootprints = false;
+    private string _additionalPublicExtensionPages = string.Empty;
     private bool _expPublicDesignSnapshot = false;
     private bool _expStoreConfiguration = false;
     private bool _importStoreConfiguration = false;
@@ -108,6 +109,20 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public bool ExportThemesCsv { get => _expThemesCsv; set { _expThemesCsv = value; OnPropertyChanged(); } }
     public bool ExportThemesJsonl { get => _expThemesJsonl; set { _expThemesJsonl = value; OnPropertyChanged(); } }
     public bool ExportPublicExtensionFootprints { get => _expPublicExtensionFootprints; set { _expPublicExtensionFootprints = value; OnPropertyChanged(); } }
+    public string AdditionalPublicExtensionPages
+    {
+        get => _additionalPublicExtensionPages;
+        set
+        {
+            if (_additionalPublicExtensionPages == value)
+            {
+                return;
+            }
+
+            _additionalPublicExtensionPages = value ?? string.Empty;
+            OnPropertyChanged();
+        }
+    }
     public bool ExportPublicDesignSnapshot { get => _expPublicDesignSnapshot; set { _expPublicDesignSnapshot = value; OnPropertyChanged(); } }
     public bool ExportStoreConfiguration { get => _expStoreConfiguration; set { _expStoreConfiguration = value; OnPropertyChanged(); } }
     public bool IsRunning
@@ -199,6 +214,24 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public bool CanExportExtensions => HasWordPressCredentials;
 
     public bool CanExportPublicExtensionFootprints => !CanExportExtensions;
+
+    private IReadOnlyList<string> GetAdditionalPublicExtensionEntryUrls()
+    {
+        if (string.IsNullOrWhiteSpace(AdditionalPublicExtensionPages))
+        {
+            return Array.Empty<string>();
+        }
+
+        var separators = new[] { '\r', '\n', ',', ';' };
+        var tokens = AdditionalPublicExtensionPages
+            .Split(separators, StringSplitOptions.RemoveEmptyEntries)
+            .Select(token => token.Trim())
+            .Where(token => !string.IsNullOrWhiteSpace(token))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        return tokens;
+    }
     public bool CanExportPublicDesignSnapshot => !HasWordPressCredentials;
 
     public bool CanExportStoreConfiguration => HasWordPressCredentials;
@@ -546,7 +579,17 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 {
                     attemptedPublicExtensionFootprintFetch = true;
                     Append("Detecting public plugin/theme slugs (slug-only export; manual install required)…");
-                    publicExtensionFootprints = await _wooScraper.FetchPublicExtensionFootprintsAsync(targetUrl, includeLinkedAssets: true, log: logger);
+                    var additionalEntryUrls = GetAdditionalPublicExtensionEntryUrls();
+                    if (additionalEntryUrls.Count > 0)
+                    {
+                        Append($"Including {additionalEntryUrls.Count} additional page(s) for public asset detection.");
+                    }
+
+                    publicExtensionFootprints = await _wooScraper.FetchPublicExtensionFootprintsAsync(
+                        targetUrl,
+                        includeLinkedAssets: true,
+                        log: logger,
+                        additionalEntryUrls: additionalEntryUrls);
                     if (publicExtensionFootprints.Count > 0)
                     {
                         Append($"Detected {publicExtensionFootprints.Count} plugin/theme slug(s) from public assets (manual install required).");

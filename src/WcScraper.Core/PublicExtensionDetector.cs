@@ -66,6 +66,7 @@ public sealed class PublicExtensionDetector : IDisposable
         string baseUrl,
         bool followLinkedAssets = true,
         IProgress<string>? log = null,
+        IEnumerable<string>? extraEntryUrls = null,
         CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(baseUrl))
@@ -81,7 +82,37 @@ public sealed class PublicExtensionDetector : IDisposable
 
         var seenUrls = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var urlsToProcess = new Queue<string>();
+        var entryUrls = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            baseUri.ToString()
+        };
+
         urlsToProcess.Enqueue(baseUri.ToString());
+
+        if (extraEntryUrls is not null)
+        {
+            foreach (var entry in extraEntryUrls)
+            {
+                if (string.IsNullOrWhiteSpace(entry))
+                {
+                    continue;
+                }
+
+                if (!Uri.TryCreate(entry, UriKind.Absolute, out var entryUri) &&
+                    !Uri.TryCreate(baseUri, entry, out entryUri))
+                {
+                    continue;
+                }
+
+                var entryUrl = entryUri.ToString();
+                if (!entryUrls.Add(entryUrl))
+                {
+                    continue;
+                }
+
+                urlsToProcess.Enqueue(entryUrl);
+            }
+        }
 
         var findings = new Dictionary<(string Type, string Slug), PublicExtensionFootprint>();
 
@@ -103,7 +134,7 @@ public sealed class PublicExtensionDetector : IDisposable
 
             ScanForExtensions(currentUrl, content, findings);
 
-            if (!followLinkedAssets || !string.Equals(currentUrl, baseUri.ToString(), StringComparison.OrdinalIgnoreCase))
+            if (!followLinkedAssets || !entryUrls.Contains(currentUrl))
             {
                 continue;
             }
