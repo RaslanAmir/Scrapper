@@ -54,6 +54,7 @@ public static class FrontEndDesignSnapshot
     public static async Task<FrontEndDesignSnapshotResult> CaptureAsync(
         HttpClient httpClient,
         string baseUrl,
+        IEnumerable<string>? additionalPageUrls = null,
         IProgress<string>? log = null,
         CancellationToken cancellationToken = default)
     {
@@ -62,134 +63,52 @@ public static class FrontEndDesignSnapshot
 
         baseUrl = WooScraper.CleanBaseUrl(baseUrl);
         var homeUrl = baseUrl + "/";
-        log?.Report($"GET {homeUrl}");
 
-        using var response = await httpClient.GetAsync(homeUrl, cancellationToken);
-        response.EnsureSuccessStatusCode();
+        var pageUrls = BuildPageUrlList(homeUrl, additionalPageUrls);
+        var processedUrls = new List<string>(pageUrls.Count);
+        var pageBuilders = new List<DesignPageSnapshotBuilder>(pageUrls.Count);
+        var aggregatedHtml = new StringBuilder();
+        var aggregatedCssSources = new List<string>();
 
-        var html = await response.Content.ReadAsStringAsync(cancellationToken);
-        if (string.IsNullOrWhiteSpace(html))
-        {
-            return new FrontEndDesignSnapshotResult(
-                homeUrl,
-                string.Empty,
-                string.Empty,
-                Array.Empty<string>(),
-                Array.Empty<StylesheetSnapshot>(),
-                Array.Empty<FontAssetSnapshot>(),
-                Array.Empty<DesignImageSnapshot>(),
-                Array.Empty<ColorSwatch>());
-        }
+        var stylesheetLookup = new Dictionary<string, StylesheetSnapshot>(StringComparer.OrdinalIgnoreCase);
+        var aggregatedStylesheets = new List<StylesheetSnapshot>();
 
-        var inlineStyles = ExtractInlineStyles(html);
-        var inlineCss = string.Join(Environment.NewLine + Environment.NewLine, inlineStyles);
-        var cssSources = new List<string>();
-        cssSources.AddRange(inlineStyles);
-        var baseUri = TryCreateUri(homeUrl);
         var fontCandidates = new Dictionary<string, FontAssetRequest>(StringComparer.OrdinalIgnoreCase);
-        var stylesheetSnapshots = new List<StylesheetSnapshot>();
-        var fontSnapshots = new List<FontAssetSnapshot>();
+        var fontCandidateOrder = new List<string>();
         var imageCandidates = new Dictionary<string, ImageAssetRequest>(StringComparer.OrdinalIgnoreCase);
-        var imageSnapshots = new List<DesignImageSnapshot>();
+        var imageCandidateOrder = new List<string>();
 
-        foreach (var block in inlineStyles)
+        foreach (var pageUrl in pageUrls)
         {
-            foreach (var candidate in ExtractFontUrlCandidates(block, baseUri))
+            var builder = await CapturePageAsync(
+                httpClient,
+                pageUrl,
+                aggregatedStylesheets,
+                stylesheetLookup,
+                fontCandidates,
+                fontCandidateOrder,
+                imageCandidates,
+                imageCandidateOrder,
+                aggregatedCssSources,
+                log,
+                cancellationToken);
+
+            pageBuilders.Add(builder);
+            processedUrls.Add(pageUrl);
+
+            if (aggregatedHtml.Length > 0)
             {
-                AddFontCandidate(fontCandidates, candidate, homeUrl);
+                aggregatedHtml.AppendLine().AppendLine();
             }
 
-            foreach (var candidate in ExtractImageUrlCandidates(block, baseUri, fontCandidates))
-            {
-                AddImageCandidate(imageCandidates, candidate, homeUrl);
-            }
+            aggregatedHtml.Append("<!-- Snapshot: ")
+                .Append(pageUrl)
+                .AppendLine(" -->");
+            aggregatedHtml.Append(builder.RawHtml);
         }
 
-        var stylesheetHrefs = ExtractStylesheetHrefs(html);
-        if (baseUri is not null && stylesheetHrefs.Count > 0)
-        {
-            var seenStylesheets = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            var stylesheetQueue = new Queue<StylesheetRequest>();
-
-            foreach (var href in stylesheetHrefs)
-            {
-                var resolved = ResolveAssetUrl(href, baseUri);
-                if (string.IsNullOrWhiteSpace(resolved))
-                {
-                    continue;
-                }
-
-                if (!seenStylesheets.Add(resolved))
-                {
-                    continue;
-                }
-
-                stylesheetQueue.Enqueue(new StylesheetRequest(href, resolved, homeUrl));
-            }
-
-            while (stylesheetQueue.Count > 0)
-            {
-                var request = stylesheetQueue.Dequeue();
-
-                try
-                {
-                    log?.Report($"GET {request.ResolvedUrl}");
-                    using var cssResponse = await httpClient.GetAsync(request.ResolvedUrl, cancellationToken);
-                    if (!cssResponse.IsSuccessStatusCode)
-                    {
-                        log?.Report($"Stylesheet request failed for {request.ResolvedUrl}: {(int)cssResponse.StatusCode} {cssResponse.ReasonPhrase}");
-                        continue;
-                    }
-
-                    var cssBytes = await cssResponse.Content.ReadAsByteArrayAsync(cancellationToken);
-                    var cssText = DecodeText(cssBytes, cssResponse.Content.Headers.ContentType?.CharSet);
-                    var contentType = cssResponse.Content.Headers.ContentType?.MediaType;
-
-                    var snapshot = new StylesheetSnapshot(request.SourceUrl, request.ResolvedUrl, request.ReferencedFrom, cssBytes, cssText, contentType);
-                    stylesheetSnapshots.Add(snapshot);
-
-                    if (!string.IsNullOrWhiteSpace(cssText))
-                    {
-                        cssSources.Add(cssText);
-                    }
-
-                    var stylesheetUri = TryCreateUri(request.ResolvedUrl) ?? baseUri;
-                    foreach (var importCandidate in ExtractCssImportUrls(cssText))
-                    {
-                        var resolvedImport = ResolveAssetUrl(importCandidate, stylesheetUri);
-                        if (string.IsNullOrWhiteSpace(resolvedImport))
-                        {
-                            continue;
-                        }
-
-                        if (!seenStylesheets.Add(resolvedImport))
-                        {
-                            continue;
-                        }
-
-                        stylesheetQueue.Enqueue(new StylesheetRequest(importCandidate, resolvedImport, request.ResolvedUrl));
-                    }
-
-                    foreach (var candidate in ExtractFontUrlCandidates(cssText, stylesheetUri))
-                    {
-                        AddFontCandidate(fontCandidates, candidate, request.ResolvedUrl);
-                    }
-
-                    foreach (var candidate in ExtractImageUrlCandidates(cssText, stylesheetUri, fontCandidates))
-                    {
-                        AddImageCandidate(imageCandidates, candidate, request.ResolvedUrl);
-                    }
-                }
-                catch (TaskCanceledException ex)
-                {
-                    log?.Report($"Stylesheet request canceled for {request.ResolvedUrl}: {ex.Message}");
-                }
-                catch (HttpRequestException ex)
-                {
-                    log?.Report($"Stylesheet request failed for {request.ResolvedUrl}: {ex.Message}");
-                }
-            }
-        }
+        var fontSnapshotsMap = new Dictionary<string, FontAssetSnapshot>(StringComparer.OrdinalIgnoreCase);
+        var fontSnapshots = new List<FontAssetSnapshot>();
 
         foreach (var request in fontCandidates.Values)
         {
@@ -206,6 +125,7 @@ public static class FrontEndDesignSnapshot
                 var fontBytes = await fontResponse.Content.ReadAsByteArrayAsync(cancellationToken);
                 var contentType = fontResponse.Content.Headers.ContentType?.MediaType;
                 var fontSnapshot = new FontAssetSnapshot(request.RawUrl, request.ResolvedUrl, request.ReferencedFrom, fontBytes, contentType);
+                fontSnapshotsMap[request.ResolvedUrl] = fontSnapshot;
                 fontSnapshots.Add(fontSnapshot);
             }
             catch (TaskCanceledException ex)
@@ -217,6 +137,9 @@ public static class FrontEndDesignSnapshot
                 log?.Report($"Font request failed for {request.ResolvedUrl}: {ex.Message}");
             }
         }
+
+        var imageSnapshotsMap = new Dictionary<string, DesignImageSnapshot>(StringComparer.OrdinalIgnoreCase);
+        var imageSnapshots = new List<DesignImageSnapshot>();
 
         foreach (var request in imageCandidates.Values)
         {
@@ -233,6 +156,7 @@ public static class FrontEndDesignSnapshot
                 var imageBytes = await imageResponse.Content.ReadAsByteArrayAsync(cancellationToken);
                 var contentType = imageResponse.Content.Headers.ContentType?.MediaType;
                 var imageSnapshot = new DesignImageSnapshot(request.RawUrl, request.ResolvedUrl, request.ReferencedFrom, imageBytes, contentType);
+                imageSnapshotsMap[request.ResolvedUrl] = imageSnapshot;
                 imageSnapshots.Add(imageSnapshot);
             }
             catch (TaskCanceledException ex)
@@ -245,23 +169,304 @@ public static class FrontEndDesignSnapshot
             }
         }
 
-        var fontUrls = fontCandidates.Keys.ToList();
+        var aggregatedInlineCss = string.Join(
+            Environment.NewLine + Environment.NewLine,
+            pageBuilders
+                .Select(p => p.InlineCss)
+                .Where(s => !string.IsNullOrWhiteSpace(s)));
 
         var aggregatedCss = string.Join(
             Environment.NewLine + Environment.NewLine,
-            cssSources.Where(s => !string.IsNullOrWhiteSpace(s)));
+            aggregatedCssSources.Where(s => !string.IsNullOrWhiteSpace(s)));
 
         var colorSwatches = ExtractColorSwatches(aggregatedCss);
 
+        var pages = pageBuilders
+            .Select(builder => builder.Build(fontSnapshotsMap, imageSnapshotsMap))
+            .ToList();
+
         return new FrontEndDesignSnapshotResult(
             homeUrl,
-            html,
-            inlineCss,
-            fontUrls,
-            stylesheetSnapshots,
+            aggregatedHtml.ToString(),
+            aggregatedInlineCss,
+            fontCandidateOrder,
+            aggregatedStylesheets,
             fontSnapshots,
             imageSnapshots,
-            colorSwatches);
+            colorSwatches,
+            pages,
+            processedUrls);
+    }
+
+    private static List<string> BuildPageUrlList(string homeUrl, IEnumerable<string>? additionalPageUrls)
+    {
+        var urls = new List<string>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        urls.Add(homeUrl);
+        seen.Add(homeUrl);
+
+        if (additionalPageUrls is null)
+        {
+            return urls;
+        }
+
+        var baseUri = TryCreateUri(homeUrl);
+
+        foreach (var candidate in additionalPageUrls)
+        {
+            if (string.IsNullOrWhiteSpace(candidate))
+            {
+                continue;
+            }
+
+            var resolved = ResolveAssetUrl(candidate.Trim(), baseUri);
+            if (string.IsNullOrWhiteSpace(resolved))
+            {
+                continue;
+            }
+
+            if (!seen.Add(resolved))
+            {
+                continue;
+            }
+
+            urls.Add(resolved);
+        }
+
+        return urls;
+    }
+
+    private static async Task<DesignPageSnapshotBuilder> CapturePageAsync(
+        HttpClient httpClient,
+        string pageUrl,
+        List<StylesheetSnapshot> aggregatedStylesheets,
+        Dictionary<string, StylesheetSnapshot> stylesheetLookup,
+        Dictionary<string, FontAssetRequest> fontCandidates,
+        List<string> fontCandidateOrder,
+        Dictionary<string, ImageAssetRequest> imageCandidates,
+        List<string> imageCandidateOrder,
+        List<string> aggregatedCssSources,
+        IProgress<string>? log,
+        CancellationToken cancellationToken)
+    {
+        var builder = new DesignPageSnapshotBuilder(pageUrl);
+
+        log?.Report($"GET {pageUrl}");
+        using var response = await httpClient.GetAsync(pageUrl, cancellationToken);
+        response.EnsureSuccessStatusCode();
+
+        var html = await response.Content.ReadAsStringAsync(cancellationToken) ?? string.Empty;
+        builder.RawHtml = html;
+
+        if (string.IsNullOrWhiteSpace(html))
+        {
+            return builder;
+        }
+
+        var pageUri = TryCreateUri(pageUrl);
+        var inlineStyles = ExtractInlineStyles(html);
+        builder.InlineCss = string.Join(Environment.NewLine + Environment.NewLine, inlineStyles);
+
+        foreach (var block in inlineStyles)
+        {
+            builder.AddCssSource(block);
+            if (!string.IsNullOrWhiteSpace(block))
+            {
+                aggregatedCssSources.Add(block);
+            }
+
+            foreach (var candidate in ExtractFontUrlCandidates(block, pageUri))
+            {
+                if (AddFontCandidate(fontCandidates, candidate, pageUrl))
+                {
+                    fontCandidateOrder.Add(candidate.ResolvedUrl);
+                }
+
+                builder.AddFontUrl(candidate.ResolvedUrl);
+            }
+
+            foreach (var candidate in ExtractImageUrlCandidates(block, pageUri, fontCandidates))
+            {
+                if (AddImageCandidate(imageCandidates, candidate, pageUrl))
+                {
+                    imageCandidateOrder.Add(candidate.ResolvedUrl);
+                }
+
+                builder.AddImageUrl(candidate.ResolvedUrl);
+            }
+        }
+
+        var stylesheetHrefs = ExtractStylesheetHrefs(html);
+        if (stylesheetHrefs.Count == 0)
+        {
+            return builder;
+        }
+
+        var seenForQueue = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var stylesheetQueue = new Queue<StylesheetRequest>();
+
+        foreach (var href in stylesheetHrefs)
+        {
+            var resolved = ResolveAssetUrl(href, pageUri);
+            if (string.IsNullOrWhiteSpace(resolved))
+            {
+                continue;
+            }
+
+            if (!seenForQueue.Add(resolved))
+            {
+                continue;
+            }
+
+            stylesheetQueue.Enqueue(new StylesheetRequest(href, resolved, pageUrl));
+        }
+
+        while (stylesheetQueue.Count > 0)
+        {
+            var request = stylesheetQueue.Dequeue();
+
+            if (stylesheetLookup.TryGetValue(request.ResolvedUrl, out var knownSnapshot))
+            {
+                builder.AddStylesheet(knownSnapshot);
+                var knownUri = TryCreateUri(knownSnapshot.ResolvedUrl) ?? pageUri;
+                ProcessStylesheetContent(
+                    knownSnapshot.TextContent,
+                    knownUri,
+                    request.ResolvedUrl,
+                    builder,
+                    fontCandidates,
+                    fontCandidateOrder,
+                    imageCandidates,
+                    imageCandidateOrder);
+                EnqueueStylesheetImports(
+                    knownSnapshot.TextContent,
+                    knownUri,
+                    request.ResolvedUrl,
+                    stylesheetQueue,
+                    seenForQueue);
+                continue;
+            }
+
+            try
+            {
+                log?.Report($"GET {request.ResolvedUrl}");
+                using var cssResponse = await httpClient.GetAsync(request.ResolvedUrl, cancellationToken);
+                if (!cssResponse.IsSuccessStatusCode)
+                {
+                    log?.Report($"Stylesheet request failed for {request.ResolvedUrl}: {(int)cssResponse.StatusCode} {cssResponse.ReasonPhrase}");
+                    continue;
+                }
+
+                var cssBytes = await cssResponse.Content.ReadAsByteArrayAsync(cancellationToken);
+                var cssText = DecodeText(cssBytes, cssResponse.Content.Headers.ContentType?.CharSet);
+                var contentType = cssResponse.Content.Headers.ContentType?.MediaType;
+
+                var snapshot = new StylesheetSnapshot(request.SourceUrl, request.ResolvedUrl, request.ReferencedFrom, cssBytes, cssText, contentType);
+                aggregatedStylesheets.Add(snapshot);
+                stylesheetLookup[request.ResolvedUrl] = snapshot;
+                builder.AddStylesheet(snapshot);
+
+                if (!string.IsNullOrWhiteSpace(cssText))
+                {
+                    aggregatedCssSources.Add(cssText);
+                }
+
+                var stylesheetUri = TryCreateUri(request.ResolvedUrl) ?? pageUri;
+                ProcessStylesheetContent(
+                    cssText,
+                    stylesheetUri,
+                    request.ResolvedUrl,
+                    builder,
+                    fontCandidates,
+                    fontCandidateOrder,
+                    imageCandidates,
+                    imageCandidateOrder);
+                EnqueueStylesheetImports(
+                    cssText,
+                    stylesheetUri,
+                    request.ResolvedUrl,
+                    stylesheetQueue,
+                    seenForQueue);
+            }
+            catch (TaskCanceledException ex)
+            {
+                log?.Report($"Stylesheet request canceled for {request.ResolvedUrl}: {ex.Message}");
+            }
+            catch (HttpRequestException ex)
+            {
+                log?.Report($"Stylesheet request failed for {request.ResolvedUrl}: {ex.Message}");
+            }
+        }
+
+        return builder;
+    }
+
+    private static void ProcessStylesheetContent(
+        string cssText,
+        Uri? stylesheetUri,
+        string referencedFrom,
+        DesignPageSnapshotBuilder builder,
+        Dictionary<string, FontAssetRequest> fontCandidates,
+        List<string> fontCandidateOrder,
+        Dictionary<string, ImageAssetRequest> imageCandidates,
+        List<string> imageCandidateOrder)
+    {
+        if (string.IsNullOrWhiteSpace(cssText))
+        {
+            return;
+        }
+
+        foreach (var candidate in ExtractFontUrlCandidates(cssText, stylesheetUri))
+        {
+            if (AddFontCandidate(fontCandidates, candidate, referencedFrom))
+            {
+                fontCandidateOrder.Add(candidate.ResolvedUrl);
+            }
+
+            builder.AddFontUrl(candidate.ResolvedUrl);
+        }
+
+        foreach (var candidate in ExtractImageUrlCandidates(cssText, stylesheetUri, fontCandidates))
+        {
+            if (AddImageCandidate(imageCandidates, candidate, referencedFrom))
+            {
+                imageCandidateOrder.Add(candidate.ResolvedUrl);
+            }
+
+            builder.AddImageUrl(candidate.ResolvedUrl);
+        }
+
+        builder.AddCssSource(cssText);
+    }
+
+    private static void EnqueueStylesheetImports(
+        string cssText,
+        Uri? stylesheetUri,
+        string referencedFrom,
+        Queue<StylesheetRequest> queue,
+        HashSet<string> seen)
+    {
+        if (string.IsNullOrWhiteSpace(cssText))
+        {
+            return;
+        }
+
+        foreach (var importCandidate in ExtractCssImportUrls(cssText))
+        {
+            var resolvedImport = ResolveAssetUrl(importCandidate, stylesheetUri);
+            if (string.IsNullOrWhiteSpace(resolvedImport))
+            {
+                continue;
+            }
+
+            if (!seen.Add(resolvedImport))
+            {
+                continue;
+            }
+
+            queue.Enqueue(new StylesheetRequest(importCandidate, resolvedImport, referencedFrom));
+        }
     }
 
     private static IReadOnlyList<string> ExtractInlineStyles(string html)
@@ -393,15 +598,18 @@ public static class FrontEndDesignSnapshot
     private static Uri? TryCreateUri(string value)
         => Uri.TryCreate(value, UriKind.Absolute, out var uri) ? uri : null;
 
-    private static void AddFontCandidate(
+    private static bool AddFontCandidate(
         IDictionary<string, FontAssetRequest> accumulator,
         FontUrlCandidate candidate,
         string referencedFrom)
     {
-        if (!accumulator.ContainsKey(candidate.ResolvedUrl))
+        if (accumulator.ContainsKey(candidate.ResolvedUrl))
         {
-            accumulator[candidate.ResolvedUrl] = new FontAssetRequest(candidate.RawUrl, candidate.ResolvedUrl, referencedFrom);
+            return false;
         }
+
+        accumulator[candidate.ResolvedUrl] = new FontAssetRequest(candidate.RawUrl, candidate.ResolvedUrl, referencedFrom);
+        return true;
     }
 
     private static IEnumerable<ImageUrlCandidate> ExtractImageUrlCandidates(
@@ -455,15 +663,18 @@ public static class FrontEndDesignSnapshot
         }
     }
 
-    private static void AddImageCandidate(
+    private static bool AddImageCandidate(
         IDictionary<string, ImageAssetRequest> accumulator,
         ImageUrlCandidate candidate,
         string referencedFrom)
     {
-        if (!accumulator.ContainsKey(candidate.ResolvedUrl))
+        if (accumulator.ContainsKey(candidate.ResolvedUrl))
         {
-            accumulator[candidate.ResolvedUrl] = new ImageAssetRequest(candidate.RawUrl, candidate.ResolvedUrl, referencedFrom);
+            return false;
         }
+
+        accumulator[candidate.ResolvedUrl] = new ImageAssetRequest(candidate.RawUrl, candidate.ResolvedUrl, referencedFrom);
+        return true;
     }
 
     private static string DecodeText(byte[] contentBytes, string? charset)
@@ -626,6 +837,112 @@ public static class FrontEndDesignSnapshot
         return trimmed.StartsWith("--", StringComparison.Ordinal) ? trimmed : null;
     }
 
+    private sealed class DesignPageSnapshotBuilder
+    {
+        private readonly HashSet<string> _stylesheetUrls = new(StringComparer.OrdinalIgnoreCase);
+        private readonly HashSet<string> _fontUrls = new(StringComparer.OrdinalIgnoreCase);
+        private readonly HashSet<string> _imageUrls = new(StringComparer.OrdinalIgnoreCase);
+        private readonly List<string> _cssSources = new();
+        private readonly List<StylesheetSnapshot> _stylesheets = new();
+        private readonly List<string> _fontUrlList = new();
+        private readonly List<string> _imageUrlList = new();
+
+        public DesignPageSnapshotBuilder(string url)
+        {
+            Url = url ?? string.Empty;
+        }
+
+        public string Url { get; }
+
+        public string RawHtml { get; set; } = string.Empty;
+
+        public string InlineCss { get; set; } = string.Empty;
+
+        public void AddCssSource(string? css)
+        {
+            if (string.IsNullOrWhiteSpace(css))
+            {
+                return;
+            }
+
+            _cssSources.Add(css);
+        }
+
+        public void AddStylesheet(StylesheetSnapshot snapshot)
+        {
+            if (snapshot is null)
+            {
+                return;
+            }
+
+            if (_stylesheetUrls.Add(snapshot.ResolvedUrl))
+            {
+                _stylesheets.Add(snapshot);
+            }
+
+            AddCssSource(snapshot.TextContent);
+        }
+
+        public void AddFontUrl(string? url)
+        {
+            if (string.IsNullOrWhiteSpace(url))
+            {
+                return;
+            }
+
+            if (_fontUrls.Add(url))
+            {
+                _fontUrlList.Add(url);
+            }
+        }
+
+        public void AddImageUrl(string? url)
+        {
+            if (string.IsNullOrWhiteSpace(url))
+            {
+                return;
+            }
+
+            if (_imageUrls.Add(url))
+            {
+                _imageUrlList.Add(url);
+            }
+        }
+
+        public DesignPageSnapshot Build(
+            IReadOnlyDictionary<string, FontAssetSnapshot> fontSnapshots,
+            IReadOnlyDictionary<string, DesignImageSnapshot> imageSnapshots)
+        {
+            var fontFiles = _fontUrlList
+                .Select(url => fontSnapshots.TryGetValue(url, out var snapshot) ? snapshot : null)
+                .Where(snapshot => snapshot is not null)
+                .Cast<FontAssetSnapshot>()
+                .ToList();
+
+            var imageFiles = _imageUrlList
+                .Select(url => imageSnapshots.TryGetValue(url, out var snapshot) ? snapshot : null)
+                .Where(snapshot => snapshot is not null)
+                .Cast<DesignImageSnapshot>()
+                .ToList();
+
+            var cssAggregate = string.Join(
+                Environment.NewLine + Environment.NewLine,
+                _cssSources.Where(s => !string.IsNullOrWhiteSpace(s)));
+
+            var colorSwatches = ExtractColorSwatches(cssAggregate);
+
+            return new DesignPageSnapshot(
+                Url,
+                RawHtml,
+                InlineCss,
+                _fontUrlList,
+                _stylesheets,
+                fontFiles,
+                imageFiles,
+                colorSwatches);
+        }
+    }
+
     private readonly record struct FontUrlCandidate(string RawUrl, string ResolvedUrl);
 
     private readonly record struct ImageUrlCandidate(string RawUrl, string ResolvedUrl);
@@ -647,7 +964,9 @@ public sealed class FrontEndDesignSnapshotResult
         IReadOnlyList<StylesheetSnapshot> stylesheets,
         IReadOnlyList<FontAssetSnapshot> fontFiles,
         IReadOnlyList<DesignImageSnapshot> imageFiles,
-        IReadOnlyList<ColorSwatch> colorSwatches)
+        IReadOnlyList<ColorSwatch> colorSwatches,
+        IReadOnlyList<DesignPageSnapshot>? pages = null,
+        IReadOnlyList<string>? processedUrls = null)
     {
         HomeUrl = homeUrl;
         RawHtml = rawHtml;
@@ -657,9 +976,54 @@ public sealed class FrontEndDesignSnapshotResult
         FontFiles = fontFiles ?? Array.Empty<FontAssetSnapshot>();
         ImageFiles = imageFiles ?? Array.Empty<DesignImageSnapshot>();
         ColorSwatches = colorSwatches ?? Array.Empty<ColorSwatch>();
+        Pages = pages ?? Array.Empty<DesignPageSnapshot>();
+        ProcessedUrls = processedUrls ?? Array.Empty<string>();
     }
 
     public string HomeUrl { get; }
+
+    public string RawHtml { get; }
+
+    public string InlineCss { get; }
+
+    public IReadOnlyList<string> FontUrls { get; }
+
+    public IReadOnlyList<StylesheetSnapshot> Stylesheets { get; }
+
+    public IReadOnlyList<FontAssetSnapshot> FontFiles { get; }
+
+    public IReadOnlyList<DesignImageSnapshot> ImageFiles { get; }
+
+    public IReadOnlyList<ColorSwatch> ColorSwatches { get; }
+
+    public IReadOnlyList<DesignPageSnapshot> Pages { get; }
+
+    public IReadOnlyList<string> ProcessedUrls { get; }
+}
+
+public sealed class DesignPageSnapshot
+{
+    public DesignPageSnapshot(
+        string url,
+        string rawHtml,
+        string inlineCss,
+        IReadOnlyList<string> fontUrls,
+        IReadOnlyList<StylesheetSnapshot> stylesheets,
+        IReadOnlyList<FontAssetSnapshot> fontFiles,
+        IReadOnlyList<DesignImageSnapshot> imageFiles,
+        IReadOnlyList<ColorSwatch> colorSwatches)
+    {
+        Url = url ?? string.Empty;
+        RawHtml = rawHtml ?? string.Empty;
+        InlineCss = inlineCss ?? string.Empty;
+        FontUrls = fontUrls ?? Array.Empty<string>();
+        Stylesheets = stylesheets ?? Array.Empty<StylesheetSnapshot>();
+        FontFiles = fontFiles ?? Array.Empty<FontAssetSnapshot>();
+        ImageFiles = imageFiles ?? Array.Empty<DesignImageSnapshot>();
+        ColorSwatches = colorSwatches ?? Array.Empty<ColorSwatch>();
+    }
+
+    public string Url { get; }
 
     public string RawHtml { get; }
 

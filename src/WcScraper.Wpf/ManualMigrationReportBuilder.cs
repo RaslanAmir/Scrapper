@@ -227,6 +227,22 @@ internal sealed class ManualMigrationReportBuilder
         builder.AppendLine("- **Font files:** " + snapshot.FontFiles.Count);
         builder.AppendLine("- **Background images:** " + snapshot.ImageFiles.Count);
         builder.AppendLine("- **Font declarations:** " + snapshot.FontUrls.Count);
+        if (snapshot.Pages.Count > 0)
+        {
+            builder.AppendLine("- **Captured pages:**");
+            foreach (var page in snapshot.Pages)
+            {
+                var htmlLength = page.RawHtml.Length.ToString("N0", CultureInfo.InvariantCulture);
+                var inlineLength = page.InlineCss.Length.ToString("N0", CultureInfo.InvariantCulture);
+                builder.AppendLine(
+                    $"  - {MarkdownEscape(page.Url)} (HTML {htmlLength} chars, inline CSS {inlineLength} chars, stylesheets {page.Stylesheets.Count}, fonts {page.FontFiles.Count}, images {page.ImageFiles.Count})");
+            }
+        }
+        else if (!string.IsNullOrWhiteSpace(snapshot.HomeUrl))
+        {
+            builder.AppendLine("- **Captured pages:**");
+            builder.AppendLine($"  - {MarkdownEscape(snapshot.HomeUrl)}");
+        }
         builder.AppendLine("- **Design folder:** `" + Path.Combine(context.OutputFolder, "design") + "`");
     }
 

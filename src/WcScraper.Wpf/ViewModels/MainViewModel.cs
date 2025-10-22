@@ -48,6 +48,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private bool _expThemesJsonl = false;
     private bool _expPublicExtensionFootprints = false;
     private string _additionalPublicExtensionPages = string.Empty;
+    private string _additionalDesignSnapshotPages = string.Empty;
     private bool _expPublicDesignSnapshot = false;
     private bool _expPublicDesignScreenshots = false;
     private bool _expStoreConfiguration = false;
@@ -138,6 +139,20 @@ public sealed class MainViewModel : INotifyPropertyChanged
             }
 
             _additionalPublicExtensionPages = value ?? string.Empty;
+            OnPropertyChanged();
+        }
+    }
+    public string AdditionalDesignSnapshotPages
+    {
+        get => _additionalDesignSnapshotPages;
+        set
+        {
+            if (_additionalDesignSnapshotPages == value)
+            {
+                return;
+            }
+
+            _additionalDesignSnapshotPages = value ?? string.Empty;
             OnPropertyChanged();
         }
     }
@@ -243,6 +258,23 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
         var separators = new[] { '\r', '\n', ',', ';' };
         var tokens = AdditionalPublicExtensionPages
+            .Split(separators, StringSplitOptions.RemoveEmptyEntries)
+            .Select(token => token.Trim())
+            .Where(token => !string.IsNullOrWhiteSpace(token))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        return tokens;
+    }
+    private IReadOnlyList<string> GetAdditionalDesignSnapshotPageUrls()
+    {
+        if (string.IsNullOrWhiteSpace(AdditionalDesignSnapshotPages))
+        {
+            return Array.Empty<string>();
+        }
+
+        var separators = new[] { '\r', '\n', ',', ';' };
+        var tokens = AdditionalDesignSnapshotPages
             .Split(separators, StringSplitOptions.RemoveEmptyEntries)
             .Select(token => token.Trim())
             .Where(token => !string.IsNullOrWhiteSpace(token))
@@ -631,7 +663,13 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 try
                 {
                     Append("Capturing public front-end design snapshot…");
-                    designSnapshot = await _wooScraper.FetchPublicDesignSnapshotAsync(targetUrl, logger);
+                    var additionalDesignPages = GetAdditionalDesignSnapshotPageUrls();
+                    if (additionalDesignPages.Count > 0)
+                    {
+                        Append($"Including {additionalDesignPages.Count} additional design page(s).");
+                    }
+
+                    designSnapshot = await _wooScraper.FetchPublicDesignSnapshotAsync(targetUrl, logger, additionalDesignPages);
                     if (designSnapshot is null || string.IsNullOrWhiteSpace(designSnapshot.RawHtml))
                     {
                         Append("Public design snapshot capture returned no HTML.");
