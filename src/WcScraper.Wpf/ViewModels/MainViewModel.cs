@@ -12,6 +12,7 @@ using System.Text;
 using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Threading;
 using System.Threading.Tasks;
 using WcScraper.Core;
 using WcScraper.Core.Exporters;
@@ -28,6 +29,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private readonly ShopifyScraper _shopifyScraper;
     private readonly HttpClient _httpClient;
     private readonly WooProvisioningService _wooProvisioningService;
+    private readonly WordPressDirectoryClient _wpDirectoryClient;
+    private static readonly TimeSpan DirectoryLookupDelay = TimeSpan.FromMilliseconds(400);
     private bool _isRunning;
     private string _storeUrl = "";
     private string _outputFolder = Path.GetFullPath("output");
@@ -76,6 +79,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         _shopifyScraper = shopifyScraper;
         _httpClient = httpClient;
         _wooProvisioningService = new WooProvisioningService();
+        _wpDirectoryClient = new WordPressDirectoryClient(_httpClient);
         BrowseCommand = new RelayCommand(OnBrowse);
         RunCommand = new RelayCommand(async () => await OnRunAsync(), () => !IsRunning);
         SelectAllCategoriesCommand = new RelayCommand(() => SetSelection(CategoryChoices, true));
@@ -540,6 +544,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                     if (publicExtensionFootprints.Count > 0)
                     {
                         Append($"Detected {publicExtensionFootprints.Count} plugin/theme slug(s) from public assets (manual install required).");
+                        await EnrichPublicExtensionFootprintsAsync(publicExtensionFootprints, logger);
                     }
                     else
                     {
@@ -907,7 +912,13 @@ public sealed class MainViewModel : INotifyPropertyChanged
                             ["slug"] = f.Slug,
                             ["source_url"] = f.SourceUrl,
                             ["asset_url"] = f.AssetUrl,
-                            ["version_hint"] = f.VersionHint
+                            ["version_hint"] = f.VersionHint,
+                            ["directory_status"] = f.DirectoryStatus,
+                            ["directory_title"] = f.DirectoryTitle,
+                            ["directory_author"] = f.DirectoryAuthor,
+                            ["directory_homepage"] = f.DirectoryHomepage,
+                            ["directory_version"] = f.DirectoryVersion,
+                            ["directory_download_url"] = f.DirectoryDownloadUrl
                         });
                     CsvExporter.Write(csvPath, rows);
                     Append($"Wrote {csvPath} (includes asset URLs and version cues when available; manual install required).");
@@ -1540,6 +1551,102 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 content.FeaturedMediaFile = null;
             }
         }
+    }
+
+    private async Task EnrichPublicExtensionFootprintsAsync(IList<PublicExtensionFootprint> footprints, IProgress<string> log)
+    {
+        if (footprints.Count == 0)
+        {
+            return;
+        }
+
+        var cache = new Dictionary<string, WordPressDirectoryEntry?>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var footprint in footprints)
+        {
+            var slug = footprint.Slug;
+            if (string.IsNullOrWhiteSpace(slug))
+            {
+                ApplyDirectoryMetadata(footprint, null, "missing_slug");
+                continue;
+            }
+
+            if (!WordPressDirectoryClient.IsLikelyDirectorySlug(slug))
+            {
+                ApplyDirectoryMetadata(footprint, null, "skipped_non_directory_slug");
+                log.Report($"Skipping WordPress.org lookup for {footprint.Type} slug '{slug}' (unlikely to exist in the public directory).");
+                continue;
+            }
+
+            var cacheKey = $"{footprint.Type}:{slug}";
+            if (cache.TryGetValue(cacheKey, out var cachedEntry))
+            {
+                ApplyDirectoryMetadata(footprint, cachedEntry, cachedEntry is null ? "not_found" : "resolved");
+                continue;
+            }
+
+            WordPressDirectoryEntry? entry = null;
+            try
+            {
+                log.Report($"Looking up {footprint.Type} slug '{slug}' on WordPress.org…");
+                entry = footprint.Type.Equals("theme", StringComparison.OrdinalIgnoreCase)
+                    ? await _wpDirectoryClient.GetThemeAsync(slug).ConfigureAwait(false)
+                    : await _wpDirectoryClient.GetPluginAsync(slug).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or IOException)
+            {
+                ApplyDirectoryMetadata(footprint, null, "lookup_error");
+                log.Report($"WordPress.org lookup failed for slug '{slug}': {ex.Message}");
+                cache[cacheKey] = null;
+                await Task.Delay(DirectoryLookupDelay).ConfigureAwait(false);
+                continue;
+            }
+
+            cache[cacheKey] = entry;
+            if (entry is null)
+            {
+                ApplyDirectoryMetadata(footprint, null, "not_found");
+                log.Report($"No WordPress.org directory entry found for {footprint.Type} slug '{slug}'.");
+            }
+            else
+            {
+                ApplyDirectoryMetadata(footprint, entry, "resolved");
+                var resolvedLabel = entry.Title ?? entry.Slug ?? slug;
+                var versionLabel = string.IsNullOrWhiteSpace(entry.Version) ? string.Empty : $" v{entry.Version}";
+                log.Report($"Resolved {footprint.Type} slug '{slug}' to {resolvedLabel}{versionLabel}.");
+                if (!string.IsNullOrWhiteSpace(entry.Homepage))
+                {
+                    log.Report($" • Homepage: {entry.Homepage}");
+                }
+                if (!string.IsNullOrWhiteSpace(entry.DownloadUrl) &&
+                    !string.Equals(entry.DownloadUrl, entry.Homepage, StringComparison.OrdinalIgnoreCase))
+                {
+                    log.Report($" • Download: {entry.DownloadUrl}");
+                }
+            }
+
+            await Task.Delay(DirectoryLookupDelay).ConfigureAwait(false);
+        }
+    }
+
+    private static void ApplyDirectoryMetadata(PublicExtensionFootprint footprint, WordPressDirectoryEntry? entry, string status)
+    {
+        footprint.DirectoryStatus = status;
+        if (entry is null)
+        {
+            footprint.DirectoryTitle = null;
+            footprint.DirectoryAuthor = null;
+            footprint.DirectoryHomepage = null;
+            footprint.DirectoryVersion = null;
+            footprint.DirectoryDownloadUrl = null;
+            return;
+        }
+
+        footprint.DirectoryTitle = entry.Title;
+        footprint.DirectoryAuthor = entry.Author;
+        footprint.DirectoryHomepage = entry.Homepage;
+        footprint.DirectoryVersion = entry.Version;
+        footprint.DirectoryDownloadUrl = entry.DownloadUrl;
     }
 
     private async Task<MediaReference?> EnsureMediaReferenceAsync(

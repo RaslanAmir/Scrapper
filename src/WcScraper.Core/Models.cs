@@ -109,6 +109,12 @@ public sealed class PublicExtensionFootprint
     public string SourceUrl { get; set; } = string.Empty;
     public string? AssetUrl { get; set; }
     public string? VersionHint { get; set; }
+    public string? DirectoryTitle { get; set; }
+    public string? DirectoryAuthor { get; set; }
+    public string? DirectoryHomepage { get; set; }
+    public string? DirectoryVersion { get; set; }
+    public string? DirectoryDownloadUrl { get; set; }
+    public string? DirectoryStatus { get; set; }
 }
 
 
