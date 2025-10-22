@@ -5,6 +5,7 @@ using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
+using System.Reflection;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -64,6 +65,9 @@ public sealed class WooProvisioningService : IDisposable
     {
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
     };
+    private static readonly SemaphoreSlim ProgressSemaphore = new(1, 1);
+    private static readonly FieldInfo? ProgressContextField = typeof(Progress<string>).GetField("_synchronizationContext", BindingFlags.NonPublic | BindingFlags.Instance);
+    private static readonly FieldInfo? ProgressHandlerField = typeof(Progress<string>).GetField("_handler", BindingFlags.NonPublic | BindingFlags.Instance);
 
     public WooProvisioningService(HttpClient? httpClient = null)
     {
@@ -265,10 +269,21 @@ public sealed class WooProvisioningService : IDisposable
                               || (siteContent.MediaLibrary?.Count ?? 0) > 0
                               || (siteContent.Menus?.Menus.Count ?? 0) > 0
                               || (siteContent.Widgets?.Widgets.Count ?? 0) > 0);
+        var hasConfiguration = configuration is not null
+                                && ((configuration.StoreSettings?.Count ?? 0) > 0
+                                    || (configuration.ShippingZones?.Count ?? 0) > 0
+                                    || (configuration.PaymentGateways?.Count ?? 0) > 0);
 
-        if (productList.Count == 0 && customerList.Count == 0 && couponList.Count == 0 && orderList.Count == 0 && subscriptionList.Count == 0 && !hasContent)
+        if (productList.Count == 0
+            && customerList.Count == 0
+            && couponList.Count == 0
+            && orderList.Count == 0
+            && subscriptionList.Count == 0
+            && !hasContent
+            && !hasConfiguration)
         {
-            progress?.Report("No artifacts to provision.");
+            await ReportProgressAsync(progress, "No artifacts to provision.").ConfigureAwait(false);
+
             return;
         }
 
@@ -407,11 +422,13 @@ public sealed class WooProvisioningService : IDisposable
         var categorySeedList = categorySeeds.ToList();
         if (productList.Count > 0)
         {
-            progress?.Report($"Preparing taxonomies for {productList.Count} products…");
+            await ReportProgressAsync(progress, $"Preparing taxonomies for {productList.Count} products…").ConfigureAwait(false);
+
         }
         else if (categorySeedList.Count > 0)
         {
-            progress?.Report("Preparing taxonomies for menu references…");
+            await ReportProgressAsync(progress, "Preparing taxonomies for menu references…").ConfigureAwait(false);
+
         }
 
         Dictionary<string, int> categoryMap;
@@ -457,7 +474,8 @@ public sealed class WooProvisioningService : IDisposable
 
             var attributeMap = await EnsureAttributesAsync(baseUrl, settings, attributeSeeds, progress, cancellationToken);
 
-            progress?.Report("Provisioning products…");
+            await ReportProgressAsync(progress, "Provisioning products…").ConfigureAwait(false);
+
             var mediaCache = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
             if (mediaResult is not null)
             {
@@ -597,7 +615,8 @@ public sealed class WooProvisioningService : IDisposable
             await EnsureWidgetsAsync(baseUrl, settings, widgetSnapshot, progress, cancellationToken);
         }
 
-        progress?.Report("Provisioning complete.");
+        await ReportProgressAsync(progress, "Provisioning complete.").ConfigureAwait(false);
+
     }
 
     public Task UploadPluginsAsync(
@@ -627,7 +646,8 @@ public sealed class WooProvisioningService : IDisposable
         var list = bundles.Where(b => b is not null).ToList();
         if (list.Count == 0)
         {
-            progress?.Report($"No {scope} bundles to upload.");
+            await ReportProgressAsync(progress, $"No {scope} bundles to upload.").ConfigureAwait(false);
+
             return;
         }
 
@@ -647,7 +667,8 @@ public sealed class WooProvisioningService : IDisposable
     {
         if (!Directory.Exists(bundle.DirectoryPath))
         {
-            progress?.Report($"Skipping {scope} '{bundle.Slug}': directory not found ({bundle.DirectoryPath}).");
+            await ReportProgressAsync(progress, $"Skipping {scope} '{bundle.Slug}': directory not found ({bundle.DirectoryPath}).").ConfigureAwait(false);
+
             return;
         }
 
@@ -657,7 +678,8 @@ public sealed class WooProvisioningService : IDisposable
 
         if (archivePath is null && manifestPath is null && optionsPath is null)
         {
-            progress?.Report($"Skipping {scope} '{bundle.Slug}': no bundle files found in {bundle.DirectoryPath}.");
+            await ReportProgressAsync(progress, $"Skipping {scope} '{bundle.Slug}': no bundle files found in {bundle.DirectoryPath}.").ConfigureAwait(false);
+
             return;
         }
 
@@ -678,7 +700,8 @@ public sealed class WooProvisioningService : IDisposable
 
         if (!uploaded)
         {
-            progress?.Report($"No {scope} upload endpoint accepted '{bundle.Slug}'.");
+            await ReportProgressAsync(progress, $"No {scope} upload endpoint accepted '{bundle.Slug}'.").ConfigureAwait(false);
+
             return;
         }
 
@@ -733,7 +756,8 @@ public sealed class WooProvisioningService : IDisposable
             using var response = await _httpClient.SendAsync(request, cancellationToken);
             if (response.IsSuccessStatusCode)
             {
-                progress?.Report($"Uploaded {scope} bundle '{bundle.Slug}'.");
+                await ReportProgressAsync(progress, $"Uploaded {scope} bundle '{bundle.Slug}'.").ConfigureAwait(false);
+
                 return true;
             }
 
@@ -743,7 +767,8 @@ public sealed class WooProvisioningService : IDisposable
             }
 
             var body = await response.Content.ReadAsStringAsync(cancellationToken);
-            progress?.Report($"{scope} upload failed ({(int)response.StatusCode} {response.ReasonPhrase}): {body}");
+            await ReportProgressAsync(progress, $"{scope} upload failed ({(int)response.StatusCode} {response.ReasonPhrase}): {body}").ConfigureAwait(false);
+
             return false;
         }
         finally
@@ -772,7 +797,8 @@ public sealed class WooProvisioningService : IDisposable
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            progress?.Report($"Skipping {scope} options restore for '{slug}': {ex.Message}.");
+            await ReportProgressAsync(progress, $"Skipping {scope} options restore for '{slug}': {ex.Message}.").ConfigureAwait(false);
+
             return;
         }
 
@@ -794,7 +820,8 @@ public sealed class WooProvisioningService : IDisposable
                 using var response = await _httpClient.SendAsync(request, cancellationToken);
                 if (response.IsSuccessStatusCode)
                 {
-                    progress?.Report($"Restored {scope} options for '{slug}'.");
+                    await ReportProgressAsync(progress, $"Restored {scope} options for '{slug}'.").ConfigureAwait(false);
+
                     return;
                 }
 
@@ -804,19 +831,23 @@ public sealed class WooProvisioningService : IDisposable
                 }
 
                 var body = await response.Content.ReadAsStringAsync(cancellationToken);
-                progress?.Report($"{scope} options restore failed for '{slug}' ({(int)response.StatusCode} {response.ReasonPhrase}): {body}");
+                await ReportProgressAsync(progress, $"{scope} options restore failed for '{slug}' ({(int)response.StatusCode} {response.ReasonPhrase}): {body}").ConfigureAwait(false);
+
             }
             catch (TaskCanceledException) when (!cancellationToken.IsCancellationRequested)
             {
-                progress?.Report($"{scope} options restore timed out for '{slug}' via {endpoint}.");
+                await ReportProgressAsync(progress, $"{scope} options restore timed out for '{slug}' via {endpoint}.").ConfigureAwait(false);
+
             }
             catch (HttpRequestException ex)
             {
-                progress?.Report($"{scope} options restore failed for '{slug}' via {endpoint}: {ex.Message}");
+                await ReportProgressAsync(progress, $"{scope} options restore failed for '{slug}' via {endpoint}: {ex.Message}").ConfigureAwait(false);
+
             }
         }
 
-        progress?.Report($"No {scope} options endpoint accepted captured data for '{slug}'.");
+        await ReportProgressAsync(progress, $"No {scope} options endpoint accepted captured data for '{slug}'.").ConfigureAwait(false);
+
     }
 
     private sealed class MediaProvisioningResult
@@ -843,13 +874,15 @@ public sealed class WooProvisioningService : IDisposable
 
         if (!settings.HasWordPressCredentials)
         {
-            progress?.Report("Skipping media library upload: missing WordPress credentials.");
+            await ReportProgressAsync(progress, "Skipping media library upload: missing WordPress credentials.").ConfigureAwait(false);
+
             return result;
         }
 
         if (string.IsNullOrWhiteSpace(mediaRootDirectory))
         {
-            progress?.Report("Skipping media library upload: media root directory not provided.");
+            await ReportProgressAsync(progress, "Skipping media library upload: media root directory not provided.").ConfigureAwait(false);
+
             return result;
         }
 
@@ -877,7 +910,8 @@ public sealed class WooProvisioningService : IDisposable
 
             if (string.IsNullOrWhiteSpace(localPath) || !File.Exists(localPath))
             {
-                progress?.Report($"Skipping media {item.Id} ({item.SourceUrl}): local file not found.");
+                await ReportProgressAsync(progress, $"Skipping media {item.Id} ({item.SourceUrl}): local file not found.").ConfigureAwait(false);
+
                 continue;
             }
 
@@ -926,7 +960,8 @@ public sealed class WooProvisioningService : IDisposable
 
         if (!settings.HasWordPressCredentials)
         {
-            progress?.Report("Skipping WordPress pages: missing credentials.");
+            await ReportProgressAsync(progress, "Skipping WordPress pages: missing credentials.").ConfigureAwait(false);
+
             return map;
         }
 
@@ -974,7 +1009,8 @@ public sealed class WooProvisioningService : IDisposable
 
         if (!settings.HasWordPressCredentials)
         {
-            progress?.Report("Skipping WordPress posts: missing credentials.");
+            await ReportProgressAsync(progress, "Skipping WordPress posts: missing credentials.").ConfigureAwait(false);
+
             return map;
         }
 
@@ -1020,7 +1056,8 @@ public sealed class WooProvisioningService : IDisposable
 
         if (!settings.HasWordPressCredentials)
         {
-            progress?.Report("Skipping WordPress menus: missing credentials.");
+            await ReportProgressAsync(progress, "Skipping WordPress menus: missing credentials.").ConfigureAwait(false);
+
             return;
         }
 
@@ -1238,7 +1275,8 @@ public sealed class WooProvisioningService : IDisposable
 
         if (!settings.HasWordPressCredentials)
         {
-            progress?.Report("Skipping WordPress widgets: missing credentials.");
+            await ReportProgressAsync(progress, "Skipping WordPress widgets: missing credentials.").ConfigureAwait(false);
+
             return;
         }
 
@@ -1367,7 +1405,8 @@ public sealed class WooProvisioningService : IDisposable
             using var response = await _httpClient.SendAsync(request, cancellationToken);
             if (!response.IsSuccessStatusCode)
             {
-                progress?.Report($"Failed to provision WordPress {resource.TrimEnd('s')} '{slug}': {(int)response.StatusCode} ({response.ReasonPhrase}).");
+                await ReportProgressAsync(progress, $"Failed to provision WordPress {resource.TrimEnd('s')} '{slug}': {(int)response.StatusCode} ({response.ReasonPhrase}).").ConfigureAwait(false);
+
                 return existing?.Id ?? 0;
             }
 
@@ -1380,7 +1419,8 @@ public sealed class WooProvisioningService : IDisposable
         }
         catch (Exception ex)
         {
-            progress?.Report($"Failed to provision WordPress {resource.TrimEnd('s')} '{slug}': {ex.Message}");
+            await ReportProgressAsync(progress, $"Failed to provision WordPress {resource.TrimEnd('s')} '{slug}': {ex.Message}").ConfigureAwait(false);
+
         }
 
         return existing?.Id ?? 0;
@@ -1422,7 +1462,8 @@ public sealed class WooProvisioningService : IDisposable
         }
         catch (Exception ex)
         {
-            progress?.Report($"Failed to query existing WordPress {resource.TrimEnd('s')} '{slug}': {ex.Message}");
+            await ReportProgressAsync(progress, $"Failed to query existing WordPress {resource.TrimEnd('s')} '{slug}': {ex.Message}").ConfigureAwait(false);
+
             return null;
         }
     }
@@ -1512,7 +1553,8 @@ public sealed class WooProvisioningService : IDisposable
             using var response = await _httpClient.SendAsync(request, cancellationToken);
             if (!response.IsSuccessStatusCode)
             {
-                progress?.Report($"Failed to provision menu '{slug}': {(int)response.StatusCode} ({response.ReasonPhrase}).");
+                await ReportProgressAsync(progress, $"Failed to provision menu '{slug}': {(int)response.StatusCode} ({response.ReasonPhrase}).").ConfigureAwait(false);
+
                 return existingId;
             }
 
@@ -1530,7 +1572,8 @@ public sealed class WooProvisioningService : IDisposable
         }
         catch (Exception ex)
         {
-            progress?.Report($"Failed to provision menu '{slug}': {ex.Message}");
+            await ReportProgressAsync(progress, $"Failed to provision menu '{slug}': {ex.Message}").ConfigureAwait(false);
+
         }
 
         return existingId;
@@ -1725,7 +1768,8 @@ public sealed class WooProvisioningService : IDisposable
             using var response = await _httpClient.SendAsync(request, cancellationToken);
             if (!response.IsSuccessStatusCode)
             {
-                progress?.Report($"Failed to create menu item '{item.Title?.Rendered ?? item.Url}': {(int)response.StatusCode} ({response.ReasonPhrase}).");
+                await ReportProgressAsync(progress, $"Failed to create menu item '{item.Title?.Rendered ?? item.Url}': {(int)response.StatusCode} ({response.ReasonPhrase}).").ConfigureAwait(false);
+
                 return;
             }
 
@@ -1764,7 +1808,8 @@ public sealed class WooProvisioningService : IDisposable
         }
         catch (Exception ex)
         {
-            progress?.Report($"Failed to create menu item '{item.Title?.Rendered ?? item.Url}': {ex.Message}");
+            await ReportProgressAsync(progress, $"Failed to create menu item '{item.Title?.Rendered ?? item.Url}': {ex.Message}").ConfigureAwait(false);
+
         }
     }
 
@@ -1823,12 +1868,14 @@ public sealed class WooProvisioningService : IDisposable
             using var response = await _httpClient.SendAsync(request, cancellationToken);
             if (!response.IsSuccessStatusCode)
             {
-                progress?.Report($"Failed to assign menu {menuId} to location '{locationSlug}': {(int)response.StatusCode} ({response.ReasonPhrase}).");
+                await ReportProgressAsync(progress, $"Failed to assign menu {menuId} to location '{locationSlug}': {(int)response.StatusCode} ({response.ReasonPhrase}).").ConfigureAwait(false);
+
             }
         }
         catch (Exception ex)
         {
-            progress?.Report($"Failed to assign menu {menuId} to location '{locationSlug}': {ex.Message}");
+            await ReportProgressAsync(progress, $"Failed to assign menu {menuId} to location '{locationSlug}': {ex.Message}").ConfigureAwait(false);
+
         }
     }
 
@@ -1908,12 +1955,14 @@ public sealed class WooProvisioningService : IDisposable
             using var response = await _httpClient.SendAsync(request, cancellationToken);
             if (!response.IsSuccessStatusCode)
             {
-                progress?.Report($"Failed to create widget '{widget.IdBase}': {(int)response.StatusCode} ({response.ReasonPhrase}).");
+                await ReportProgressAsync(progress, $"Failed to create widget '{widget.IdBase}': {(int)response.StatusCode} ({response.ReasonPhrase}).").ConfigureAwait(false);
+
             }
         }
         catch (Exception ex)
         {
-            progress?.Report($"Failed to create widget '{widget.IdBase}': {ex.Message}");
+            await ReportProgressAsync(progress, $"Failed to create widget '{widget.IdBase}': {ex.Message}").ConfigureAwait(false);
+
         }
     }
 
@@ -1959,7 +2008,8 @@ public sealed class WooProvisioningService : IDisposable
             }
             catch (Exception ex)
             {
-                progress?.Report($"Failed to query existing media '{item.SourceUrl}': {ex.Message}");
+                await ReportProgressAsync(progress, $"Failed to query existing media '{item.SourceUrl}': {ex.Message}").ConfigureAwait(false);
+
             }
         }
 
@@ -1998,7 +2048,8 @@ public sealed class WooProvisioningService : IDisposable
             using var response = await _httpClient.SendAsync(request, cancellationToken);
             if (!response.IsSuccessStatusCode)
             {
-                progress?.Report($"Failed to upload media {item.SourceUrl}: {(int)response.StatusCode} ({response.ReasonPhrase}).");
+                await ReportProgressAsync(progress, $"Failed to upload media {item.SourceUrl}: {(int)response.StatusCode} ({response.ReasonPhrase}).").ConfigureAwait(false);
+
                 return null;
             }
 
@@ -2015,7 +2066,8 @@ public sealed class WooProvisioningService : IDisposable
         }
         catch (Exception ex)
         {
-            progress?.Report($"Failed to upload media {item.SourceUrl}: {ex.Message}");
+            await ReportProgressAsync(progress, $"Failed to upload media {item.SourceUrl}: {ex.Message}").ConfigureAwait(false);
+
             return null;
         }
     }
@@ -2068,7 +2120,11 @@ public sealed class WooProvisioningService : IDisposable
         IProgress<string>? progress,
         CancellationToken cancellationToken)
     {
-        var existing = await FindExistingProductAsync(baseUrl, settings, product, cancellationToken);
+        WooProductSummary? existing = null;
+        if (!ShouldSkipExistingProductLookup(product))
+        {
+            existing = await FindExistingProductAsync(baseUrl, settings, product, cancellationToken);
+        }
 
         var categoryRefs = BuildTaxonomyReferences(product.Categories, categoryMap);
         var tagRefs = BuildTaxonomyReferences(product.Tags, tagMap);
@@ -2179,12 +2235,14 @@ public sealed class WooProvisioningService : IDisposable
 
         if (existing is not null)
         {
-            progress?.Report($"Updating product '{product.Name ?? product.Slug ?? product.Id.ToString()}' (ID {existing.Id}).");
+            await ReportProgressAsync(progress, $"Updating product '{product.Name ?? product.Slug ?? product.Id.ToString()}' (ID {existing.Id}).").ConfigureAwait(false);
+
             var updated = await PutAsync<WooProductSummary>(baseUrl, settings, $"/wp-json/wc/v3/products/{existing.Id}", payload, cancellationToken);
             return updated.Id;
         }
 
-        progress?.Report($"Creating product '{product.Name ?? product.Slug ?? product.Id.ToString()}'.");
+        await ReportProgressAsync(progress, $"Creating product '{product.Name ?? product.Slug ?? product.Id.ToString()}'.").ConfigureAwait(false);
+
         var created = await PostAsync<WooProductSummary>(baseUrl, settings, "/wp-json/wc/v3/products", payload, cancellationToken);
         return created.Id;
     }
@@ -2208,14 +2266,16 @@ public sealed class WooProvisioningService : IDisposable
             cancellationToken.ThrowIfCancellationRequested();
             if (!productIdMap.TryGetValue(group.ParentId, out var mappedParentId))
             {
-                progress?.Report($"Skipping {group.Variations.Count} variations for parent {group.ParentId}: parent was not provisioned.");
+                await ReportProgressAsync(progress, $"Skipping {group.Variations.Count} variations for parent {group.ParentId}: parent was not provisioned.").ConfigureAwait(false);
+
                 continue;
             }
 
             var parentProduct = group.Parent
                 ?? (productLookup.TryGetValue(group.ParentId, out var existingProduct) ? existingProduct : null);
             var parentLabel = BuildParentLabel(parentProduct, group.ParentId);
-            progress?.Report($"Provisioning {group.Variations.Count} variations for '{parentLabel}' (ID {mappedParentId}).");
+            await ReportProgressAsync(progress, $"Provisioning {group.Variations.Count} variations for '{parentLabel}' (ID {mappedParentId}).").ConfigureAwait(false);
+
 
             var existingVariations = await FetchExistingVariationsAsync(baseUrl, settings, mappedParentId, cancellationToken);
             var existingBySku = new Dictionary<string, WooVariationResponse>(StringComparer.OrdinalIgnoreCase);
@@ -2255,7 +2315,8 @@ public sealed class WooProvisioningService : IDisposable
 
                 if (existingMatch is not null)
                 {
-                    progress?.Report($"Updating variation '{label}' (Parent {mappedParentId}, Variation {existingMatch.Id}).");
+                    await ReportProgressAsync(progress, $"Updating variation '{label}' (Parent {mappedParentId}, Variation {existingMatch.Id}).").ConfigureAwait(false);
+
                     var updated = await PutAsync<WooVariationResponse>(
                         baseUrl,
                         settings,
@@ -2282,7 +2343,8 @@ public sealed class WooProvisioningService : IDisposable
                     continue;
                 }
 
-                progress?.Report($"Creating variation '{label}' (Parent {mappedParentId}).");
+                await ReportProgressAsync(progress, $"Creating variation '{label}' (Parent {mappedParentId}).").ConfigureAwait(false);
+
                 var created = await PostAsync<WooVariationResponse>(
                     baseUrl,
                     settings,
@@ -2362,6 +2424,75 @@ public sealed class WooProvisioningService : IDisposable
         }
 
         return result;
+    }
+
+    private static async ValueTask ReportProgressAsync(IProgress<string>? progress, string message, CancellationToken cancellationToken = default)
+    {
+        if (progress is null)
+        {
+            return;
+        }
+
+        if (progress is Progress<string> progressImpl)
+        {
+            await ProgressSemaphore.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                if (ProgressContextField?.GetValue(progressImpl) is not SynchronizationContext context || context is null)
+                {
+                    if (ProgressHandlerField?.GetValue(progressImpl) is Action<string> handler)
+                    {
+                        handler(message);
+                        return;
+                    }
+                }
+
+                var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+                void Handler(object? sender, string value)
+                {
+                    progressImpl.ProgressChanged -= Handler;
+                    tcs.TrySetResult(true);
+                }
+
+                progressImpl.ProgressChanged += Handler;
+                try
+                {
+                    ((IProgress<string>)progressImpl).Report(message);
+                }
+                catch
+                {
+                    progressImpl.ProgressChanged -= Handler;
+                    throw;
+                }
+
+                CancellationTokenRegistration registration = default;
+                if (cancellationToken.CanBeCanceled)
+                {
+                    registration = cancellationToken.Register(() =>
+                    {
+                        progressImpl.ProgressChanged -= Handler;
+                        tcs.TrySetCanceled(cancellationToken);
+                    });
+                }
+
+                try
+                {
+                    await tcs.Task.ConfigureAwait(false);
+                }
+                finally
+                {
+                    registration.Dispose();
+                }
+
+                return;
+            }
+            finally
+            {
+                ProgressSemaphore.Release();
+            }
+        }
+
+        progress.Report(message);
     }
 
     private static List<VariationProvisionGroup> BuildVariationGroups(
@@ -2686,14 +2817,16 @@ public sealed class WooProvisioningService : IDisposable
             var payload = BuildCustomerPayload(customer);
             if (payload.Count == 0)
             {
-                progress?.Report($"Skipping customer '{identifier}': no importable fields.");
+                await ReportProgressAsync(progress, $"Skipping customer '{identifier}': no importable fields.").ConfigureAwait(false);
+
                 continue;
             }
 
             var existing = await FindCustomerAsync(baseUrl, settings, customer, cancellationToken);
             if (existing is not null)
             {
-                progress?.Report($"Updating customer '{identifier}' (ID {existing.Id}).");
+                await ReportProgressAsync(progress, $"Updating customer '{identifier}' (ID {existing.Id}).").ConfigureAwait(false);
+
                 var updated = await PutAsync<WooCustomer>(baseUrl, settings, $"/wp-json/wc/v3/customers/{existing.Id}", payload, cancellationToken);
                 if (customer.Id > 0)
                 {
@@ -2702,7 +2835,8 @@ public sealed class WooProvisioningService : IDisposable
                 continue;
             }
 
-            progress?.Report($"Creating customer '{identifier}'.");
+            await ReportProgressAsync(progress, $"Creating customer '{identifier}'.").ConfigureAwait(false);
+
             try
             {
                 var created = await PostAsync<WooCustomer>(baseUrl, settings, "/wp-json/wc/v3/customers", payload, cancellationToken);
@@ -2713,7 +2847,8 @@ public sealed class WooProvisioningService : IDisposable
             }
             catch (WooProvisioningException ex) when (ex.StatusCode == HttpStatusCode.BadRequest || ex.StatusCode == HttpStatusCode.Conflict)
             {
-                progress?.Report($"Customer '{identifier}' may already exist ({(int)ex.StatusCode}). Retrying fetch.");
+                await ReportProgressAsync(progress, $"Customer '{identifier}' may already exist ({(int)ex.StatusCode}). Retrying fetch.").ConfigureAwait(false);
+
                 existing = await FindCustomerAsync(baseUrl, settings, customer, cancellationToken);
                 if (existing is not null)
                 {
@@ -2815,14 +2950,16 @@ public sealed class WooProvisioningService : IDisposable
             var payload = BuildCouponPayload(coupon, productMap, categoryMap);
             if (payload.Count == 0)
             {
-                progress?.Report($"Skipping coupon '{identifier}': no importable fields.");
+                await ReportProgressAsync(progress, $"Skipping coupon '{identifier}': no importable fields.").ConfigureAwait(false);
+
                 continue;
             }
 
             var existing = await FindCouponAsync(baseUrl, settings, coupon, cancellationToken);
             if (existing is not null)
             {
-                progress?.Report($"Updating coupon '{identifier}' (ID {existing.Id}).");
+                await ReportProgressAsync(progress, $"Updating coupon '{identifier}' (ID {existing.Id}).").ConfigureAwait(false);
+
                 var updated = await PutAsync<WooCoupon>(baseUrl, settings, $"/wp-json/wc/v3/coupons/{existing.Id}", payload, cancellationToken);
                 if (coupon.Id > 0)
                 {
@@ -2831,7 +2968,8 @@ public sealed class WooProvisioningService : IDisposable
                 continue;
             }
 
-            progress?.Report($"Creating coupon '{identifier}'.");
+            await ReportProgressAsync(progress, $"Creating coupon '{identifier}'.").ConfigureAwait(false);
+
             try
             {
                 var created = await PostAsync<WooCoupon>(baseUrl, settings, "/wp-json/wc/v3/coupons", payload, cancellationToken);
@@ -2842,7 +2980,8 @@ public sealed class WooProvisioningService : IDisposable
             }
             catch (WooProvisioningException ex) when (ex.StatusCode == HttpStatusCode.BadRequest || ex.StatusCode == HttpStatusCode.Conflict)
             {
-                progress?.Report($"Coupon '{identifier}' may already exist ({(int)ex.StatusCode}). Retrying fetch.");
+                await ReportProgressAsync(progress, $"Coupon '{identifier}' may already exist ({(int)ex.StatusCode}). Retrying fetch.").ConfigureAwait(false);
+
                 existing = await FindCouponAsync(baseUrl, settings, coupon, cancellationToken);
                 if (existing is not null)
                 {
@@ -3183,23 +3322,27 @@ public sealed class WooProvisioningService : IDisposable
             var lineItems = BuildOrderLineItems(order.LineItems, productMap);
             if (lineItems.Count == 0)
             {
-                progress?.Report($"Skipping order '{identifier}': no line items could be mapped.");
+                await ReportProgressAsync(progress, $"Skipping order '{identifier}': no line items could be mapped.").ConfigureAwait(false);
+
                 continue;
             }
 
             var payload = BuildOrderPayload(order, productMap, customerMap, couponCodeMap, lineItems, taxRateLookup);
-            progress?.Report($"Creating order '{identifier}'.");
+            await ReportProgressAsync(progress, $"Creating order '{identifier}'.").ConfigureAwait(false);
+
             try
             {
                 await PostAsync<WooOrder>(baseUrl, settings, "/wp-json/wc/v3/orders", payload, cancellationToken);
             }
             catch (WooProvisioningException ex) when (ex.StatusCode == HttpStatusCode.BadRequest || ex.StatusCode == HttpStatusCode.Conflict)
             {
-                progress?.Report($"Order '{identifier}' may already exist ({(int)ex.StatusCode}). Retrying fetch.");
+                await ReportProgressAsync(progress, $"Order '{identifier}' may already exist ({(int)ex.StatusCode}). Retrying fetch.").ConfigureAwait(false);
+
                 var existing = await FindOrderAsync(baseUrl, settings, order, cancellationToken);
                 if (existing is not null)
                 {
-                    progress?.Report($"Order '{identifier}' already present as ID {existing.Id}. Skipping creation.");
+                    await ReportProgressAsync(progress, $"Order '{identifier}' already present as ID {existing.Id}. Skipping creation.").ConfigureAwait(false);
+
                 }
                 else
                 {
@@ -3225,7 +3368,8 @@ public sealed class WooProvisioningService : IDisposable
             cancellationToken.ThrowIfCancellationRequested();
             if (endpointUnavailable)
             {
-                progress?.Report($"Skipping subscription '{GetSubscriptionIdentifier(subscription)}': endpoint unavailable.");
+                await ReportProgressAsync(progress, $"Skipping subscription '{GetSubscriptionIdentifier(subscription)}': endpoint unavailable.").ConfigureAwait(false);
+
                 continue;
             }
 
@@ -3233,34 +3377,40 @@ public sealed class WooProvisioningService : IDisposable
             var lineItems = BuildOrderLineItems(subscription.LineItems, productMap);
             if (lineItems.Count == 0)
             {
-                progress?.Report($"Skipping subscription '{identifier}': no line items could be mapped.");
+                await ReportProgressAsync(progress, $"Skipping subscription '{identifier}': no line items could be mapped.").ConfigureAwait(false);
+
                 continue;
             }
 
             var payload = BuildSubscriptionPayload(subscription, customerMap, lineItems, taxRateLookup);
             if (payload.Count == 0)
             {
-                progress?.Report($"Skipping subscription '{identifier}': no importable fields.");
+                await ReportProgressAsync(progress, $"Skipping subscription '{identifier}': no importable fields.").ConfigureAwait(false);
+
                 continue;
             }
 
-            progress?.Report($"Creating subscription '{identifier}'.");
+            await ReportProgressAsync(progress, $"Creating subscription '{identifier}'.").ConfigureAwait(false);
+
             try
             {
                 await PostAsync<WooSubscription>(baseUrl, settings, "/wp-json/wc/v1/subscriptions", payload, cancellationToken);
             }
             catch (WooProvisioningException ex) when (ex.StatusCode == HttpStatusCode.NotFound)
             {
-                progress?.Report("Subscriptions endpoint not available (404). Skipping remaining subscriptions.");
+                await ReportProgressAsync(progress, "Subscriptions endpoint not available (404). Skipping remaining subscriptions.").ConfigureAwait(false);
+
                 endpointUnavailable = true;
             }
             catch (WooProvisioningException ex) when (ex.StatusCode == HttpStatusCode.BadRequest || ex.StatusCode == HttpStatusCode.Conflict)
             {
-                progress?.Report($"Subscription '{identifier}' may already exist ({(int)ex.StatusCode}). Retrying fetch.");
+                await ReportProgressAsync(progress, $"Subscription '{identifier}' may already exist ({(int)ex.StatusCode}). Retrying fetch.").ConfigureAwait(false);
+
                 var existing = await FindSubscriptionAsync(baseUrl, settings, subscription, cancellationToken);
                 if (existing is not null)
                 {
-                    progress?.Report($"Updating subscription '{identifier}' (ID {existing.Id}).");
+                    await ReportProgressAsync(progress, $"Updating subscription '{identifier}' (ID {existing.Id}).").ConfigureAwait(false);
+
                     await PutAsync<WooSubscription>(baseUrl, settings, $"/wp-json/wc/v1/subscriptions/{existing.Id}", payload, cancellationToken);
                 }
                 else
@@ -3852,7 +4002,8 @@ public sealed class WooProvisioningService : IDisposable
 
                 if (!File.Exists(path))
                 {
-                    progress?.Report($"Image file missing: {path}");
+                    await ReportProgressAsync(progress, $"Image file missing: {path}").ConfigureAwait(false);
+
                     continue;
                 }
 
@@ -3913,7 +4064,8 @@ public sealed class WooProvisioningService : IDisposable
     {
         try
         {
-            progress?.Report($"Uploading media {Path.GetFileName(filePath)}…");
+            await ReportProgressAsync(progress, $"Uploading media {Path.GetFileName(filePath)}…").ConfigureAwait(false);
+
             using var stream = File.OpenRead(filePath);
             using var content = new StreamContent(stream);
             content.Headers.ContentType = new MediaTypeHeaderValue(ResolveMimeType(filePath));
@@ -3929,7 +4081,8 @@ public sealed class WooProvisioningService : IDisposable
             if (!response.IsSuccessStatusCode)
             {
                 var error = await response.Content.ReadAsStringAsync(cancellationToken);
-                progress?.Report($"Media upload failed ({(int)response.StatusCode}): {error}");
+                await ReportProgressAsync(progress, $"Media upload failed ({(int)response.StatusCode}): {error}").ConfigureAwait(false);
+
                 return null;
             }
 
@@ -3939,7 +4092,8 @@ public sealed class WooProvisioningService : IDisposable
         }
         catch (Exception ex)
         {
-            progress?.Report($"Media upload failed: {ex.Message}");
+            await ReportProgressAsync(progress, $"Media upload failed: {ex.Message}").ConfigureAwait(false);
+
             return null;
         }
     }
@@ -3958,23 +4112,30 @@ public sealed class WooProvisioningService : IDisposable
 
     private async Task<WooProductSummary?> FindExistingProductAsync(string baseUrl, WooProvisioningSettings settings, StoreProduct product, CancellationToken cancellationToken)
     {
-        if (!string.IsNullOrWhiteSpace(product.Sku))
+        try
         {
-            var bySku = await GetAsync<List<WooProductSummary>>(baseUrl, settings, $"/wp-json/wc/v3/products?per_page=1&sku={Uri.EscapeDataString(product.Sku)}", cancellationToken);
-            if (bySku is { Count: > 0 })
+            if (!string.IsNullOrWhiteSpace(product.Sku))
             {
-                return bySku[0];
+                var bySku = await GetAsync<List<WooProductSummary>>(baseUrl, settings, $"/wp-json/wc/v3/products?per_page=1&sku={Uri.EscapeDataString(product.Sku)}", cancellationToken);
+                if (bySku is { Count: > 0 })
+                {
+                    return bySku[0];
+                }
+            }
+
+            var slug = NormalizeSlug(product.Slug);
+            if (!string.IsNullOrWhiteSpace(slug))
+            {
+                var bySlug = await GetAsync<List<WooProductSummary>>(baseUrl, settings, $"/wp-json/wc/v3/products?per_page=1&slug={Uri.EscapeDataString(slug)}", cancellationToken);
+                if (bySlug is { Count: > 0 })
+                {
+                    return bySlug[0];
+                }
             }
         }
-
-        var slug = NormalizeSlug(product.Slug);
-        if (!string.IsNullOrWhiteSpace(slug))
+        catch (InvalidOperationException)
         {
-            var bySlug = await GetAsync<List<WooProductSummary>>(baseUrl, settings, $"/wp-json/wc/v3/products?per_page=1&slug={Uri.EscapeDataString(slug)}", cancellationToken);
-            if (bySlug is { Count: > 0 })
-            {
-                return bySlug[0];
-            }
+            return null;
         }
 
         return null;
@@ -4032,7 +4193,8 @@ public sealed class WooProvisioningService : IDisposable
             }
 
             var path = $"/wp-json/wc/v3/settings/{Uri.EscapeDataString(group.Key)}";
-            progress?.Report($"Applying settings group '{group.Key}' ({payload.Count} fields)…");
+            await ReportProgressAsync(progress, $"Applying settings group '{group.Key}' ({payload.Count} fields)…").ConfigureAwait(false);
+
             await PutAsync<List<WooStoreSetting>>(baseUrl, settings, path, payload, cancellationToken);
         }
     }
@@ -4059,7 +4221,8 @@ public sealed class WooProvisioningService : IDisposable
             var targetZoneId = zone.Id;
             if (zonePayload.Count > 0)
             {
-                progress?.Report($"Updating shipping zone '{zoneLabel}'…");
+                await ReportProgressAsync(progress, $"Updating shipping zone '{zoneLabel}'…").ConfigureAwait(false);
+
                 try
                 {
                     await PutAsync<ShippingZoneSetting>(baseUrl, settings, $"/wp-json/wc/v3/shipping/zones/{zone.Id}", zonePayload, cancellationToken);
@@ -4077,7 +4240,8 @@ public sealed class WooProvisioningService : IDisposable
                         createPayload["name"] = zone.Name ?? zoneLabel;
                     }
 
-                    progress?.Report($"Creating shipping zone '{zoneLabel}'…");
+                    await ReportProgressAsync(progress, $"Creating shipping zone '{zoneLabel}'…").ConfigureAwait(false);
+
                     var createdZone = await PostAsync<ShippingZoneSetting>(baseUrl, settings, "/wp-json/wc/v3/shipping/zones", createPayload, cancellationToken);
                     targetZoneId = createdZone.Id;
                     zone.Id = createdZone.Id;
@@ -4085,7 +4249,8 @@ public sealed class WooProvisioningService : IDisposable
             }
 
             var locationsPayload = zone.Locations ?? new List<ShippingZoneLocation>();
-            progress?.Report($"Updating shipping zone '{zoneLabel}' locations…");
+            await ReportProgressAsync(progress, $"Updating shipping zone '{zoneLabel}' locations…").ConfigureAwait(false);
+
             await PutAsync<List<ShippingZoneLocation>>(baseUrl, settings, $"/wp-json/wc/v3/shipping/zones/{targetZoneId}/locations", locationsPayload, cancellationToken);
 
             if (zone.Methods is { Count: > 0 })
@@ -4121,7 +4286,8 @@ public sealed class WooProvisioningService : IDisposable
 
                     if (method.InstanceId > 0 && methodPayload.Count > 0)
                     {
-                        progress?.Report($"Updating shipping method '{methodLabel}' in zone '{zoneLabel}'…");
+                        await ReportProgressAsync(progress, $"Updating shipping method '{methodLabel}' in zone '{zoneLabel}'…").ConfigureAwait(false);
+
                         try
                         {
                             await PutAsync<ShippingZoneMethodSetting>(baseUrl, settings, $"/wp-json/wc/v3/shipping/zones/{targetZoneId}/methods/{method.InstanceId}", methodPayload, cancellationToken);
@@ -4144,7 +4310,8 @@ public sealed class WooProvisioningService : IDisposable
                             createPayload[kvp.Key] = kvp.Value;
                         }
 
-                        progress?.Report($"Creating shipping method '{methodLabel}' in zone '{zoneLabel}'…");
+                        await ReportProgressAsync(progress, $"Creating shipping method '{methodLabel}' in zone '{zoneLabel}'…").ConfigureAwait(false);
+
                         await PostAsync<ShippingZoneMethodSetting>(baseUrl, settings, $"/wp-json/wc/v3/shipping/zones/{targetZoneId}/methods", createPayload, cancellationToken);
                     }
                 }
@@ -4185,7 +4352,8 @@ public sealed class WooProvisioningService : IDisposable
             }
 
             var label = gateway.Title ?? gateway.MethodTitle ?? gateway.Id;
-            progress?.Report($"Updating payment gateway '{label}'…");
+            await ReportProgressAsync(progress, $"Updating payment gateway '{label}'…").ConfigureAwait(false);
+
             await PutAsync<PaymentGatewaySetting>(baseUrl, settings, $"/wp-json/wc/v3/payment_gateways/{gateway.Id}", payload, cancellationToken);
         }
     }
@@ -4304,7 +4472,8 @@ public sealed class WooProvisioningService : IDisposable
             return existing.Id;
         }
 
-        progress?.Report($"Creating {resource.TrimEnd('s')} '{seed.Name}'…");
+        await ReportProgressAsync(progress, $"Creating {resource.TrimEnd('s')} '{seed.Name}'…").ConfigureAwait(false);
+
         var payload = new Dictionary<string, object?>
         {
             ["name"] = seed.Name,
@@ -4323,7 +4492,8 @@ public sealed class WooProvisioningService : IDisposable
         }
         catch (WooProvisioningException ex) when (ex.StatusCode == HttpStatusCode.BadRequest || ex.StatusCode == HttpStatusCode.Conflict)
         {
-            progress?.Report($"{resource[..1].ToUpper() + resource[1..]} '{seed.Name}' may already exist ({(int)ex.StatusCode}). Retrying fetch.");
+            await ReportProgressAsync(progress, $"{resource[..1].ToUpper() + resource[1..]} '{seed.Name}' may already exist ({(int)ex.StatusCode}). Retrying fetch.").ConfigureAwait(false);
+
             existing = await FindTaxonomyAsync(baseUrl, settings, resource, seed.Slug, cancellationToken);
             if (existing is not null)
             {
@@ -4385,7 +4555,8 @@ public sealed class WooProvisioningService : IDisposable
             return existing.Id;
         }
 
-        progress?.Report($"Creating attribute '{seed.Name}'…");
+        await ReportProgressAsync(progress, $"Creating attribute '{seed.Name}'…").ConfigureAwait(false);
+
         var payload = new Dictionary<string, object?>
         {
             ["name"] = seed.Name,
@@ -4399,7 +4570,8 @@ public sealed class WooProvisioningService : IDisposable
         }
         catch (WooProvisioningException ex) when (ex.StatusCode == HttpStatusCode.BadRequest || ex.StatusCode == HttpStatusCode.Conflict)
         {
-            progress?.Report($"Attribute '{seed.Name}' create returned {(int)ex.StatusCode}. Retrying fetch.");
+            await ReportProgressAsync(progress, $"Attribute '{seed.Name}' create returned {(int)ex.StatusCode}. Retrying fetch.").ConfigureAwait(false);
+
             existing = await FindAttributeAsync(baseUrl, settings, seed.Slug, cancellationToken);
             if (existing is not null)
             {
@@ -4432,7 +4604,8 @@ public sealed class WooProvisioningService : IDisposable
                 continue;
             }
 
-            progress?.Report($"Creating attribute term '{term}' for '{seed.Name}'…");
+            await ReportProgressAsync(progress, $"Creating attribute term '{term}' for '{seed.Name}'…").ConfigureAwait(false);
+
             var payload = new Dictionary<string, object?>
             {
                 ["name"] = term,
@@ -4445,7 +4618,8 @@ public sealed class WooProvisioningService : IDisposable
             }
             catch (WooProvisioningException ex) when (ex.StatusCode == HttpStatusCode.BadRequest || ex.StatusCode == HttpStatusCode.Conflict)
             {
-                progress?.Report($"Attribute term '{term}' may already exist ({(int)ex.StatusCode}).");
+                await ReportProgressAsync(progress, $"Attribute term '{term}' may already exist ({(int)ex.StatusCode}).").ConfigureAwait(false);
+
             }
         }
     }
@@ -4627,6 +4801,10 @@ public sealed class WooProvisioningService : IDisposable
             yield return $"/wp-json/{slug}/v1/settings";
         }
     }
+
+    private static bool ShouldSkipExistingProductLookup(StoreProduct product)
+        => string.IsNullOrWhiteSpace(product.Sku)
+           || string.Equals(product.Sku, "PLACEHOLDER", StringComparison.OrdinalIgnoreCase);
 
     private static void AddIfValue(IDictionary<string, object?> dict, string key, object? value)
     {
