@@ -9,6 +9,7 @@ using System.Linq;
 using System.Net.Http;
 using System.Runtime.CompilerServices;
 using System.Text;
+using System.IO.Compression;
 using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -1435,6 +1436,13 @@ public sealed class MainViewModel : INotifyPropertyChanged
             await File.WriteAllTextAsync(reportPath, report, Encoding.UTF8);
             Append($"Manual migration report: {reportPath}");
 
+            var manualBundleArchivePath = TryCreateManualBundle(storeOutputFolder, baseOutputFolder, storeId, timestamp, reportPath);
+            if (!string.IsNullOrWhiteSpace(manualBundleArchivePath))
+            {
+                Append($"Manual bundle archive: {manualBundleArchivePath}");
+                await TryAnnotateManualReportAsync(reportPath, manualBundleArchivePath);
+            }
+
             SetProvisioningContext(prods, variations, configuration, pluginBundles, themeBundles, customers, coupons, orders, subscriptions, siteContent, categoryTerms);
 
             Append("All done.");
@@ -2162,6 +2170,166 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
         item.Normalize();
         return item;
+    }
+
+    private string? TryCreateManualBundle(string storeOutputFolder, string baseOutputFolder, string storeId, string timestamp, string reportPath)
+    {
+        var deliverables = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        if (File.Exists(reportPath))
+        {
+            deliverables.Add(reportPath);
+        }
+
+        var designFolder = Path.Combine(storeOutputFolder, "design");
+        if (Directory.Exists(designFolder))
+        {
+            deliverables.Add(designFolder);
+        }
+
+        try
+        {
+            foreach (var file in Directory.EnumerateFiles(storeOutputFolder, $"{storeId}_{timestamp}_*", SearchOption.TopDirectoryOnly))
+            {
+                var extension = Path.GetExtension(file);
+                if (extension.Equals(".csv", StringComparison.OrdinalIgnoreCase)
+                    || extension.Equals(".json", StringComparison.OrdinalIgnoreCase)
+                    || extension.Equals(".jsonl", StringComparison.OrdinalIgnoreCase)
+                    || extension.Equals(".xlsx", StringComparison.OrdinalIgnoreCase))
+                {
+                    deliverables.Add(file);
+                }
+            }
+        }
+        catch (DirectoryNotFoundException)
+        {
+            // Store folder disappeared unexpectedly; treat as no deliverables.
+        }
+        catch (Exception ex)
+        {
+            Append($"Manual bundle packaging skipped: {ex.Message}");
+            return null;
+        }
+
+        if (deliverables.Count == 0)
+        {
+            return null;
+        }
+
+        var stagingFolderName = $"{storeId}_{timestamp}_manual_bundle";
+        var stagingFolder = Path.Combine(storeOutputFolder, stagingFolderName);
+
+        try
+        {
+            if (Directory.Exists(stagingFolder))
+            {
+                Directory.Delete(stagingFolder, recursive: true);
+            }
+
+            Directory.CreateDirectory(stagingFolder);
+
+            foreach (var item in deliverables)
+            {
+                if (Directory.Exists(item))
+                {
+                    var destinationDirectory = Path.Combine(stagingFolder, Path.GetFileName(item));
+                    CopyDirectory(item, destinationDirectory);
+                }
+                else if (File.Exists(item))
+                {
+                    var destinationFile = Path.Combine(stagingFolder, Path.GetFileName(item));
+                    File.Copy(item, destinationFile, overwrite: true);
+                }
+            }
+
+            var archivePath = Path.Combine(baseOutputFolder, $"{stagingFolderName}.zip");
+            if (File.Exists(archivePath))
+            {
+                File.Delete(archivePath);
+            }
+
+            ZipFile.CreateFromDirectory(stagingFolder, archivePath);
+            return archivePath;
+        }
+        catch (Exception ex)
+        {
+            Append($"Manual bundle packaging skipped: {ex.Message}");
+            return null;
+        }
+        finally
+        {
+            try
+            {
+                if (Directory.Exists(stagingFolder))
+                {
+                    Directory.Delete(stagingFolder, recursive: true);
+                }
+            }
+            catch
+            {
+                // Best-effort cleanup.
+            }
+        }
+    }
+
+    private static async Task TryAnnotateManualReportAsync(string reportPath, string archivePath)
+    {
+        try
+        {
+            if (!File.Exists(reportPath))
+            {
+                return;
+            }
+
+            var summaryNote = $"- **Archive:** `{archivePath}`";
+            var content = await File.ReadAllTextAsync(reportPath, Encoding.UTF8).ConfigureAwait(false);
+            if (content.Contains(summaryNote, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            const string sectionMarker = "\n\n##";
+            var insertionIndex = content.IndexOf(sectionMarker, StringComparison.Ordinal);
+            var insertionText = summaryNote + Environment.NewLine;
+            string updatedContent;
+
+            if (insertionIndex >= 0)
+            {
+                updatedContent = content.Insert(insertionIndex, insertionText);
+            }
+            else
+            {
+                updatedContent = content + Environment.NewLine + insertionText;
+            }
+
+            await File.WriteAllTextAsync(reportPath, updatedContent, Encoding.UTF8).ConfigureAwait(false);
+        }
+        catch
+        {
+            // Best-effort annotation; ignore failures.
+        }
+    }
+
+    private static void CopyDirectory(string sourceDirectory, string destinationDirectory)
+    {
+        if (!Directory.Exists(sourceDirectory))
+        {
+            return;
+        }
+
+        Directory.CreateDirectory(destinationDirectory);
+
+        foreach (var file in Directory.EnumerateFiles(sourceDirectory))
+        {
+            var targetFile = Path.Combine(destinationDirectory, Path.GetFileName(file));
+            File.Copy(file, targetFile, overwrite: true);
+        }
+
+        foreach (var directory in Directory.EnumerateDirectories(sourceDirectory))
+        {
+            var targetDirectory = Path.Combine(destinationDirectory, Path.GetFileName(directory));
+            CopyDirectory(directory, targetDirectory);
+        }
     }
 
     private void Append(string message)
