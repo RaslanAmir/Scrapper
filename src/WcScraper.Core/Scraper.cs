@@ -28,6 +28,8 @@ public sealed class WooScraper : IDisposable
         NumberHandling = JsonNumberHandling.AllowReadingFromString
     };
 
+    public PublicExtensionDetectionSummary? LastPublicExtensionDetection { get; private set; }
+
     public WooScraper(HttpClient? httpClient = null, bool allowLegacyTls = true, HttpRetryPolicy? httpPolicy = null)
     {
         if (httpClient is null)
@@ -293,14 +295,24 @@ public sealed class WooScraper : IDisposable
     public Task<List<PublicExtensionFootprint>> FetchPublicExtensionFootprintsAsync(
         string baseUrl,
         bool includeLinkedAssets = true,
-        IProgress<string>? log = null)
-        => FetchPublicExtensionFootprintsAsync(baseUrl, includeLinkedAssets, log, additionalEntryUrls: null);
+        IProgress<string>? log = null,
+        int? maxPages = null,
+        long? maxBytes = null)
+        => FetchPublicExtensionFootprintsAsync(
+            baseUrl,
+            includeLinkedAssets,
+            log,
+            additionalEntryUrls: null,
+            maxPages,
+            maxBytes);
 
     public async Task<List<PublicExtensionFootprint>> FetchPublicExtensionFootprintsAsync(
         string baseUrl,
         bool includeLinkedAssets,
         IProgress<string>? log,
-        IEnumerable<string>? additionalEntryUrls)
+        IEnumerable<string>? additionalEntryUrls,
+        int? maxPages = null,
+        long? maxBytes = null)
     {
         baseUrl = CleanBaseUrl(baseUrl);
 
@@ -315,12 +327,17 @@ public sealed class WooScraper : IDisposable
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
 
+        LastPublicExtensionDetection = null;
+
+        using var detector = new PublicExtensionDetector(_http, _httpPolicy);
+
         try
         {
-            using var detector = new PublicExtensionDetector(_http, _httpPolicy);
             var findings = await detector
-                .DetectAsync(baseUrl, includeLinkedAssets, log, entryList)
+                .DetectAsync(baseUrl, includeLinkedAssets, log, entryList, maxPages, maxBytes)
                 .ConfigureAwait(false);
+
+            LastPublicExtensionDetection = BuildPublicExtensionSummary(detector);
 
             return findings
                 .GroupBy(f => $"{f.Type}:{f.Slug}", StringComparer.OrdinalIgnoreCase)
@@ -378,8 +395,20 @@ public sealed class WooScraper : IDisposable
             log?.Report($"Public extension detection request failed: {ex.Message}");
         }
 
+        LastPublicExtensionDetection = BuildPublicExtensionSummary(detector);
+
         return new();
     }
+
+    private static PublicExtensionDetectionSummary BuildPublicExtensionSummary(PublicExtensionDetector detector)
+        => new(
+            detector.LastMaxPages,
+            detector.LastMaxBytes,
+            detector.ScheduledPageCount,
+            detector.ProcessedPageCount,
+            detector.TotalBytesDownloaded,
+            detector.PageLimitReached,
+            detector.ByteLimitReached);
 
     private static List<string> CombineSourceUrls(IEnumerable<PublicExtensionFootprint> footprints)
     {

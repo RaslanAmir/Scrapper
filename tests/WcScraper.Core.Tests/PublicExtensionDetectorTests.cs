@@ -60,6 +60,75 @@ public class PublicExtensionDetectorTests
             message.Contains(stylesheetUrl, StringComparison.OrdinalIgnoreCase));
     }
 
+    [Fact]
+    public async Task DetectAsync_StopsEnqueueWhenPageLimitReached()
+    {
+        const string baseUrl = "https://example.com/";
+        const string pluginAsset = "https://example.com/wp-content/plugins/sample-plugin/main.js";
+
+        var html = $$"""
+<html>
+    <head>
+        <script src="/wp-content/plugins/sample-plugin/main.js"></script>
+    </head>
+</html>
+""";
+
+        var handler = new RecordingMessageHandler(new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            [baseUrl] = html,
+            [pluginAsset] = string.Empty
+        });
+
+        using var client = new HttpClient(handler, disposeHandler: true);
+        using var detector = new PublicExtensionDetector(client);
+
+        var logMessages = new List<string>();
+        var progress = new Progress<string>(message => logMessages.Add(message));
+
+        await detector.DetectAsync(baseUrl, followLinkedAssets: true, log: progress, maxPages: 1);
+
+        Assert.Single(handler.RequestedUrls, baseUrl);
+        Assert.True(detector.PageLimitReached);
+        Assert.Equal(1, detector.ScheduledPageCount);
+        Assert.Equal(1, detector.ProcessedPageCount);
+        Assert.Contains(logMessages, message => message.Contains("page limit", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task DetectAsync_StopsEnqueueWhenByteLimitReached()
+    {
+        const string baseUrl = "https://example.com/";
+        const string themeAsset = "https://example.com/wp-content/themes/sample-theme/style.css";
+
+        var html = $$"""
+<html>
+    <head>
+        <link rel="stylesheet" href="/wp-content/themes/sample-theme/style.css" />
+    </head>
+</html>
+""";
+
+        var handler = new RecordingMessageHandler(new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            [baseUrl] = html,
+            [themeAsset] = string.Empty
+        });
+
+        using var client = new HttpClient(handler, disposeHandler: true);
+        using var detector = new PublicExtensionDetector(client);
+
+        var logMessages = new List<string>();
+        var progress = new Progress<string>(message => logMessages.Add(message));
+
+        await detector.DetectAsync(baseUrl, followLinkedAssets: true, log: progress, maxBytes: 10);
+
+        Assert.Single(handler.RequestedUrls, baseUrl);
+        Assert.True(detector.ByteLimitReached);
+        Assert.True(detector.TotalBytesDownloaded >= 10);
+        Assert.Contains(logMessages, message => message.Contains("byte limit", StringComparison.OrdinalIgnoreCase));
+    }
+
     private sealed class RecordingMessageHandler : HttpMessageHandler
     {
         private readonly Dictionary<string, string> _responses;

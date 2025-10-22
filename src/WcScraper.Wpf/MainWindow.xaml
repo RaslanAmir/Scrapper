@@ -162,6 +162,31 @@
                              MinWidth="320"
                              MinHeight="60"
                              VerticalScrollBarVisibility="Auto"/>
+                    <Grid Margin="0,8,0,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+                        <TextBlock Text="Max pages to crawl (0 or blank = unlimited):"
+                                   Margin="0,0,8,4"
+                                   VerticalAlignment="Center"/>
+                        <TextBox Grid.Column="1"
+                                 Text="{Binding PublicExtensionMaxPages, UpdateSourceTrigger=PropertyChanged}"
+                                 MinWidth="120"/>
+                        <TextBlock Grid.Row="1"
+                                   Text="Max bytes to download (0 or blank = unlimited):"
+                                   Margin="0,8,8,0"
+                                   VerticalAlignment="Center"/>
+                        <TextBox Grid.Row="1"
+                                 Grid.Column="1"
+                                 Text="{Binding PublicExtensionMaxBytes, UpdateSourceTrigger=PropertyChanged}"
+                                 MinWidth="120"
+                                 ToolTip="Enter total byte ceiling for the public asset crawl. Example: 3145728 (~3 MB)."/>
+                    </Grid>
                 </StackPanel>
                 <CheckBox Content="Export public design snapshot (homepage HTML + inline CSS + fonts)"
                           IsChecked="{Binding ExportPublicDesignSnapshot}"
