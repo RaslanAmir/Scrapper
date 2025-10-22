@@ -10,6 +10,7 @@ using System.Security.Authentication;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Web;
 
@@ -164,6 +165,12 @@ public sealed class WooScraper : IDisposable
         int perPage = 100,
         int maxPages = 100)
         => FetchWordPressContentAsync<WordPressPost>(baseUrl, "posts", perPage, maxPages, log);
+
+    public Task<FrontEndDesignSnapshotResult> FetchPublicDesignSnapshotAsync(
+        string baseUrl,
+        IProgress<string>? log = null,
+        CancellationToken cancellationToken = default)
+        => FrontEndDesignSnapshot.CaptureAsync(_http, baseUrl, log, cancellationToken);
 
     public async Task<List<WordPressMediaItem>> FetchWordPressMediaAsync(
         string baseUrl,

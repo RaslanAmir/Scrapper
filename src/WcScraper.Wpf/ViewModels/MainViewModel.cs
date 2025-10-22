@@ -45,6 +45,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private bool _expThemesCsv = false;
     private bool _expThemesJsonl = false;
     private bool _expPublicExtensionFootprints = false;
+    private bool _expPublicDesignSnapshot = false;
     private bool _expStoreConfiguration = false;
     private bool _importStoreConfiguration = false;
     private PlatformMode _selectedPlatform = PlatformMode.WooCommerce;
@@ -107,6 +108,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public bool ExportThemesCsv { get => _expThemesCsv; set { _expThemesCsv = value; OnPropertyChanged(); } }
     public bool ExportThemesJsonl { get => _expThemesJsonl; set { _expThemesJsonl = value; OnPropertyChanged(); } }
     public bool ExportPublicExtensionFootprints { get => _expPublicExtensionFootprints; set { _expPublicExtensionFootprints = value; OnPropertyChanged(); } }
+    public bool ExportPublicDesignSnapshot { get => _expPublicDesignSnapshot; set { _expPublicDesignSnapshot = value; OnPropertyChanged(); } }
     public bool ExportStoreConfiguration { get => _expStoreConfiguration; set { _expStoreConfiguration = value; OnPropertyChanged(); } }
     public bool IsRunning
     {
@@ -197,6 +199,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public bool CanExportExtensions => HasWordPressCredentials;
 
     public bool CanExportPublicExtensionFootprints => !CanExportExtensions;
+    public bool CanExportPublicDesignSnapshot => !HasWordPressCredentials;
 
     public bool CanExportStoreConfiguration => HasWordPressCredentials;
     public string TargetStoreUrl { get => _targetStoreUrl; set { _targetStoreUrl = value; OnPropertyChanged(); } }
@@ -388,6 +391,9 @@ public sealed class MainViewModel : INotifyPropertyChanged
             List<InstalledPlugin> plugins = new();
             List<InstalledTheme> themes = new();
             List<PublicExtensionFootprint> publicExtensionFootprints = new();
+            FrontEndDesignSnapshotResult? designSnapshot = null;
+            bool attemptedDesignSnapshot = false;
+            bool designSnapshotFailed = false;
             bool attemptedPluginFetch = false;
             bool attemptedThemeFetch = false;
             bool attemptedPublicExtensionFootprintFetch = false;
@@ -550,6 +556,31 @@ public sealed class MainViewModel : INotifyPropertyChanged
                     {
                         Append("No public plugin/theme slugs were detected.");
                     }
+                }
+            }
+
+            if (SelectedPlatform == PlatformMode.WooCommerce && ExportPublicDesignSnapshot)
+            {
+                attemptedDesignSnapshot = true;
+                try
+                {
+                    Append("Capturing public front-end design snapshot…");
+                    designSnapshot = await _wooScraper.FetchPublicDesignSnapshotAsync(targetUrl, logger);
+                    if (designSnapshot is null || string.IsNullOrWhiteSpace(designSnapshot.RawHtml))
+                    {
+                        Append("Public design snapshot capture returned no HTML.");
+                    }
+                    else
+                    {
+                        var fontCount = designSnapshot.FontUrls.Count;
+                        var inlineLength = designSnapshot.InlineCss.Length;
+                        Append($"Captured public design snapshot (inline CSS length: {inlineLength:N0} chars, fonts: {fontCount}).");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    designSnapshotFailed = true;
+                    Append($"Design snapshot capture failed: {ex.Message}");
                 }
             }
 
@@ -931,6 +962,32 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 else if (attemptedPublicExtensionFootprintFetch)
                 {
                     Append("Public extension footprint export skipped (no slugs detected).");
+                }
+            }
+
+            if (SelectedPlatform == PlatformMode.WooCommerce && ExportPublicDesignSnapshot)
+            {
+                if (!designSnapshotFailed && designSnapshot is not null && !string.IsNullOrWhiteSpace(designSnapshot.RawHtml))
+                {
+                    var designRoot = Path.Combine(storeOutputFolder, "design");
+                    Directory.CreateDirectory(designRoot);
+
+                    var htmlPath = Path.Combine(designRoot, "homepage.html");
+                    await File.WriteAllTextAsync(htmlPath, designSnapshot.RawHtml, Encoding.UTF8);
+                    Append($"Wrote {htmlPath}");
+
+                    var cssPath = Path.Combine(designRoot, "inline-styles.css");
+                    await File.WriteAllTextAsync(cssPath, designSnapshot.InlineCss, Encoding.UTF8);
+                    Append($"Wrote {cssPath}");
+
+                    var fontsPath = Path.Combine(designRoot, "fonts.json");
+                    var fontsJson = JsonSerializer.Serialize(designSnapshot.FontUrls, _artifactWriteOptions);
+                    await File.WriteAllTextAsync(fontsPath, fontsJson, Encoding.UTF8);
+                    Append($"Wrote {fontsPath}");
+                }
+                else if (attemptedDesignSnapshot && !designSnapshotFailed)
+                {
+                    Append("Design snapshot export skipped (no HTML to write).");
                 }
             }
 
@@ -2302,10 +2359,16 @@ public sealed class MainViewModel : INotifyPropertyChanged
         OnPropertyChanged(nameof(CanExportExtensions));
         OnPropertyChanged(nameof(CanExportStoreConfiguration));
         OnPropertyChanged(nameof(CanExportPublicExtensionFootprints));
+        OnPropertyChanged(nameof(CanExportPublicDesignSnapshot));
 
         if (HasWordPressCredentials && ExportPublicExtensionFootprints)
         {
             ExportPublicExtensionFootprints = false;
+        }
+
+        if (HasWordPressCredentials && ExportPublicDesignSnapshot)
+        {
+            ExportPublicDesignSnapshot = false;
         }
     }
 }
