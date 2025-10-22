@@ -79,7 +79,7 @@ public sealed class PublicExtensionDetector : IDisposable
         var urlsToProcess = new Queue<string>();
         urlsToProcess.Enqueue(baseUri.ToString());
 
-        var findings = new Dictionary<(string Type, string Slug), PublicExtensionFinding>(StringComparer.OrdinalIgnoreCase);
+        var findings = new Dictionary<(string Type, string Slug), PublicExtensionFinding>(TypeSlugComparer.Instance);
 
         while (urlsToProcess.Count > 0)
         {
@@ -276,6 +276,24 @@ public sealed class PublicExtensionDetector : IDisposable
         slug = Uri.UnescapeDataString(slug);
         slug = slug.ToLowerInvariant();
         return slug;
+    }
+
+    private sealed class TypeSlugComparer : IEqualityComparer<(string Type, string Slug)>
+    {
+        public static TypeSlugComparer Instance { get; } = new();
+
+        public bool Equals((string Type, string Slug) x, (string Type, string Slug) y)
+        {
+            return StringComparer.OrdinalIgnoreCase.Equals(x.Type, y.Type)
+                && StringComparer.OrdinalIgnoreCase.Equals(x.Slug, y.Slug);
+        }
+
+        public int GetHashCode((string Type, string Slug) obj)
+        {
+            return HashCode.Combine(
+                StringComparer.OrdinalIgnoreCase.GetHashCode(obj.Type),
+                StringComparer.OrdinalIgnoreCase.GetHashCode(obj.Slug));
+        }
     }
 }
 
