@@ -905,15 +905,17 @@ public sealed class MainViewModel : INotifyPropertyChanged
                         {
                             ["type"] = f.Type,
                             ["slug"] = f.Slug,
-                            ["source_url"] = f.SourceUrl
+                            ["source_url"] = f.SourceUrl,
+                            ["asset_url"] = f.AssetUrl,
+                            ["version_hint"] = f.VersionHint
                         });
                     CsvExporter.Write(csvPath, rows);
-                    Append($"Wrote {csvPath} (slug-only export; manual install required).");
+                    Append($"Wrote {csvPath} (includes asset URLs and version cues when available; manual install required).");
 
                     var jsonPath = Path.Combine(storeOutputFolder, $"{storeId}_{timestamp}_public_extension_footprints.json");
                     var json = JsonSerializer.Serialize(publicExtensionFootprints, _artifactWriteOptions);
                     await File.WriteAllTextAsync(jsonPath, json, Encoding.UTF8);
-                    Append($"Wrote {jsonPath} (slug-only export; manual install required).");
+                    Append($"Wrote {jsonPath} (includes asset URLs and version cues when available; manual install required).");
                 }
                 else if (attemptedPublicExtensionFootprintFetch)
                 {

@@ -257,11 +257,23 @@ public sealed class WooScraper : IDisposable
                 .Select(group =>
                 {
                     var first = group.First();
+                    var sourceUrl = group
+                        .Select(f => f.SourceUrl)
+                        .FirstOrDefault(url => !string.IsNullOrWhiteSpace(url))
+                        ?? first.SourceUrl;
+                    var assetUrl = group
+                        .Select(f => f.AssetUrl)
+                        .FirstOrDefault(url => !string.IsNullOrWhiteSpace(url));
+                    var versionHint = group
+                        .Select(f => f.VersionHint)
+                        .FirstOrDefault(v => !string.IsNullOrWhiteSpace(v));
                     return new PublicExtensionFootprint
                     {
                         Slug = first.Slug,
                         Type = first.Type,
-                        SourceUrl = first.SourceUrl
+                        SourceUrl = sourceUrl,
+                        AssetUrl = assetUrl,
+                        VersionHint = versionHint
                     };
                 })
                 .ToList();
