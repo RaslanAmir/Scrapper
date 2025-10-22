@@ -46,6 +46,9 @@ public sealed class PublicExtensionDetector : IDisposable
     private readonly bool _ownsClient;
     private readonly HttpRetryPolicy _httpPolicy;
 
+    private VersionEvidence _wordpressVersion = VersionEvidence.None;
+    private VersionEvidence _wooCommerceVersion = VersionEvidence.None;
+
     public int? LastMaxPages { get; private set; }
 
     public long? LastMaxBytes { get; private set; }
@@ -59,6 +62,10 @@ public sealed class PublicExtensionDetector : IDisposable
     public int ProcessedPageCount { get; private set; }
 
     public long TotalBytesDownloaded { get; private set; }
+
+    public string? WordPressVersion => _wordpressVersion.Version;
+
+    public string? WooCommerceVersion => _wooCommerceVersion.Version;
 
     public PublicExtensionDetector(HttpClient? httpClient = null, HttpRetryPolicy? httpRetryPolicy = null)
     {
@@ -121,6 +128,8 @@ public sealed class PublicExtensionDetector : IDisposable
         TotalBytesDownloaded = 0;
         _pageLimitLogged = false;
         _byteLimitLogged = false;
+        _wordpressVersion = VersionEvidence.None;
+        _wooCommerceVersion = VersionEvidence.None;
 
         _log = log;
 
@@ -202,6 +211,8 @@ public sealed class PublicExtensionDetector : IDisposable
 
             foreach (var asset in ExtractLinkedAssets(content, baseUri))
             {
+                InspectAssetForPlatformVersions(asset.Url);
+
                 if (!seenUrls.Contains(asset.Url))
                 {
                     if (asset.IsPreload)
@@ -374,7 +385,7 @@ public sealed class PublicExtensionDetector : IDisposable
         return $"{bytes:N0} B";
     }
 
-    private static void ScanForExtensions(
+    private void ScanForExtensions(
         string sourceUrl,
         string content,
         IDictionary<(string Type, string Slug), PublicExtensionFootprint> findings)
@@ -395,6 +406,8 @@ public sealed class PublicExtensionDetector : IDisposable
 
             var assetUrl = ExtractAssetUrl(content, match);
             var versionHint = ExtractVersionHint(assetUrl, match);
+
+            InspectAssetForPlatformVersions(assetUrl);
 
             var key = (type, slug);
             if (!findings.TryGetValue(key, out var footprint))
@@ -640,6 +653,150 @@ public sealed class PublicExtensionDetector : IDisposable
         return null;
     }
 
+    private void InspectAssetForPlatformVersions(string? assetUrl)
+    {
+        if (string.IsNullOrWhiteSpace(assetUrl))
+        {
+            return;
+        }
+
+        var wordpressEvidence = ExtractWordPressVersionEvidence(assetUrl);
+        if (wordpressEvidence.HasValue && wordpressEvidence.IsBetterThan(_wordpressVersion))
+        {
+            _wordpressVersion = wordpressEvidence;
+        }
+
+        var wooEvidence = ExtractWooCommerceVersionEvidence(assetUrl);
+        if (wooEvidence.HasValue && wooEvidence.IsBetterThan(_wooCommerceVersion))
+        {
+            _wooCommerceVersion = wooEvidence;
+        }
+    }
+
+    private static VersionEvidence ExtractWordPressVersionEvidence(string assetUrl)
+    {
+        if (assetUrl.IndexOf("wp-includes", StringComparison.OrdinalIgnoreCase) < 0)
+        {
+            return VersionEvidence.None;
+        }
+
+        return ExtractVersionEvidence(assetUrl);
+    }
+
+    private static VersionEvidence ExtractWooCommerceVersionEvidence(string assetUrl)
+    {
+        if (assetUrl.IndexOf("woocommerce", StringComparison.OrdinalIgnoreCase) < 0)
+        {
+            return VersionEvidence.None;
+        }
+
+        var matchesPluginFolder = assetUrl.IndexOf("wp-content/plugins/woocommerce", StringComparison.OrdinalIgnoreCase) >= 0;
+        var matchesAssetsFolder = assetUrl.IndexOf("/woocommerce/", StringComparison.OrdinalIgnoreCase) >= 0
+            && assetUrl.IndexOf("/assets/", StringComparison.OrdinalIgnoreCase) >= 0;
+
+        if (!matchesPluginFolder && !matchesAssetsFolder)
+        {
+            return VersionEvidence.None;
+        }
+
+        return ExtractVersionEvidence(assetUrl);
+    }
+
+    private static VersionEvidence ExtractVersionEvidence(string assetUrl)
+    {
+        if (TryCreateEvidence(TryGetQueryVersion(assetUrl), VersionEvidence.QueryConfidence, out var evidence))
+        {
+            return evidence;
+        }
+
+        if (TryCreateEvidence(TryExtractPathVersion(assetUrl), VersionEvidence.PathConfidence, out evidence))
+        {
+            return evidence;
+        }
+
+        return VersionEvidence.None;
+    }
+
+    private static string? TryExtractPathVersion(string assetUrl)
+    {
+        var normalized = assetUrl;
+        var fragmentIndex = normalized.IndexOf('#');
+        if (fragmentIndex >= 0)
+        {
+            normalized = normalized[..fragmentIndex];
+        }
+
+        var queryIndex = normalized.IndexOf('?');
+        if (queryIndex >= 0)
+        {
+            normalized = normalized[..queryIndex];
+        }
+
+        var fileName = normalized.Split('/', StringSplitOptions.RemoveEmptyEntries).LastOrDefault();
+        if (string.IsNullOrWhiteSpace(fileName))
+        {
+            return null;
+        }
+
+        var match = VersionTokenRegex.Match(fileName);
+        return match.Success ? match.Groups["version"].Value : null;
+    }
+
+    private static bool TryCreateEvidence(string? version, int confidence, out VersionEvidence evidence)
+    {
+        if (string.IsNullOrWhiteSpace(version))
+        {
+            evidence = VersionEvidence.None;
+            return false;
+        }
+
+        var trimmed = version.Trim();
+        var segments = ExtractVersionSegments(trimmed);
+        if (segments.Length == 0)
+        {
+            evidence = VersionEvidence.None;
+            return false;
+        }
+
+        evidence = new VersionEvidence(trimmed, confidence, segments);
+        return true;
+    }
+
+    private static int[] ExtractVersionSegments(string version)
+    {
+        var tokens = version.Split('.', StringSplitOptions.RemoveEmptyEntries);
+        var segments = new List<int>();
+
+        foreach (var token in tokens)
+        {
+            var span = token.AsSpan();
+            var length = 0;
+            while (length < span.Length && char.IsDigit(span[length]))
+            {
+                length++;
+            }
+
+            if (length == 0)
+            {
+                break;
+            }
+
+            if (!int.TryParse(span[..length], NumberStyles.None, CultureInfo.InvariantCulture, out var value))
+            {
+                break;
+            }
+
+            segments.Add(value);
+
+            if (length < span.Length)
+            {
+                break;
+            }
+        }
+
+        return segments.ToArray();
+    }
+
     private static bool IsVersionQueryKey(string key) =>
         key.Equals("ver", StringComparison.OrdinalIgnoreCase)
         || key.Equals("version", StringComparison.OrdinalIgnoreCase)
@@ -799,6 +956,63 @@ public sealed class PublicExtensionDetector : IDisposable
         Script
     }
 
+    private readonly struct VersionEvidence
+    {
+        public const int QueryConfidence = 3;
+        public const int PathConfidence = 2;
+
+        public static readonly VersionEvidence None = new(string.Empty, 0, Array.Empty<int>());
+
+        public VersionEvidence(string version, int confidence, int[] segments)
+        {
+            Version = version;
+            Confidence = confidence;
+            Segments = segments ?? Array.Empty<int>();
+        }
+
+        public string Version { get; }
+
+        public int Confidence { get; }
+
+        public int[] Segments { get; }
+
+        public bool HasValue => Confidence > 0 && !string.IsNullOrEmpty(Version);
+
+        public bool IsBetterThan(VersionEvidence other)
+        {
+            if (!HasValue)
+            {
+                return false;
+            }
+
+            if (!other.HasValue)
+            {
+                return true;
+            }
+
+            if (Confidence != other.Confidence)
+            {
+                return Confidence > other.Confidence;
+            }
+
+            var maxSegments = Math.Max(Segments.Length, other.Segments.Length);
+            for (var i = 0; i < maxSegments; i++)
+            {
+                var current = i < Segments.Length ? Segments[i] : 0;
+                var previous = i < other.Segments.Length ? other.Segments[i] : 0;
+
+                if (current == previous)
+                {
+                    continue;
+                }
+
+                return current > previous;
+            }
+
+            return string.Compare(Version, other.Version, StringComparison.OrdinalIgnoreCase) > 0;
+        }
+    }
+
     private static string? ResolveUrl(Uri baseUri, string candidate)
     {
         if (string.IsNullOrWhiteSpace(candidate))
@@ -856,5 +1070,7 @@ public sealed record PublicExtensionDetectionSummary(
     int ProcessedPageCount,
     long TotalBytesDownloaded,
     bool PageLimitReached,
-    bool ByteLimitReached);
+    bool ByteLimitReached,
+    string? WordPressVersion,
+    string? WooCommerceVersion);
 }

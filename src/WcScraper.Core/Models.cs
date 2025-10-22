@@ -110,6 +110,8 @@ public sealed class PublicExtensionFootprint
     public List<string> SourceUrls { get; set; } = new();
     public string? AssetUrl { get; set; }
     public string? VersionHint { get; set; }
+    public string? WordPressVersion { get; set; }
+    public string? WooCommerceVersion { get; set; }
     public string? DirectoryTitle { get; set; }
     public string? DirectoryAuthor { get; set; }
     public string? DirectoryHomepage { get; set; }
