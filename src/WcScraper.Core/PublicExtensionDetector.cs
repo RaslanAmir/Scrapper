@@ -24,6 +24,14 @@ public sealed class PublicExtensionDetector : IDisposable
         @"<link\b[^>]*>",
         RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
+    private static readonly Regex LinkRelRegex = new(
+        @"rel\s*=\s*(['\"])(?<value>.*?)\1",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.Singleline);
+
+    private static readonly Regex LinkAsRegex = new(
+        @"as\s*=\s*(['\"])(?<value>.*?)\1",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.Singleline);
+
     private static readonly Regex ScriptSrcRegex = new(
         @"<script\b[^>]*src\s*=\s*(['\"]) (?<url>.*?)\1",
         RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.Singleline | RegexOptions.IgnorePatternWhitespace);
@@ -139,11 +147,16 @@ public sealed class PublicExtensionDetector : IDisposable
                 continue;
             }
 
-            foreach (var assetUrl in ExtractLinkedAssets(content, baseUri))
+            foreach (var asset in ExtractLinkedAssets(content, baseUri))
             {
-                if (!seenUrls.Contains(assetUrl))
+                if (!seenUrls.Contains(asset.Url))
                 {
-                    urlsToProcess.Enqueue(assetUrl);
+                    if (asset.IsPreload)
+                    {
+                        log?.Report($"Following {asset.PreloadDescription} asset {asset.Url}");
+                    }
+
+                    urlsToProcess.Enqueue(asset.Url);
                 }
             }
         }
@@ -461,17 +474,13 @@ public sealed class PublicExtensionDetector : IDisposable
         || key.Equals("version", StringComparison.OrdinalIgnoreCase)
         || key.Equals("v", StringComparison.OrdinalIgnoreCase);
 
-    private static IEnumerable<string> ExtractLinkedAssets(string html, Uri baseUri)
+    private static IEnumerable<LinkedAsset> ExtractLinkedAssets(string html, Uri baseUri)
     {
-        var assets = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var assets = new Dictionary<string, LinkedAsset>(StringComparer.OrdinalIgnoreCase);
 
         foreach (Match linkMatch in LinkTagRegex.Matches(html))
         {
             var tag = linkMatch.Value;
-            if (tag.IndexOf("stylesheet", StringComparison.OrdinalIgnoreCase) < 0)
-            {
-                continue;
-            }
 
             var hrefMatch = HrefRegex.Match(tag);
             if (!hrefMatch.Success)
@@ -479,10 +488,21 @@ public sealed class PublicExtensionDetector : IDisposable
                 continue;
             }
 
-            var resolved = ResolveUrl(baseUri, hrefMatch.Groups["url"].Value);
-            if (resolved is not null)
+            var relTokens = ExtractRelTokens(LinkRelRegex.Match(tag));
+            var asValue = ExtractAttributeValue(LinkAsRegex.Match(tag));
+            var assetKind = DetermineLinkAssetKind(relTokens, asValue, tag);
+
+            if (assetKind == LinkedAssetKind.None)
             {
-                assets.Add(resolved);
+                continue;
+            }
+
+            var resolved = ResolveUrl(baseUri, hrefMatch.Groups["url"].Value);
+            if (resolved is not null && !assets.ContainsKey(resolved))
+            {
+                var isPreload = IsPreloadRel(relTokens);
+                var preloadDescription = DeterminePreloadDescription(relTokens, assetKind);
+                assets[resolved] = new LinkedAsset(resolved, assetKind, isPreload, preloadDescription);
             }
         }
 
@@ -494,13 +514,118 @@ public sealed class PublicExtensionDetector : IDisposable
             }
 
             var resolved = ResolveUrl(baseUri, scriptMatch.Groups["url"].Value);
-            if (resolved is not null)
+            if (resolved is not null && !assets.ContainsKey(resolved))
             {
-                assets.Add(resolved);
+                assets[resolved] = new LinkedAsset(resolved, LinkedAssetKind.Script, false, null);
             }
         }
 
-        return assets;
+        return assets.Values;
+    }
+
+    private static LinkedAssetKind DetermineLinkAssetKind(HashSet<string> relTokens, string? asValue, string tag)
+    {
+        if (relTokens.Contains("stylesheet"))
+        {
+            return LinkedAssetKind.Stylesheet;
+        }
+
+        if (relTokens.Count == 0 && tag.IndexOf("stylesheet", StringComparison.OrdinalIgnoreCase) >= 0)
+        {
+            return LinkedAssetKind.Stylesheet;
+        }
+
+        var normalizedAs = string.IsNullOrWhiteSpace(asValue)
+            ? null
+            : asValue.Trim();
+
+        if (relTokens.Contains("modulepreload"))
+        {
+            if (normalizedAs is not null && normalizedAs.Equals("style", StringComparison.OrdinalIgnoreCase))
+            {
+                return LinkedAssetKind.Stylesheet;
+            }
+
+            return LinkedAssetKind.Script;
+        }
+
+        if (relTokens.Contains("preload") || relTokens.Contains("prefetch"))
+        {
+            if (normalizedAs is not null)
+            {
+                if (normalizedAs.Equals("style", StringComparison.OrdinalIgnoreCase))
+                {
+                    return LinkedAssetKind.Stylesheet;
+                }
+
+                if (normalizedAs.Equals("script", StringComparison.OrdinalIgnoreCase))
+                {
+                    return LinkedAssetKind.Script;
+                }
+            }
+        }
+
+        return LinkedAssetKind.None;
+    }
+
+    private static bool IsPreloadRel(HashSet<string> relTokens) =>
+        relTokens.Contains("preload") || relTokens.Contains("modulepreload") || relTokens.Contains("prefetch");
+
+    private static string? DeterminePreloadDescription(HashSet<string> relTokens, LinkedAssetKind kind)
+    {
+        if (relTokens.Contains("modulepreload"))
+        {
+            return "modulepreload";
+        }
+
+        if (relTokens.Contains("preload"))
+        {
+            return kind switch
+            {
+                LinkedAssetKind.Stylesheet => "preload stylesheet",
+                LinkedAssetKind.Script => "preload script",
+                _ => "preload"
+            };
+        }
+
+        if (relTokens.Contains("prefetch"))
+        {
+            return "prefetch";
+        }
+
+        return null;
+    }
+
+    private static HashSet<string> ExtractRelTokens(Match match)
+    {
+        var tokens = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (!match.Success)
+        {
+            return tokens;
+        }
+
+        foreach (var token in match.Groups["value"].Value.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries))
+        {
+            var trimmed = token.Trim();
+            if (!string.IsNullOrEmpty(trimmed))
+            {
+                tokens.Add(trimmed);
+            }
+        }
+
+        return tokens;
+    }
+
+    private static string? ExtractAttributeValue(Match match) =>
+        match.Success ? match.Groups["value"].Value : null;
+
+    private sealed record LinkedAsset(string Url, LinkedAssetKind Kind, bool IsPreload, string? PreloadDescription);
+
+    private enum LinkedAssetKind
+    {
+        None = 0,
+        Stylesheet,
+        Script
     }
 
     private static string? ResolveUrl(Uri baseUri, string candidate)
