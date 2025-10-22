@@ -238,6 +238,54 @@ public sealed class WooScraper : IDisposable
         return all;
     }
 
+    public async Task<List<PublicExtensionFootprint>> FetchPublicExtensionFootprintsAsync(
+        string baseUrl,
+        bool includeLinkedAssets = true,
+        IProgress<string>? log = null)
+    {
+        baseUrl = CleanBaseUrl(baseUrl);
+
+        try
+        {
+            using var detector = new PublicExtensionDetector(_http);
+            var findings = await detector
+                .DetectAsync(baseUrl, includeLinkedAssets, log)
+                .ConfigureAwait(false);
+
+            return findings
+                .GroupBy(f => $"{f.Type}:{f.Slug}", StringComparer.OrdinalIgnoreCase)
+                .Select(group =>
+                {
+                    var first = group.First();
+                    return new PublicExtensionFootprint
+                    {
+                        Slug = first.Slug,
+                        Type = first.Type,
+                        SourceUrl = first.SourceUrl
+                    };
+                })
+                .ToList();
+        }
+        catch (TaskCanceledException ex)
+        {
+            log?.Report($"Public extension detection request timed out: {ex.Message}");
+        }
+        catch (AuthenticationException ex)
+        {
+            log?.Report($"Public extension detection TLS handshake failed: {ex.Message}");
+        }
+        catch (IOException ex)
+        {
+            log?.Report($"Public extension detection I/O failure: {ex.Message}");
+        }
+        catch (HttpRequestException ex)
+        {
+            log?.Report($"Public extension detection request failed: {ex.Message}");
+        }
+
+        return new();
+    }
+
     private async Task PopulateCategoryMetadataAsync(string baseUrl, List<StoreProduct> products, IProgress<string>? log)
     {
         if (products.Count == 0)
