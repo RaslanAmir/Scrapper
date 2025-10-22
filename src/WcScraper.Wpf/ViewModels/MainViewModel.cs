@@ -55,6 +55,10 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private bool _expPublicDesignScreenshots = false;
     private bool _expStoreConfiguration = false;
     private bool _importStoreConfiguration = false;
+    private bool _enableHttpRetries = true;
+    private int _httpRetryAttempts = 3;
+    private double _httpRetryBaseDelaySeconds = 1;
+    private double _httpRetryMaxDelaySeconds = 30;
     private PlatformMode _selectedPlatform = PlatformMode.WooCommerce;
     private string _shopifyStoreUrl = "";
     private string _shopifyAdminAccessToken = "";
@@ -184,6 +188,85 @@ public sealed class MainViewModel : INotifyPropertyChanged
             OnPropertyChanged();
             RunCommand.RaiseCanExecuteChanged();
             ReplicateCommand.RaiseCanExecuteChanged();
+        }
+    }
+
+    public bool EnableHttpRetries
+    {
+        get => _enableHttpRetries;
+        set
+        {
+            if (_enableHttpRetries == value)
+            {
+                return;
+            }
+
+            _enableHttpRetries = value;
+            OnPropertyChanged();
+        }
+    }
+
+    public int HttpRetryAttempts
+    {
+        get => _httpRetryAttempts;
+        set
+        {
+            var newValue = Math.Max(0, value);
+            if (_httpRetryAttempts == newValue)
+            {
+                return;
+            }
+
+            _httpRetryAttempts = newValue;
+            OnPropertyChanged();
+        }
+    }
+
+    public double HttpRetryBaseDelaySeconds
+    {
+        get => _httpRetryBaseDelaySeconds;
+        set
+        {
+            double newValue;
+            if (double.IsNaN(value) || double.IsInfinity(value))
+            {
+                newValue = _httpRetryBaseDelaySeconds;
+            }
+            else
+            {
+                newValue = Math.Max(0, value);
+            }
+            if (Math.Abs(_httpRetryBaseDelaySeconds - newValue) < 0.0001)
+            {
+                return;
+            }
+
+            _httpRetryBaseDelaySeconds = newValue;
+            OnPropertyChanged();
+        }
+    }
+
+    public double HttpRetryMaxDelaySeconds
+    {
+        get => _httpRetryMaxDelaySeconds;
+        set
+        {
+            double newValue;
+            if (double.IsNaN(value) || double.IsInfinity(value))
+            {
+                newValue = _httpRetryMaxDelaySeconds;
+            }
+            else
+            {
+                newValue = Math.Max(0, value);
+            }
+            if (Math.Abs(_httpRetryMaxDelaySeconds - newValue) < 0.0001)
+            {
+                return;
+            }
+
+            _httpRetryMaxDelaySeconds = newValue;
+            OnPropertyChanged();
         }
     }
 
@@ -523,6 +606,14 @@ public sealed class MainViewModel : INotifyPropertyChanged
         }
     }
 
+    private (int Attempts, TimeSpan BaseDelay, TimeSpan MaxDelay) GetRetrySettings()
+    {
+        var attempts = _enableHttpRetries ? Math.Max(0, _httpRetryAttempts) : 0;
+        var baseSeconds = Math.Max(0.1, _httpRetryBaseDelaySeconds);
+        var maxSeconds = Math.Max(baseSeconds, Math.Max(0.1, _httpRetryMaxDelaySeconds));
+        return (attempts, TimeSpan.FromSeconds(baseSeconds), TimeSpan.FromSeconds(maxSeconds));
+    }
+
     private async Task OnRunAsync()
     {
         var targetUrl = SelectedPlatform == PlatformMode.WooCommerce ? StoreUrl : ShopifyStoreUrl;
@@ -531,6 +622,10 @@ public sealed class MainViewModel : INotifyPropertyChanged
             Append("Please enter a store URL (e.g., https://example.com).");
             return;
         }
+
+        var retrySettings = GetRetrySettings();
+        var retryPolicy = new HttpRetryPolicy(retrySettings.Attempts, retrySettings.BaseDelay, retrySettings.MaxDelay);
+        _wooScraper.HttpPolicy = retryPolicy;
 
         ResetProvisioningContext();
 
@@ -1524,7 +1619,11 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 designSnapshotFailed,
                 missingCredentialExports,
                 logSnapshot,
-                DateTime.UtcNow);
+                DateTime.UtcNow,
+                EnableHttpRetries,
+                retrySettings.Attempts,
+                retrySettings.BaseDelay,
+                retrySettings.MaxDelay);
 
             var reportBuilder = new ManualMigrationReportBuilder();
             var report = reportBuilder.Build(reportContext);

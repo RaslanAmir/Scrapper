@@ -42,8 +42,9 @@ public sealed class PublicExtensionDetector : IDisposable
 
     private readonly HttpClient _httpClient;
     private readonly bool _ownsClient;
+    private readonly HttpRetryPolicy _httpPolicy;
 
-    public PublicExtensionDetector(HttpClient? httpClient = null)
+    public PublicExtensionDetector(HttpClient? httpClient = null, HttpRetryPolicy? httpRetryPolicy = null)
     {
         if (httpClient is null)
         {
@@ -58,6 +59,8 @@ public sealed class PublicExtensionDetector : IDisposable
             _httpClient = httpClient;
             _ownsClient = false;
         }
+
+        _httpPolicy = httpRetryPolicy ?? new HttpRetryPolicy();
     }
 
     public void Dispose()
@@ -169,7 +172,19 @@ public sealed class PublicExtensionDetector : IDisposable
         try
         {
             log?.Report($"GET {url}");
-            using var response = await _httpClient.GetAsync(url, cancellationToken).ConfigureAwait(false);
+            using var response = await _httpPolicy.SendAsync(
+                () => _httpClient.GetAsync(url, cancellationToken),
+                cancellationToken,
+                attempt =>
+                {
+                    if (log is not null)
+                    {
+                        var delay = attempt.Delay.TotalSeconds >= 1
+                            ? $"{attempt.Delay.TotalSeconds:F1}s"
+                            : $"{attempt.Delay.TotalMilliseconds:F0}ms";
+                        log.Report($"Retrying {url} in {delay} (attempt {attempt.AttemptNumber}): {attempt.Reason}");
+                    }
+                }).ConfigureAwait(false);
             if (!response.IsSuccessStatusCode)
             {
                 if ((int)response.StatusCode == 404)

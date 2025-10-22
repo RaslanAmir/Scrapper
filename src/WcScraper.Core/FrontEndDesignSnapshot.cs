@@ -60,13 +60,16 @@ public static class FrontEndDesignSnapshot
         string baseUrl,
         IEnumerable<string>? additionalPageUrls = null,
         IProgress<string>? log = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        HttpRetryPolicy? retryPolicy = null)
     {
         if (httpClient is null) throw new ArgumentNullException(nameof(httpClient));
         if (string.IsNullOrWhiteSpace(baseUrl)) throw new ArgumentException("Base URL is required.", nameof(baseUrl));
 
         baseUrl = WooScraper.CleanBaseUrl(baseUrl);
         var homeUrl = baseUrl + "/";
+
+        retryPolicy ??= new HttpRetryPolicy();
 
         var pageUrls = BuildPageUrlList(homeUrl, additionalPageUrls);
         var processedUrls = new List<string>(pageUrls.Count);
@@ -86,6 +89,7 @@ public static class FrontEndDesignSnapshot
         {
             var builder = await CapturePageAsync(
                 httpClient,
+                retryPolicy,
                 pageUrl,
                 aggregatedStylesheets,
                 stylesheetLookup,
@@ -119,7 +123,10 @@ public static class FrontEndDesignSnapshot
             try
             {
                 log?.Report($"GET {request.ResolvedUrl}");
-                using var fontResponse = await httpClient.GetAsync(request.ResolvedUrl, cancellationToken);
+                using var fontResponse = await retryPolicy.SendAsync(
+                    () => httpClient.GetAsync(request.ResolvedUrl, cancellationToken),
+                    cancellationToken,
+                    attempt => ReportRetry(log, request.ResolvedUrl, attempt));
                 if (!fontResponse.IsSuccessStatusCode)
                 {
                     log?.Report($"Font request failed for {request.ResolvedUrl}: {(int)fontResponse.StatusCode} {fontResponse.ReasonPhrase}");
@@ -158,7 +165,10 @@ public static class FrontEndDesignSnapshot
             try
             {
                 log?.Report($"GET {request.ResolvedUrl}");
-                using var imageResponse = await httpClient.GetAsync(request.ResolvedUrl, cancellationToken);
+                using var imageResponse = await retryPolicy.SendAsync(
+                    () => httpClient.GetAsync(request.ResolvedUrl, cancellationToken),
+                    cancellationToken,
+                    attempt => ReportRetry(log, request.ResolvedUrl, attempt));
                 if (!imageResponse.IsSuccessStatusCode)
                 {
                     log?.Report($"Image request failed for {request.ResolvedUrl}: {(int)imageResponse.StatusCode} {imageResponse.ReasonPhrase}");
@@ -251,6 +261,7 @@ public static class FrontEndDesignSnapshot
 
     private static async Task<DesignPageSnapshotBuilder> CapturePageAsync(
         HttpClient httpClient,
+        HttpRetryPolicy retryPolicy,
         string pageUrl,
         List<StylesheetSnapshot> aggregatedStylesheets,
         Dictionary<string, StylesheetSnapshot> stylesheetLookup,
@@ -265,7 +276,10 @@ public static class FrontEndDesignSnapshot
         var builder = new DesignPageSnapshotBuilder(pageUrl);
 
         log?.Report($"GET {pageUrl}");
-        using var response = await httpClient.GetAsync(pageUrl, cancellationToken);
+        using var response = await retryPolicy.SendAsync(
+            () => httpClient.GetAsync(pageUrl, cancellationToken),
+            cancellationToken,
+            attempt => ReportRetry(log, pageUrl, attempt));
         response.EnsureSuccessStatusCode();
 
         var html = await response.Content.ReadAsStringAsync(cancellationToken) ?? string.Empty;
@@ -363,7 +377,10 @@ public static class FrontEndDesignSnapshot
             try
             {
                 log?.Report($"GET {request.ResolvedUrl}");
-                using var cssResponse = await httpClient.GetAsync(request.ResolvedUrl, cancellationToken);
+                using var cssResponse = await retryPolicy.SendAsync(
+                    () => httpClient.GetAsync(request.ResolvedUrl, cancellationToken),
+                    cancellationToken,
+                    attempt => ReportRetry(log, request.ResolvedUrl, attempt));
                 if (!cssResponse.IsSuccessStatusCode)
                 {
                     log?.Report($"Stylesheet request failed for {request.ResolvedUrl}: {(int)cssResponse.StatusCode} {cssResponse.ReasonPhrase}");
@@ -607,6 +624,26 @@ public static class FrontEndDesignSnapshot
         }
 
         return null;
+    }
+
+    private static void ReportRetry(IProgress<string>? log, string url, HttpRetryAttempt attempt)
+    {
+        if (log is null)
+        {
+            return;
+        }
+
+        string delay;
+        if (attempt.Delay.TotalSeconds >= 1)
+        {
+            delay = $"{attempt.Delay.TotalSeconds:F1}s";
+        }
+        else
+        {
+            delay = $"{Math.Max(1, attempt.Delay.TotalMilliseconds):F0}ms";
+        }
+
+        log.Report($"Retrying {url} in {delay} (attempt {attempt.AttemptNumber}): {attempt.Reason}");
     }
 
     private static Uri? TryCreateUri(string value)
