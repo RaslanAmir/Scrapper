@@ -185,6 +185,19 @@
                           IsEnabled="{Binding CanExportPublicDesignScreenshots}"
                           Visibility="{Binding IsWooCommerce, Converter={StaticResource BoolToVisibility}}"
                           Margin="0,8,0,0"/>
+                <StackPanel Margin="0,4,0,0"
+                            Visibility="{Binding ExportPublicDesignScreenshots, Converter={StaticResource BoolToVisibility}}">
+                    <TextBlock Text="Design screenshot breakpoints (label:widthxheight; separate entries with semicolons):"
+                               TextWrapping="Wrap"
+                               Margin="0,0,0,4"/>
+                    <TextBox Text="{Binding DesignScreenshotBreakpointsText, UpdateSourceTrigger=PropertyChanged}"
+                             MinWidth="320"
+                             ToolTip="Leave blank to use defaults: mobile:375x812; tablet:768x1024; desktop:1280x720"/>
+                    <TextBlock Text="Leave blank to capture mobile, tablet, and desktop breakpoints by default."
+                               TextWrapping="Wrap"
+                               Margin="0,4,0,0"
+                               Foreground="Gray"/>
+                </StackPanel>
                 <CheckBox Content="Capture store configuration (settings, shipping, payments)"
                           IsChecked="{Binding ExportStoreConfiguration}"
                           IsEnabled="{Binding CanExportStoreConfiguration}"

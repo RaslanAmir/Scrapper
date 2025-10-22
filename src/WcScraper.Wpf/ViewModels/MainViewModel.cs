@@ -50,6 +50,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private bool _expPublicExtensionFootprints = false;
     private string _additionalPublicExtensionPages = string.Empty;
     private string _additionalDesignSnapshotPages = string.Empty;
+    private string _designScreenshotBreakpointsText = string.Empty;
     private bool _expPublicDesignSnapshot = false;
     private bool _expPublicDesignScreenshots = false;
     private bool _expStoreConfiguration = false;
@@ -154,6 +155,20 @@ public sealed class MainViewModel : INotifyPropertyChanged
             }
 
             _additionalDesignSnapshotPages = value ?? string.Empty;
+            OnPropertyChanged();
+        }
+    }
+    public string DesignScreenshotBreakpointsText
+    {
+        get => _designScreenshotBreakpointsText;
+        set
+        {
+            if (_designScreenshotBreakpointsText == value)
+            {
+                return;
+            }
+
+            _designScreenshotBreakpointsText = value ?? string.Empty;
             OnPropertyChanged();
         }
     }
@@ -283,6 +298,86 @@ public sealed class MainViewModel : INotifyPropertyChanged
             .ToList();
 
         return tokens;
+    }
+
+    private IReadOnlyList<(string Label, int Width, int Height)>? GetDesignScreenshotBreakpoints()
+    {
+        if (string.IsNullOrWhiteSpace(DesignScreenshotBreakpointsText))
+        {
+            return null;
+        }
+
+        var tokens = DesignScreenshotBreakpointsText
+            .Split(new[] { ';', '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+        if (tokens.Length == 0)
+        {
+            return null;
+        }
+
+        var results = new List<(string Label, int Width, int Height)>(tokens.Length);
+
+        foreach (var token in tokens)
+        {
+            var entry = token.Trim();
+            if (string.IsNullOrWhiteSpace(entry))
+            {
+                continue;
+            }
+
+            var separatorIndex = entry.IndexOf(':');
+            if (separatorIndex <= 0 || separatorIndex >= entry.Length - 1)
+            {
+                Append($"Invalid design screenshot breakpoint entry \"{entry}\": expected label:WIDTHxHEIGHT format.");
+                continue;
+            }
+
+            var label = entry[..separatorIndex].Trim();
+            if (string.IsNullOrWhiteSpace(label))
+            {
+                Append($"Invalid design screenshot breakpoint entry \"{entry}\": label cannot be empty.");
+                continue;
+            }
+
+            var sizePart = entry[(separatorIndex + 1)..].Trim();
+            var xIndex = sizePart.IndexOf('x');
+            if (xIndex < 0)
+            {
+                xIndex = sizePart.IndexOf('X');
+            }
+
+            if (xIndex <= 0 || xIndex >= sizePart.Length - 1)
+            {
+                Append($"Invalid design screenshot breakpoint entry \"{entry}\": expected WIDTHxHEIGHT dimensions.");
+                continue;
+            }
+
+            var widthText = sizePart[..xIndex].Trim();
+            var heightText = sizePart[(xIndex + 1)..].Trim();
+
+            if (!int.TryParse(widthText, NumberStyles.Integer, CultureInfo.InvariantCulture, out var width) || width <= 0)
+            {
+                Append($"Invalid design screenshot breakpoint entry \"{entry}\": width must be a positive integer.");
+                continue;
+            }
+
+            if (!int.TryParse(heightText, NumberStyles.Integer, CultureInfo.InvariantCulture, out var height) || height <= 0)
+            {
+                Append($"Invalid design screenshot breakpoint entry \"{entry}\": height must be a positive integer.");
+                continue;
+            }
+
+            results.Add((label, width, height));
+        }
+
+        if (results.Count == 0)
+        {
+            Append("No valid design screenshot breakpoints were parsed; using defaults (mobile/tablet/desktop).");
+            return null;
+        }
+
+        Append($"Using {results.Count} custom design screenshot breakpoint(s).");
+        return results;
     }
     public bool CanExportPublicDesignSnapshot => !HasWordPressCredentials;
 
@@ -697,7 +792,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 {
                     Append("Capturing public design screenshots…");
                     var screenshotFolder = Path.Combine(storeOutputFolder, "design", "screenshots");
-                    var screenshots = await _designScreenshotService.CaptureScreenshotsAsync(targetUrl, screenshotFolder);
+                    var breakpoints = GetDesignScreenshotBreakpoints();
+                    var screenshots = await _designScreenshotService.CaptureScreenshotsAsync(targetUrl, screenshotFolder, breakpoints);
 
                     if (screenshots.Count > 0)
                     {
