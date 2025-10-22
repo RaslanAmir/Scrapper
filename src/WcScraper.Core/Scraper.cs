@@ -291,10 +291,22 @@ public sealed class WooScraper : IDisposable
                 .Select(group =>
                 {
                     var first = group.First();
-                    var sourceUrl = group
-                        .Select(f => f.SourceUrl)
-                        .FirstOrDefault(url => !string.IsNullOrWhiteSpace(url))
+                    var combinedSourceUrls = CombineSourceUrls(group);
+                    var sourceUrl = combinedSourceUrls.FirstOrDefault()
                         ?? first.SourceUrl;
+                    if (!string.IsNullOrWhiteSpace(sourceUrl))
+                    {
+                        var index = combinedSourceUrls.FindIndex(url => string.Equals(url, sourceUrl, StringComparison.OrdinalIgnoreCase));
+                        if (index > 0)
+                        {
+                            combinedSourceUrls.RemoveAt(index);
+                            combinedSourceUrls.Insert(0, sourceUrl);
+                        }
+                        else if (index < 0)
+                        {
+                            combinedSourceUrls.Insert(0, sourceUrl);
+                        }
+                    }
                     var assetUrl = group
                         .Select(f => f.AssetUrl)
                         .FirstOrDefault(url => !string.IsNullOrWhiteSpace(url));
@@ -306,6 +318,7 @@ public sealed class WooScraper : IDisposable
                         Slug = first.Slug,
                         Type = first.Type,
                         SourceUrl = sourceUrl,
+                        SourceUrls = combinedSourceUrls,
                         AssetUrl = assetUrl,
                         VersionHint = versionHint
                     };
@@ -330,6 +343,45 @@ public sealed class WooScraper : IDisposable
         }
 
         return new();
+    }
+
+    private static List<string> CombineSourceUrls(IEnumerable<PublicExtensionFootprint> footprints)
+    {
+        var combined = new List<string>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        static void AddIfMissing(List<string> target, HashSet<string> seenSet, string? url)
+        {
+            if (string.IsNullOrWhiteSpace(url))
+            {
+                return;
+            }
+
+            if (seenSet.Add(url))
+            {
+                target.Add(url);
+            }
+        }
+
+        foreach (var footprint in footprints)
+        {
+            if (footprint is null)
+            {
+                continue;
+            }
+
+            AddIfMissing(combined, seen, footprint.SourceUrl);
+
+            if (footprint.SourceUrls is { Count: > 0 })
+            {
+                foreach (var url in footprint.SourceUrls)
+                {
+                    AddIfMissing(combined, seen, url);
+                }
+            }
+        }
+
+        return combined;
     }
 
     private async Task PopulateCategoryMetadataAsync(string baseUrl, List<StoreProduct> products, IProgress<string>? log)

@@ -1031,6 +1031,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                             ["type"] = f.Type,
                             ["slug"] = f.Slug,
                             ["source_url"] = f.SourceUrl,
+                            ["source_urls"] = string.Join(";", f.SourceUrls),
                             ["asset_url"] = f.AssetUrl,
                             ["version_hint"] = f.VersionHint,
                             ["directory_status"] = f.DirectoryStatus,
