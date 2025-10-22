@@ -23,6 +23,10 @@ public static class FrontEndDesignSnapshot
         "@font-face\\s*\\{[^}]*\\}",
         RegexOptions.Singleline | RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
+    private static readonly Regex FontFacePropertyRegex = new(
+        @"(?<name>font-family|font-style|font-weight)\\s*:\\s*(?<value>[^;{}]+)",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
     private static readonly Regex CssUrlTokenRegex = new(
         "url\\((['\"\\]?)([^'\"\\)]+)\\1\\)",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
@@ -124,7 +128,15 @@ public static class FrontEndDesignSnapshot
 
                 var fontBytes = await fontResponse.Content.ReadAsByteArrayAsync(cancellationToken);
                 var contentType = fontResponse.Content.Headers.ContentType?.MediaType;
-                var fontSnapshot = new FontAssetSnapshot(request.RawUrl, request.ResolvedUrl, request.ReferencedFrom, fontBytes, contentType);
+                var fontSnapshot = new FontAssetSnapshot(
+                    request.RawUrl,
+                    request.ResolvedUrl,
+                    request.ReferencedFrom,
+                    fontBytes,
+                    contentType,
+                    request.FontFamily,
+                    request.FontStyle,
+                    request.FontWeight);
                 fontSnapshotsMap[request.ResolvedUrl] = fontSnapshot;
                 fontSnapshots.Add(fontSnapshot);
             }
@@ -548,6 +560,8 @@ public static class FrontEndDesignSnapshot
                 continue;
             }
 
+            var metadata = ExtractFontFaceMetadata(blockText);
+
             foreach (Match match in FontUrlRegex.Matches(blockText))
             {
                 if (match.Groups.Count < 3) continue;
@@ -559,7 +573,7 @@ public static class FrontEndDesignSnapshot
                 var resolved = ResolveAssetUrl(raw, baseUri);
                 if (!string.IsNullOrWhiteSpace(resolved))
                 {
-                    yield return new FontUrlCandidate(raw, resolved);
+                    yield return new FontUrlCandidate(raw, resolved, metadata.FontFamily, metadata.FontStyle, metadata.FontWeight);
                 }
             }
         }
@@ -603,12 +617,19 @@ public static class FrontEndDesignSnapshot
         FontUrlCandidate candidate,
         string referencedFrom)
     {
-        if (accumulator.ContainsKey(candidate.ResolvedUrl))
+        if (accumulator.TryGetValue(candidate.ResolvedUrl, out var existing))
         {
+            existing.MergeMetadata(candidate);
             return false;
         }
 
-        accumulator[candidate.ResolvedUrl] = new FontAssetRequest(candidate.RawUrl, candidate.ResolvedUrl, referencedFrom);
+        accumulator[candidate.ResolvedUrl] = new FontAssetRequest(
+            candidate.RawUrl,
+            candidate.ResolvedUrl,
+            referencedFrom,
+            candidate.FontFamily,
+            candidate.FontStyle,
+            candidate.FontWeight);
         return true;
     }
 
@@ -943,11 +964,138 @@ public static class FrontEndDesignSnapshot
         }
     }
 
-    private readonly record struct FontUrlCandidate(string RawUrl, string ResolvedUrl);
+    private static FontFaceMetadata ExtractFontFaceMetadata(string blockText)
+    {
+        if (string.IsNullOrWhiteSpace(blockText))
+        {
+            return default;
+        }
+
+        string? fontFamily = null;
+        string? fontStyle = null;
+        string? fontWeight = null;
+
+        foreach (Match property in FontFacePropertyRegex.Matches(blockText))
+        {
+            if (!property.Success)
+            {
+                continue;
+            }
+
+            var name = property.Groups["name"].Value;
+            var value = NormalizeFontFaceValue(property.Groups["value"].Value);
+
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                continue;
+            }
+
+            if (fontFamily is null && string.Equals(name, "font-family", StringComparison.OrdinalIgnoreCase))
+            {
+                fontFamily = value;
+            }
+            else if (fontStyle is null && string.Equals(name, "font-style", StringComparison.OrdinalIgnoreCase))
+            {
+                fontStyle = value;
+            }
+            else if (fontWeight is null && string.Equals(name, "font-weight", StringComparison.OrdinalIgnoreCase))
+            {
+                fontWeight = value;
+            }
+        }
+
+        return new FontFaceMetadata(fontFamily, fontStyle, fontWeight);
+    }
+
+    private static string? NormalizeFontFaceValue(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return null;
+        }
+
+        var trimmed = value.Trim();
+
+        if (trimmed.EndsWith(";", StringComparison.Ordinal))
+        {
+            trimmed = trimmed.TrimEnd(';');
+        }
+
+        var importantIndex = trimmed.IndexOf("!important", StringComparison.OrdinalIgnoreCase);
+        if (importantIndex >= 0)
+        {
+            trimmed = trimmed[..importantIndex];
+        }
+
+        trimmed = trimmed.Trim();
+
+        if (trimmed.Length >= 2)
+        {
+            var startsWithQuote = trimmed[0] == '\"' || trimmed[0] == '\'';
+            var endsWithQuote = trimmed[^1] == '\"' || trimmed[^1] == '\'';
+            if (startsWithQuote && endsWithQuote)
+            {
+                trimmed = trimmed[1..^1];
+            }
+        }
+
+        return string.IsNullOrWhiteSpace(trimmed) ? null : trimmed;
+    }
+
+    private readonly record struct FontFaceMetadata(string? FontFamily, string? FontStyle, string? FontWeight);
+
+    private readonly record struct FontUrlCandidate(string RawUrl, string ResolvedUrl, string? FontFamily, string? FontStyle, string? FontWeight);
 
     private readonly record struct ImageUrlCandidate(string RawUrl, string ResolvedUrl);
 
-    private sealed record FontAssetRequest(string RawUrl, string ResolvedUrl, string ReferencedFrom);
+    private sealed class FontAssetRequest
+    {
+        public FontAssetRequest(
+            string rawUrl,
+            string resolvedUrl,
+            string referencedFrom,
+            string? fontFamily,
+            string? fontStyle,
+            string? fontWeight)
+        {
+            RawUrl = rawUrl ?? string.Empty;
+            ResolvedUrl = resolvedUrl ?? string.Empty;
+            ReferencedFrom = referencedFrom ?? string.Empty;
+            FontFamily = fontFamily;
+            FontStyle = fontStyle;
+            FontWeight = fontWeight;
+        }
+
+        public string RawUrl { get; }
+
+        public string ResolvedUrl { get; }
+
+        public string ReferencedFrom { get; }
+
+        public string? FontFamily { get; private set; }
+
+        public string? FontStyle { get; private set; }
+
+        public string? FontWeight { get; private set; }
+
+        public void MergeMetadata(FontUrlCandidate candidate)
+        {
+            if (string.IsNullOrWhiteSpace(FontFamily) && !string.IsNullOrWhiteSpace(candidate.FontFamily))
+            {
+                FontFamily = candidate.FontFamily;
+            }
+
+            if (string.IsNullOrWhiteSpace(FontStyle) && !string.IsNullOrWhiteSpace(candidate.FontStyle))
+            {
+                FontStyle = candidate.FontStyle;
+            }
+
+            if (string.IsNullOrWhiteSpace(FontWeight) && !string.IsNullOrWhiteSpace(candidate.FontWeight))
+            {
+                FontWeight = candidate.FontWeight;
+            }
+        }
+    }
 
     private sealed record ImageAssetRequest(string RawUrl, string ResolvedUrl, string ReferencedFrom);
 
@@ -1078,13 +1226,19 @@ public sealed class FontAssetSnapshot
         string resolvedUrl,
         string referencedFrom,
         byte[] content,
-        string? contentType)
+        string? contentType,
+        string? fontFamily,
+        string? fontStyle,
+        string? fontWeight)
     {
         SourceUrl = sourceUrl ?? string.Empty;
         ResolvedUrl = resolvedUrl ?? string.Empty;
         ReferencedFrom = referencedFrom ?? string.Empty;
         Content = content ?? Array.Empty<byte>();
         ContentType = contentType;
+        FontFamily = fontFamily;
+        FontStyle = fontStyle;
+        FontWeight = fontWeight;
     }
 
     public string SourceUrl { get; }
@@ -1096,6 +1250,12 @@ public sealed class FontAssetSnapshot
     public byte[] Content { get; }
 
     public string? ContentType { get; }
+
+    public string? FontFamily { get; }
+
+    public string? FontStyle { get; }
+
+    public string? FontWeight { get; }
 }
 
 public sealed class DesignImageSnapshot
