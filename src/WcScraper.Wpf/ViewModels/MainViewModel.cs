@@ -1436,7 +1436,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
             await File.WriteAllTextAsync(reportPath, report, Encoding.UTF8);
             Append($"Manual migration report: {reportPath}");
 
-            var manualBundleArchivePath = TryCreateManualBundle(storeOutputFolder, baseOutputFolder, storeId, timestamp, reportPath);
+            var manualBundleArchivePath = await TryCreateManualBundleAsync(storeOutputFolder, baseOutputFolder, storeId, timestamp, reportPath);
             if (!string.IsNullOrWhiteSpace(manualBundleArchivePath))
             {
                 Append($"Manual bundle archive: {manualBundleArchivePath}");
@@ -2172,104 +2172,109 @@ public sealed class MainViewModel : INotifyPropertyChanged
         return item;
     }
 
-    private string? TryCreateManualBundle(string storeOutputFolder, string baseOutputFolder, string storeId, string timestamp, string reportPath)
+    private Task<string?> TryCreateManualBundleAsync(string storeOutputFolder, string baseOutputFolder, string storeId, string timestamp, string reportPath)
     {
-        var deliverables = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-        if (File.Exists(reportPath))
+        return Task.Run(() =>
         {
-            deliverables.Add(reportPath);
-        }
+            var deliverables = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-        var designFolder = Path.Combine(storeOutputFolder, "design");
-        if (Directory.Exists(designFolder))
-        {
-            deliverables.Add(designFolder);
-        }
-
-        try
-        {
-            foreach (var file in Directory.EnumerateFiles(storeOutputFolder, $"{storeId}_{timestamp}_*", SearchOption.TopDirectoryOnly))
+            if (File.Exists(reportPath))
             {
-                var extension = Path.GetExtension(file);
-                if (extension.Equals(".csv", StringComparison.OrdinalIgnoreCase)
-                    || extension.Equals(".json", StringComparison.OrdinalIgnoreCase)
-                    || extension.Equals(".jsonl", StringComparison.OrdinalIgnoreCase)
-                    || extension.Equals(".xlsx", StringComparison.OrdinalIgnoreCase))
+                deliverables.Add(reportPath);
+            }
+
+            var designFolder = Path.Combine(storeOutputFolder, "design");
+            if (Directory.Exists(designFolder))
+            {
+                deliverables.Add(designFolder);
+            }
+
+            try
+            {
+                foreach (var file in Directory.EnumerateFiles(storeOutputFolder, $"{storeId}_{timestamp}_*", SearchOption.TopDirectoryOnly))
                 {
-                    deliverables.Add(file);
+                    var extension = Path.GetExtension(file);
+                    if (extension.Equals(".csv", StringComparison.OrdinalIgnoreCase)
+                        || extension.Equals(".json", StringComparison.OrdinalIgnoreCase)
+                        || extension.Equals(".jsonl", StringComparison.OrdinalIgnoreCase)
+                        || extension.Equals(".xlsx", StringComparison.OrdinalIgnoreCase))
+                    {
+                        deliverables.Add(file);
+                    }
                 }
             }
-        }
-        catch (DirectoryNotFoundException)
-        {
-            // Store folder disappeared unexpectedly; treat as no deliverables.
-        }
-        catch (Exception ex)
-        {
-            Append($"Manual bundle packaging skipped: {ex.Message}");
-            return null;
-        }
-
-        if (deliverables.Count == 0)
-        {
-            return null;
-        }
-
-        var stagingFolderName = $"{storeId}_{timestamp}_manual_bundle";
-        var stagingFolder = Path.Combine(storeOutputFolder, stagingFolderName);
-
-        try
-        {
-            if (Directory.Exists(stagingFolder))
+            catch (DirectoryNotFoundException)
             {
-                Directory.Delete(stagingFolder, recursive: true);
+                // Store folder disappeared unexpectedly; treat as no deliverables.
+            }
+            catch (Exception ex)
+            {
+                Append($"Manual bundle packaging skipped: {ex.Message}");
+                return (string?)null;
             }
 
-            Directory.CreateDirectory(stagingFolder);
-
-            foreach (var item in deliverables)
+            if (deliverables.Count == 0)
             {
-                if (Directory.Exists(item))
-                {
-                    var destinationDirectory = Path.Combine(stagingFolder, Path.GetFileName(item));
-                    CopyDirectory(item, destinationDirectory);
-                }
-                else if (File.Exists(item))
-                {
-                    var destinationFile = Path.Combine(stagingFolder, Path.GetFileName(item));
-                    File.Copy(item, destinationFile, overwrite: true);
-                }
+                return (string?)null;
             }
 
-            var archivePath = Path.Combine(baseOutputFolder, $"{stagingFolderName}.zip");
-            if (File.Exists(archivePath))
-            {
-                File.Delete(archivePath);
-            }
+            Append("Packaging manual migration bundle...");
 
-            ZipFile.CreateFromDirectory(stagingFolder, archivePath);
-            return archivePath;
-        }
-        catch (Exception ex)
-        {
-            Append($"Manual bundle packaging skipped: {ex.Message}");
-            return null;
-        }
-        finally
-        {
+            var stagingFolderName = $"{storeId}_{timestamp}_manual_bundle";
+            var stagingFolder = Path.Combine(storeOutputFolder, stagingFolderName);
+
             try
             {
                 if (Directory.Exists(stagingFolder))
                 {
                     Directory.Delete(stagingFolder, recursive: true);
                 }
+
+                Directory.CreateDirectory(stagingFolder);
+
+                foreach (var item in deliverables)
+                {
+                    if (Directory.Exists(item))
+                    {
+                        var destinationDirectory = Path.Combine(stagingFolder, Path.GetFileName(item));
+                        CopyDirectory(item, destinationDirectory);
+                    }
+                    else if (File.Exists(item))
+                    {
+                        var destinationFile = Path.Combine(stagingFolder, Path.GetFileName(item));
+                        File.Copy(item, destinationFile, overwrite: true);
+                    }
+                }
+
+                var archivePath = Path.Combine(baseOutputFolder, $"{stagingFolderName}.zip");
+                if (File.Exists(archivePath))
+                {
+                    File.Delete(archivePath);
+                }
+
+                ZipFile.CreateFromDirectory(stagingFolder, archivePath);
+                return archivePath;
             }
-            catch
+            catch (Exception ex)
             {
-                // Best-effort cleanup.
+                Append($"Manual bundle packaging skipped: {ex.Message}");
+                return (string?)null;
             }
-        }
+            finally
+            {
+                try
+                {
+                    if (Directory.Exists(stagingFolder))
+                    {
+                        Directory.Delete(stagingFolder, recursive: true);
+                    }
+                }
+                catch
+                {
+                    // Best-effort cleanup.
+                }
+            }
+        });
     }
 
     private static async Task TryAnnotateManualReportAsync(string reportPath, string archivePath)
