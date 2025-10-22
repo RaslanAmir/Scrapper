@@ -971,6 +971,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 {
                     var designRoot = Path.Combine(storeOutputFolder, "design");
                     Directory.CreateDirectory(designRoot);
+                    var assetsRoot = Path.Combine(designRoot, "assets");
+                    Directory.CreateDirectory(assetsRoot);
 
                     var htmlPath = Path.Combine(designRoot, "homepage.html");
                     await File.WriteAllTextAsync(htmlPath, designSnapshot.RawHtml, Encoding.UTF8);
@@ -984,6 +986,75 @@ public sealed class MainViewModel : INotifyPropertyChanged
                     var fontsJson = JsonSerializer.Serialize(designSnapshot.FontUrls, _artifactWriteOptions);
                     await File.WriteAllTextAsync(fontsPath, fontsJson, Encoding.UTF8);
                     Append($"Wrote {fontsPath}");
+
+                    var stylesheetManifest = new List<Dictionary<string, object?>>();
+                    var fontManifest = new List<Dictionary<string, object?>>();
+
+                    for (var i = 0; i < designSnapshot.Stylesheets.Count; i++)
+                    {
+                        var stylesheet = designSnapshot.Stylesheets[i];
+                        var fileName = CreateDesignAssetFileName(
+                            prefix: "stylesheet",
+                            index: i + 1,
+                            url: stylesheet?.ResolvedUrl ?? stylesheet?.SourceUrl,
+                            contentType: stylesheet?.ContentType,
+                            defaultExtension: ".css");
+
+                        var relativeAssetPath = Path.Combine("assets", fileName);
+                        var assetPath = Path.Combine(assetsRoot, fileName);
+                        var content = (stylesheet?.Content?.Length ?? 0) > 0
+                            ? stylesheet!.Content
+                            : Encoding.UTF8.GetBytes(stylesheet?.TextContent ?? string.Empty);
+
+                        await File.WriteAllBytesAsync(assetPath, content);
+                        Append($"Wrote {assetPath}");
+
+                        stylesheetManifest.Add(new Dictionary<string, object?>
+                        {
+                            ["file"] = NormalizeRelativePath(relativeAssetPath),
+                            ["source_url"] = stylesheet?.SourceUrl,
+                            ["resolved_url"] = stylesheet?.ResolvedUrl,
+                            ["content_type"] = stylesheet?.ContentType
+                        });
+                    }
+
+                    for (var i = 0; i < designSnapshot.FontFiles.Count; i++)
+                    {
+                        var font = designSnapshot.FontFiles[i];
+                        var fileName = CreateDesignAssetFileName(
+                            prefix: "font",
+                            index: i + 1,
+                            url: font?.ResolvedUrl ?? font?.SourceUrl,
+                            contentType: font?.ContentType,
+                            defaultExtension: ".bin");
+
+                        var relativeAssetPath = Path.Combine("assets", fileName);
+                        var assetPath = Path.Combine(assetsRoot, fileName);
+                        var content = font?.Content ?? Array.Empty<byte>();
+
+                        await File.WriteAllBytesAsync(assetPath, content);
+                        Append($"Wrote {assetPath}");
+
+                        fontManifest.Add(new Dictionary<string, object?>
+                        {
+                            ["file"] = NormalizeRelativePath(relativeAssetPath),
+                            ["source_url"] = font?.SourceUrl,
+                            ["resolved_url"] = font?.ResolvedUrl,
+                            ["referenced_from"] = font?.ReferencedFrom,
+                            ["content_type"] = font?.ContentType
+                        });
+                    }
+
+                    var manifest = new Dictionary<string, object?>
+                    {
+                        ["stylesheets"] = stylesheetManifest,
+                        ["fonts"] = fontManifest
+                    };
+
+                    var manifestPath = Path.Combine(designRoot, "assets-manifest.json");
+                    var manifestJson = JsonSerializer.Serialize(manifest, _artifactWriteOptions);
+                    await File.WriteAllTextAsync(manifestPath, manifestJson, Encoding.UTF8);
+                    Append($"Wrote {manifestPath}");
                 }
                 else if (attemptedDesignSnapshot && !designSnapshotFailed)
                 {
@@ -1897,6 +1968,20 @@ public sealed class MainViewModel : INotifyPropertyChanged
         [".otf"] = "font/otf"
     };
 
+    private static readonly Dictionary<string, string> s_knownExtensionsByMimeType = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["text/css"] = ".css",
+        ["application/css"] = ".css",
+        ["font/woff"] = ".woff",
+        ["font/woff2"] = ".woff2",
+        ["font/ttf"] = ".ttf",
+        ["font/otf"] = ".otf",
+        ["application/font-woff"] = ".woff",
+        ["application/font-woff2"] = ".woff2",
+        ["application/x-font-ttf"] = ".ttf",
+        ["application/x-font-opentype"] = ".otf"
+    };
+
     private static string GuessMimeTypeFromExtension(string? extension)
     {
         if (string.IsNullOrWhiteSpace(extension))
@@ -1946,6 +2031,94 @@ public sealed class MainViewModel : INotifyPropertyChanged
     {
         var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(value));
         return Convert.ToHexString(bytes)[..8].ToLowerInvariant();
+    }
+
+    private static string CreateDesignAssetFileName(string prefix, int index, string? url, string? contentType, string defaultExtension)
+    {
+        var extension = GetDesignAssetExtension(url, contentType, defaultExtension);
+        var hashSeed = string.IsNullOrWhiteSpace(url)
+            ? $"{prefix}:{index}"
+            : url!;
+        var hash = ComputeShortHash($"{prefix}|{index}|{hashSeed}");
+
+        var stem = TryExtractFileNameStem(url);
+        if (string.IsNullOrWhiteSpace(stem))
+        {
+            stem = $"{prefix}-{index}";
+        }
+
+        var sanitized = SanitizeForPath(stem);
+        if (string.IsNullOrWhiteSpace(sanitized) || string.Equals(sanitized, "store", StringComparison.OrdinalIgnoreCase))
+        {
+            sanitized = $"{prefix}-{index}";
+        }
+
+        return $"{sanitized}-{hash}{extension}";
+    }
+
+    private static string GetDesignAssetExtension(string? url, string? contentType, string defaultExtension)
+    {
+        var fromUrl = TryExtractExtensionFromUrl(url);
+        if (!string.IsNullOrWhiteSpace(fromUrl))
+        {
+            return fromUrl!;
+        }
+
+        if (!string.IsNullOrWhiteSpace(contentType) && s_knownExtensionsByMimeType.TryGetValue(contentType!, out var mapped))
+        {
+            return mapped;
+        }
+
+        return defaultExtension;
+    }
+
+    private static string? TryExtractExtensionFromUrl(string? url)
+    {
+        var fileName = TryExtractFileName(url);
+        if (string.IsNullOrWhiteSpace(fileName))
+        {
+            return null;
+        }
+
+        var ext = Path.GetExtension(fileName);
+        if (string.IsNullOrWhiteSpace(ext))
+        {
+            return null;
+        }
+
+        return ext.ToLowerInvariant();
+    }
+
+    private static string? TryExtractFileNameStem(string? url)
+    {
+        var fileName = TryExtractFileName(url);
+        if (string.IsNullOrWhiteSpace(fileName))
+        {
+            return null;
+        }
+
+        return Path.GetFileNameWithoutExtension(fileName);
+    }
+
+    private static string? TryExtractFileName(string? url)
+    {
+        if (string.IsNullOrWhiteSpace(url))
+        {
+            return null;
+        }
+
+        var trimmed = url.Split('#')[0];
+        trimmed = trimmed.Split('?')[0];
+
+        if (Uri.TryCreate(trimmed, UriKind.RelativeOrAbsolute, out var uri))
+        {
+            trimmed = uri.IsAbsoluteUri ? uri.AbsolutePath : uri.OriginalString;
+        }
+
+        trimmed = trimmed.Replace("\\\\", "/");
+        var lastSlash = trimmed.LastIndexOf('/');
+        var segment = lastSlash >= 0 ? trimmed[(lastSlash + 1)..] : trimmed;
+        return string.IsNullOrWhiteSpace(segment) ? null : segment;
     }
 
     private static JsonNode? TryCloneJsonNode(JsonElement element)
