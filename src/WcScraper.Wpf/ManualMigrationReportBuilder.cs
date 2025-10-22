@@ -38,6 +38,7 @@ internal sealed class ManualMigrationReportBuilder
             builder.AppendLine($"- **Output Folder:** `{context.OutputFolder}`");
         }
 
+        builder.AppendLine($"- **HTTP retries:** {FormatRetrySummary(context)}");
         builder.AppendLine();
         AppendExtensionFootprintSection(builder, context);
         builder.AppendLine();
@@ -48,6 +49,28 @@ internal sealed class ManualMigrationReportBuilder
         AppendLogHighlights(builder, context);
 
         return builder.ToString();
+    }
+
+    private static string FormatRetrySummary(ManualMigrationReportContext context)
+    {
+        if (!context.HttpRetriesEnabled || context.HttpRetryAttempts <= 0)
+        {
+            return "Disabled";
+        }
+
+        var baseDelay = FormatDuration(context.HttpRetryBaseDelay);
+        var maxDelay = FormatDuration(context.HttpRetryMaxDelay);
+        return $"Enabled ({context.HttpRetryAttempts} retries, base delay {baseDelay}, max delay {maxDelay})";
+    }
+
+    private static string FormatDuration(TimeSpan value)
+    {
+        if (value.TotalSeconds >= 1)
+        {
+            return $"{value.TotalSeconds:0.##}s";
+        }
+
+        return $"{value.TotalMilliseconds:0}ms";
     }
 
     private static void AppendExtensionFootprintSection(StringBuilder builder, ManualMigrationReportContext context)
@@ -672,4 +695,8 @@ internal sealed record ManualMigrationReportContext(
     bool DesignSnapshotFailed,
     IReadOnlyList<string> MissingCredentialExports,
     IReadOnlyList<string> LogEntries,
-    DateTime GeneratedAtUtc);
+    DateTime GeneratedAtUtc,
+    bool HttpRetriesEnabled,
+    int HttpRetryAttempts,
+    TimeSpan HttpRetryBaseDelay,
+    TimeSpan HttpRetryMaxDelay);
