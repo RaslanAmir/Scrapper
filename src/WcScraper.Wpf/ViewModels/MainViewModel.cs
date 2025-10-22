@@ -16,6 +16,7 @@ using System.Threading.Tasks;
 using WcScraper.Core;
 using WcScraper.Core.Exporters;
 using WcScraper.Core.Shopify;
+using WcScraper.Core.Models;
 using WcScraper.Wpf.Services;
 
 namespace WcScraper.Wpf.ViewModels;
@@ -40,6 +41,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private bool _expPluginsJsonl = false;
     private bool _expThemesCsv = false;
     private bool _expThemesJsonl = false;
+    private bool _expPublicExtensionFootprints = false;
     private bool _expStoreConfiguration = false;
     private bool _importStoreConfiguration = false;
     private PlatformMode _selectedPlatform = PlatformMode.WooCommerce;
@@ -100,6 +102,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public bool ExportPluginsJsonl { get => _expPluginsJsonl; set { _expPluginsJsonl = value; OnPropertyChanged(); } }
     public bool ExportThemesCsv { get => _expThemesCsv; set { _expThemesCsv = value; OnPropertyChanged(); } }
     public bool ExportThemesJsonl { get => _expThemesJsonl; set { _expThemesJsonl = value; OnPropertyChanged(); } }
+    public bool ExportPublicExtensionFootprints { get => _expPublicExtensionFootprints; set { _expPublicExtensionFootprints = value; OnPropertyChanged(); } }
     public bool ExportStoreConfiguration { get => _expStoreConfiguration; set { _expStoreConfiguration = value; OnPropertyChanged(); } }
     public bool IsRunning
     {
@@ -188,6 +191,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
         !string.IsNullOrWhiteSpace(_wordPressApplicationPassword);
 
     public bool CanExportExtensions => HasWordPressCredentials;
+
+    public bool CanExportPublicExtensionFootprints => !CanExportExtensions;
 
     public bool CanExportStoreConfiguration => HasWordPressCredentials;
     public string TargetStoreUrl { get => _targetStoreUrl; set { _targetStoreUrl = value; OnPropertyChanged(); } }
@@ -378,8 +383,10 @@ public sealed class MainViewModel : INotifyPropertyChanged
             List<Dictionary<string, object?>>? shopifyDetailDicts = null;
             List<InstalledPlugin> plugins = new();
             List<InstalledTheme> themes = new();
+            List<PublicExtensionFootprint> publicExtensionFootprints = new();
             bool attemptedPluginFetch = false;
             bool attemptedThemeFetch = false;
+            bool attemptedPublicExtensionFootprintFetch = false;
             StoreConfiguration? configuration = null;
             List<WooCustomer> customers = new();
             List<WooOrder> orders = new();
@@ -515,6 +522,28 @@ public sealed class MainViewModel : INotifyPropertyChanged
                         Append(themes.Count > 0
                             ? $"Found {themes.Count} themes."
                             : "No themes returned by the authenticated endpoint.");
+                    }
+                }
+            }
+
+            if (SelectedPlatform == PlatformMode.WooCommerce && ExportPublicExtensionFootprints)
+            {
+                if (HasWordPressCredentials)
+                {
+                    Append("Slug-only extension detection skipped because authenticated plugin/theme exports are available.");
+                }
+                else
+                {
+                    attemptedPublicExtensionFootprintFetch = true;
+                    Append("Detecting public plugin/theme slugs (slug-only export; manual install required)…");
+                    publicExtensionFootprints = await _wooScraper.FetchPublicExtensionFootprintsAsync(targetUrl, includeLinkedAssets: true, log: logger);
+                    if (publicExtensionFootprints.Count > 0)
+                    {
+                        Append($"Detected {publicExtensionFootprints.Count} plugin/theme slug(s) from public assets (manual install required).");
+                    }
+                    else
+                    {
+                        Append("No public plugin/theme slugs were detected.");
                     }
                 }
             }
@@ -863,6 +892,32 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 else if (attemptedThemeFetch)
                 {
                     Append("Themes JSONL export skipped (no theme data).");
+                }
+            }
+
+            if (SelectedPlatform == PlatformMode.WooCommerce && ExportPublicExtensionFootprints)
+            {
+                if (publicExtensionFootprints.Count > 0)
+                {
+                    var csvPath = Path.Combine(storeOutputFolder, $"{storeId}_{timestamp}_public_extension_footprints.csv");
+                    var rows = publicExtensionFootprints
+                        .Select(f => new Dictionary<string, object?>
+                        {
+                            ["type"] = f.Type,
+                            ["slug"] = f.Slug,
+                            ["source_url"] = f.SourceUrl
+                        });
+                    CsvExporter.Write(csvPath, rows);
+                    Append($"Wrote {csvPath} (slug-only export; manual install required).");
+
+                    var jsonPath = Path.Combine(storeOutputFolder, $"{storeId}_{timestamp}_public_extension_footprints.json");
+                    var json = JsonSerializer.Serialize(publicExtensionFootprints, _artifactWriteOptions);
+                    await File.WriteAllTextAsync(jsonPath, json, Encoding.UTF8);
+                    Append($"Wrote {jsonPath} (slug-only export; manual install required).");
+                }
+                else if (attemptedPublicExtensionFootprintFetch)
+                {
+                    Append("Public extension footprint export skipped (no slugs detected).");
                 }
             }
 
@@ -2137,6 +2192,12 @@ public sealed class MainViewModel : INotifyPropertyChanged
         OnPropertyChanged(nameof(HasWordPressCredentials));
         OnPropertyChanged(nameof(CanExportExtensions));
         OnPropertyChanged(nameof(CanExportStoreConfiguration));
+        OnPropertyChanged(nameof(CanExportPublicExtensionFootprints));
+
+        if (HasWordPressCredentials && ExportPublicExtensionFootprints)
+        {
+            ExportPublicExtensionFootprints = false;
+        }
     }
 }
 

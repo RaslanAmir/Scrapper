@@ -145,6 +145,11 @@
                               IsChecked="{Binding ExportThemesJsonl}"
                               IsEnabled="{Binding CanExportExtensions}"
                               Style="{StaticResource CredentialDependentCheckBoxStyle}"/>
+                    <CheckBox Content="Public plugin/theme slugs only (manual install required)"
+                              IsChecked="{Binding ExportPublicExtensionFootprints}"
+                              IsEnabled="{Binding CanExportPublicExtensionFootprints}"
+                              Visibility="{Binding CanExportPublicExtensionFootprints, Converter={StaticResource BoolToVisibility}}"
+                              Margin="0,0,16,0"/>
                 </WrapPanel>
                 <CheckBox Content="Capture store configuration (settings, shipping, payments)"
                           IsChecked="{Binding ExportStoreConfiguration}"
