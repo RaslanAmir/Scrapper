@@ -215,11 +215,16 @@ public sealed class PublicExtensionDetector : IDisposable
             var key = (type, slug);
             if (!findings.TryGetValue(key, out var footprint))
             {
+                var sourceUrls = string.IsNullOrWhiteSpace(sourceUrl)
+                    ? new List<string>()
+                    : new List<string> { sourceUrl };
+
                 footprint = new PublicExtensionFootprint
                 {
                     Slug = slug,
                     Type = type,
                     SourceUrl = sourceUrl,
+                    SourceUrls = sourceUrls,
                     AssetUrl = assetUrl,
                     VersionHint = versionHint
                 };
@@ -233,6 +238,8 @@ public sealed class PublicExtensionDetector : IDisposable
                 footprint.SourceUrl = sourceUrl;
             }
 
+            MergeSourceUrls(footprint, sourceUrl);
+
             if (string.IsNullOrWhiteSpace(footprint.AssetUrl) && !string.IsNullOrWhiteSpace(assetUrl))
             {
                 footprint.AssetUrl = assetUrl;
@@ -243,6 +250,58 @@ public sealed class PublicExtensionDetector : IDisposable
                 footprint.VersionHint = versionHint;
             }
         }
+    }
+
+    private static void MergeSourceUrls(PublicExtensionFootprint footprint, string? additionalUrl)
+    {
+        var combined = AggregateSourceUrls(footprint, additionalUrl);
+        if (combined.Count > 0)
+        {
+            var primary = combined[0];
+            if (!string.Equals(primary, footprint.SourceUrl, StringComparison.Ordinal))
+            {
+                footprint.SourceUrl = primary;
+            }
+        }
+        else if (!string.IsNullOrWhiteSpace(footprint.SourceUrl))
+        {
+            footprint.SourceUrl = string.Empty;
+        }
+
+        footprint.SourceUrls = combined;
+    }
+
+    private static List<string> AggregateSourceUrls(PublicExtensionFootprint footprint, string? additionalUrl)
+    {
+        var result = new List<string>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        static void AddIfMissing(List<string> target, HashSet<string> seenSet, string? url)
+        {
+            if (string.IsNullOrWhiteSpace(url))
+            {
+                return;
+            }
+
+            if (seenSet.Add(url))
+            {
+                target.Add(url);
+            }
+        }
+
+        AddIfMissing(result, seen, footprint.SourceUrl);
+
+        if (footprint.SourceUrls is { Count: > 0 })
+        {
+            foreach (var url in footprint.SourceUrls)
+            {
+                AddIfMissing(result, seen, url);
+            }
+        }
+
+        AddIfMissing(result, seen, additionalUrl);
+
+        return result;
     }
 
     private static string? ExtractAssetUrl(string content, Match match)

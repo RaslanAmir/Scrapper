@@ -107,6 +107,7 @@ public sealed class PublicExtensionFootprint
     public string Slug { get; set; } = string.Empty;
     public string Type { get; set; } = string.Empty;
     public string SourceUrl { get; set; } = string.Empty;
+    public List<string> SourceUrls { get; set; } = new();
     public string? AssetUrl { get; set; }
     public string? VersionHint { get; set; }
     public string? DirectoryTitle { get; set; }
