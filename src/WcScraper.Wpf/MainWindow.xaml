@@ -151,6 +151,11 @@
                               Visibility="{Binding CanExportPublicExtensionFootprints, Converter={StaticResource BoolToVisibility}}"
                               Margin="0,0,16,0"/>
                 </WrapPanel>
+                <CheckBox Content="Export public design snapshot (homepage HTML + inline CSS + fonts)"
+                          IsChecked="{Binding ExportPublicDesignSnapshot}"
+                          IsEnabled="{Binding CanExportPublicDesignSnapshot}"
+                          Visibility="{Binding IsWooCommerce, Converter={StaticResource BoolToVisibility}}"
+                          Margin="0,8,0,0"/>
                 <CheckBox Content="Capture store configuration (settings, shipping, payments)"
                           IsChecked="{Binding ExportStoreConfiguration}"
                           IsEnabled="{Binding CanExportStoreConfiguration}"
