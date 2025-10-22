@@ -1106,6 +1106,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                             ["file"] = NormalizeRelativePath(relativeAssetPath),
                             ["source_url"] = stylesheet?.SourceUrl,
                             ["resolved_url"] = stylesheet?.ResolvedUrl,
+                            ["referenced_from"] = stylesheet?.ReferencedFrom,
                             ["content_type"] = stylesheet?.ContentType
                         });
                     }
