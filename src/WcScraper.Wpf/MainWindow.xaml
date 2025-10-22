@@ -168,6 +168,11 @@
                           IsEnabled="{Binding CanExportPublicDesignSnapshot}"
                           Visibility="{Binding IsWooCommerce, Converter={StaticResource BoolToVisibility}}"
                           Margin="0,8,0,0"/>
+                <CheckBox Content="Capture public design screenshots (PNG breakpoints)"
+                          IsChecked="{Binding ExportPublicDesignScreenshots}"
+                          IsEnabled="{Binding CanExportPublicDesignScreenshots}"
+                          Visibility="{Binding IsWooCommerce, Converter={StaticResource BoolToVisibility}}"
+                          Margin="0,8,0,0"/>
                 <CheckBox Content="Capture store configuration (settings, shipping, payments)"
                           IsChecked="{Binding ExportStoreConfiguration}"
                           IsEnabled="{Binding CanExportStoreConfiguration}"
