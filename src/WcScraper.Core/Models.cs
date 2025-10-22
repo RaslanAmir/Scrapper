@@ -102,6 +102,13 @@ public sealed class StoreReview
     [JsonPropertyName("date_created")] public string? DateCreated { get; set; }
 }
 
+public sealed class PublicExtensionFootprint
+{
+    public string Slug { get; set; } = string.Empty;
+    public string Type { get; set; } = string.Empty;
+    public string SourceUrl { get; set; } = string.Empty;
+}
+
 
 public sealed class VariationAttribute
 {

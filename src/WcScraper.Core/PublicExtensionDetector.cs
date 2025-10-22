@@ -58,7 +58,7 @@ public sealed class PublicExtensionDetector : IDisposable
         GC.SuppressFinalize(this);
     }
 
-    public async Task<IReadOnlyList<PublicExtensionFinding>> DetectAsync(
+    public async Task<IReadOnlyList<PublicExtensionFootprint>> DetectAsync(
         string baseUrl,
         bool followLinkedAssets = true,
         IProgress<string>? log = null,
@@ -79,7 +79,7 @@ public sealed class PublicExtensionDetector : IDisposable
         var urlsToProcess = new Queue<string>();
         urlsToProcess.Enqueue(baseUri.ToString());
 
-        var findings = new Dictionary<(string Type, string Slug), PublicExtensionFinding>(StringComparer.OrdinalIgnoreCase);
+        var findings = new Dictionary<(string Type, string Slug), PublicExtensionFootprint>();
 
         while (urlsToProcess.Count > 0)
         {
@@ -158,7 +158,7 @@ public sealed class PublicExtensionDetector : IDisposable
     private static void ScanForExtensions(
         string sourceUrl,
         string content,
-        IDictionary<(string Type, string Slug), PublicExtensionFinding> findings)
+        IDictionary<(string Type, string Slug), PublicExtensionFootprint> findings)
     {
         foreach (Match match in ExtensionPathRegex.Matches(content))
         {
@@ -175,15 +175,12 @@ public sealed class PublicExtensionDetector : IDisposable
             }
 
             var key = (type, slug);
-            if (!findings.ContainsKey(key))
+            findings[key] = new PublicExtensionFootprint
             {
-                findings[key] = new PublicExtensionFinding
-                {
-                    Slug = slug,
-                    Type = type,
-                    SourceUrl = sourceUrl
-                };
-            }
+                Slug = slug,
+                Type = type,
+                SourceUrl = sourceUrl
+            };
         }
     }
 
@@ -278,10 +275,4 @@ public sealed class PublicExtensionDetector : IDisposable
         return slug;
     }
 }
-
-public sealed class PublicExtensionFinding
-{
-    public string Slug { get; init; } = string.Empty;
-    public string Type { get; init; } = string.Empty;
-    public string SourceUrl { get; init; } = string.Empty;
 }
