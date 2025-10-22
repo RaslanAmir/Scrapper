@@ -23,6 +23,10 @@ public static class FrontEndDesignSnapshot
         "@font-face\\s*\\{[^}]*\\}",
         RegexOptions.Singleline | RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
+    private static readonly Regex CssUrlTokenRegex = new(
+        "url\\((['\"\\]?)([^'\"\\)]+)\\1\\)",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
     private static readonly Regex LinkTagRegex = new(
         "<link\\b[^>]*>",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
@@ -56,7 +60,8 @@ public static class FrontEndDesignSnapshot
                 string.Empty,
                 Array.Empty<string>(),
                 Array.Empty<StylesheetSnapshot>(),
-                Array.Empty<FontAssetSnapshot>());
+                Array.Empty<FontAssetSnapshot>(),
+                Array.Empty<DesignImageSnapshot>());
         }
 
         var inlineStyles = ExtractInlineStyles(html);
@@ -65,12 +70,19 @@ public static class FrontEndDesignSnapshot
         var fontCandidates = new Dictionary<string, FontAssetRequest>(StringComparer.OrdinalIgnoreCase);
         var stylesheetSnapshots = new List<StylesheetSnapshot>();
         var fontSnapshots = new List<FontAssetSnapshot>();
+        var imageCandidates = new Dictionary<string, ImageAssetRequest>(StringComparer.OrdinalIgnoreCase);
+        var imageSnapshots = new List<DesignImageSnapshot>();
 
         foreach (var block in inlineStyles)
         {
             foreach (var candidate in ExtractFontUrlCandidates(block, baseUri))
             {
                 AddFontCandidate(fontCandidates, candidate, homeUrl);
+            }
+
+            foreach (var candidate in ExtractImageUrlCandidates(block, baseUri, fontCandidates))
+            {
+                AddImageCandidate(imageCandidates, candidate, homeUrl);
             }
         }
 
@@ -113,6 +125,11 @@ public static class FrontEndDesignSnapshot
                     {
                         AddFontCandidate(fontCandidates, candidate, resolved);
                     }
+
+                    foreach (var candidate in ExtractImageUrlCandidates(cssText, stylesheetUri, fontCandidates))
+                    {
+                        AddImageCandidate(imageCandidates, candidate, resolved);
+                    }
                 }
                 catch (TaskCanceledException ex)
                 {
@@ -152,6 +169,33 @@ public static class FrontEndDesignSnapshot
             }
         }
 
+        foreach (var request in imageCandidates.Values)
+        {
+            try
+            {
+                log?.Report($"GET {request.ResolvedUrl}");
+                using var imageResponse = await httpClient.GetAsync(request.ResolvedUrl, cancellationToken);
+                if (!imageResponse.IsSuccessStatusCode)
+                {
+                    log?.Report($"Image request failed for {request.ResolvedUrl}: {(int)imageResponse.StatusCode} {imageResponse.ReasonPhrase}");
+                    continue;
+                }
+
+                var imageBytes = await imageResponse.Content.ReadAsByteArrayAsync(cancellationToken);
+                var contentType = imageResponse.Content.Headers.ContentType?.MediaType;
+                var imageSnapshot = new DesignImageSnapshot(request.RawUrl, request.ResolvedUrl, request.ReferencedFrom, imageBytes, contentType);
+                imageSnapshots.Add(imageSnapshot);
+            }
+            catch (TaskCanceledException ex)
+            {
+                log?.Report($"Image request canceled for {request.ResolvedUrl}: {ex.Message}");
+            }
+            catch (HttpRequestException ex)
+            {
+                log?.Report($"Image request failed for {request.ResolvedUrl}: {ex.Message}");
+            }
+        }
+
         var fontUrls = fontCandidates.Keys.ToList();
 
         return new FrontEndDesignSnapshotResult(
@@ -160,7 +204,8 @@ public static class FrontEndDesignSnapshot
             aggregatedCss,
             fontUrls,
             stylesheetSnapshots,
-            fontSnapshots);
+            fontSnapshots,
+            imageSnapshots);
     }
 
     private static IReadOnlyList<string> ExtractInlineStyles(string html)
@@ -303,6 +348,47 @@ public static class FrontEndDesignSnapshot
         }
     }
 
+    private static IEnumerable<ImageUrlCandidate> ExtractImageUrlCandidates(
+        string css,
+        Uri? baseUri,
+        IReadOnlyDictionary<string, FontAssetRequest> knownFontRequests)
+    {
+        if (string.IsNullOrWhiteSpace(css)) yield break;
+
+        var sanitized = FontFaceBlockRegex.Replace(css, string.Empty);
+        if (string.IsNullOrWhiteSpace(sanitized)) yield break;
+
+        foreach (Match match in CssUrlTokenRegex.Matches(sanitized))
+        {
+            if (match.Groups.Count < 3) continue;
+
+            var raw = match.Groups[2].Value?.Trim();
+            if (string.IsNullOrWhiteSpace(raw)) continue;
+            if (raw.StartsWith("data:", StringComparison.OrdinalIgnoreCase)) continue;
+            if (raw.StartsWith("#", StringComparison.Ordinal)) continue;
+            if (raw.StartsWith("mailto:", StringComparison.OrdinalIgnoreCase)) continue;
+            if (raw.StartsWith("tel:", StringComparison.OrdinalIgnoreCase)) continue;
+            if (raw.StartsWith("javascript:", StringComparison.OrdinalIgnoreCase)) continue;
+
+            var resolved = ResolveAssetUrl(raw, baseUri);
+            if (string.IsNullOrWhiteSpace(resolved)) continue;
+            if (knownFontRequests.ContainsKey(resolved)) continue;
+
+            yield return new ImageUrlCandidate(raw, resolved);
+        }
+    }
+
+    private static void AddImageCandidate(
+        IDictionary<string, ImageAssetRequest> accumulator,
+        ImageUrlCandidate candidate,
+        string referencedFrom)
+    {
+        if (!accumulator.ContainsKey(candidate.ResolvedUrl))
+        {
+            accumulator[candidate.ResolvedUrl] = new ImageAssetRequest(candidate.RawUrl, candidate.ResolvedUrl, referencedFrom);
+        }
+    }
+
     private static string DecodeText(byte[] contentBytes, string? charset)
     {
         if (contentBytes.Length == 0)
@@ -327,7 +413,11 @@ public static class FrontEndDesignSnapshot
 
     private readonly record struct FontUrlCandidate(string RawUrl, string ResolvedUrl);
 
+    private readonly record struct ImageUrlCandidate(string RawUrl, string ResolvedUrl);
+
     private sealed record FontAssetRequest(string RawUrl, string ResolvedUrl, string ReferencedFrom);
+
+    private sealed record ImageAssetRequest(string RawUrl, string ResolvedUrl, string ReferencedFrom);
 }
 
 public sealed class FrontEndDesignSnapshotResult
@@ -338,7 +428,8 @@ public sealed class FrontEndDesignSnapshotResult
         string inlineCss,
         IReadOnlyList<string> fontUrls,
         IReadOnlyList<StylesheetSnapshot> stylesheets,
-        IReadOnlyList<FontAssetSnapshot> fontFiles)
+        IReadOnlyList<FontAssetSnapshot> fontFiles,
+        IReadOnlyList<DesignImageSnapshot> imageFiles)
     {
         HomeUrl = homeUrl;
         RawHtml = rawHtml;
@@ -346,6 +437,7 @@ public sealed class FrontEndDesignSnapshotResult
         FontUrls = fontUrls ?? Array.Empty<string>();
         Stylesheets = stylesheets ?? Array.Empty<StylesheetSnapshot>();
         FontFiles = fontFiles ?? Array.Empty<FontAssetSnapshot>();
+        ImageFiles = imageFiles ?? Array.Empty<DesignImageSnapshot>();
     }
 
     public string HomeUrl { get; }
@@ -359,6 +451,8 @@ public sealed class FrontEndDesignSnapshotResult
     public IReadOnlyList<StylesheetSnapshot> Stylesheets { get; }
 
     public IReadOnlyList<FontAssetSnapshot> FontFiles { get; }
+
+    public IReadOnlyList<DesignImageSnapshot> ImageFiles { get; }
 }
 
 public sealed class StylesheetSnapshot
@@ -391,6 +485,33 @@ public sealed class StylesheetSnapshot
 public sealed class FontAssetSnapshot
 {
     public FontAssetSnapshot(
+        string sourceUrl,
+        string resolvedUrl,
+        string referencedFrom,
+        byte[] content,
+        string? contentType)
+    {
+        SourceUrl = sourceUrl ?? string.Empty;
+        ResolvedUrl = resolvedUrl ?? string.Empty;
+        ReferencedFrom = referencedFrom ?? string.Empty;
+        Content = content ?? Array.Empty<byte>();
+        ContentType = contentType;
+    }
+
+    public string SourceUrl { get; }
+
+    public string ResolvedUrl { get; }
+
+    public string ReferencedFrom { get; }
+
+    public byte[] Content { get; }
+
+    public string? ContentType { get; }
+}
+
+public sealed class DesignImageSnapshot
+{
+    public DesignImageSnapshot(
         string sourceUrl,
         string resolvedUrl,
         string referencedFrom,

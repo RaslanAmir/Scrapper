@@ -636,7 +636,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
                     {
                         var fontCount = designSnapshot.FontUrls.Count;
                         var inlineLength = designSnapshot.InlineCss.Length;
-                        Append($"Captured public design snapshot (inline CSS length: {inlineLength:N0} chars, fonts: {fontCount}).");
+                        var imageCount = designSnapshot.ImageFiles.Count;
+                        Append($"Captured public design snapshot (inline CSS length: {inlineLength:N0} chars, fonts: {fontCount}, background images: {imageCount}).");
                     }
                 }
                 catch (Exception ex)
@@ -1079,6 +1080,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
                     var stylesheetManifest = new List<Dictionary<string, object?>>();
                     var fontManifest = new List<Dictionary<string, object?>>();
+                    var imageManifest = new List<Dictionary<string, object?>>();
 
                     for (var i = 0; i < designSnapshot.Stylesheets.Count; i++)
                     {
@@ -1135,10 +1137,47 @@ public sealed class MainViewModel : INotifyPropertyChanged
                         });
                     }
 
+                    for (var i = 0; i < designSnapshot.ImageFiles.Count; i++)
+                    {
+                        var image = designSnapshot.ImageFiles[i];
+                        var fileName = CreateDesignAssetFileName(
+                            prefix: "image",
+                            index: i + 1,
+                            url: image?.ResolvedUrl ?? image?.SourceUrl,
+                            contentType: image?.ContentType,
+                            defaultExtension: ".bin");
+
+                        var relativeAssetPath = Path.Combine("assets", fileName);
+                        var assetPath = Path.Combine(assetsRoot, fileName);
+                        var content = image?.Content ?? Array.Empty<byte>();
+
+                        await File.WriteAllBytesAsync(assetPath, content);
+                        Append($"Wrote {assetPath}");
+
+                        imageManifest.Add(new Dictionary<string, object?>
+                        {
+                            ["file"] = NormalizeRelativePath(relativeAssetPath),
+                            ["source_url"] = image?.SourceUrl,
+                            ["resolved_url"] = image?.ResolvedUrl,
+                            ["referenced_from"] = image?.ReferencedFrom,
+                            ["content_type"] = image?.ContentType
+                        });
+                    }
+
+                    if (designSnapshot.ImageFiles.Count > 0)
+                    {
+                        Append($"Captured {designSnapshot.ImageFiles.Count} CSS background image(s); assets saved under {assetsRoot}.");
+                    }
+                    else
+                    {
+                        Append("No CSS background images were captured.");
+                    }
+
                     var manifest = new Dictionary<string, object?>
                     {
                         ["stylesheets"] = stylesheetManifest,
-                        ["fonts"] = fontManifest
+                        ["fonts"] = fontManifest,
+                        ["images"] = imageManifest
                     };
 
                     var manifestPath = Path.Combine(designRoot, "assets-manifest.json");
