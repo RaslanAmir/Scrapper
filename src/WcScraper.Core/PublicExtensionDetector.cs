@@ -1,9 +1,11 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Net.Http;
 using System.Security.Authentication;
+using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
@@ -44,6 +46,20 @@ public sealed class PublicExtensionDetector : IDisposable
     private readonly bool _ownsClient;
     private readonly HttpRetryPolicy _httpPolicy;
 
+    public int? LastMaxPages { get; private set; }
+
+    public long? LastMaxBytes { get; private set; }
+
+    public bool PageLimitReached { get; private set; }
+
+    public bool ByteLimitReached { get; private set; }
+
+    public int ScheduledPageCount { get; private set; }
+
+    public int ProcessedPageCount { get; private set; }
+
+    public long TotalBytesDownloaded { get; private set; }
+
     public PublicExtensionDetector(HttpClient? httpClient = null, HttpRetryPolicy? httpRetryPolicy = null)
     {
         if (httpClient is null)
@@ -78,6 +94,8 @@ public sealed class PublicExtensionDetector : IDisposable
         bool followLinkedAssets = true,
         IProgress<string>? log = null,
         IEnumerable<string>? extraEntryUrls = null,
+        int? maxPages = null,
+        long? maxBytes = null,
         CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(baseUrl))
@@ -91,14 +109,30 @@ public sealed class PublicExtensionDetector : IDisposable
             throw new ArgumentException("Base URL must be an absolute URI", nameof(baseUrl));
         }
 
+        var pageLimit = NormalizePageLimit(maxPages);
+        var byteLimit = NormalizeByteLimit(maxBytes);
+
+        LastMaxPages = pageLimit;
+        LastMaxBytes = byteLimit;
+        PageLimitReached = false;
+        ByteLimitReached = false;
+        ScheduledPageCount = 0;
+        ProcessedPageCount = 0;
+        TotalBytesDownloaded = 0;
+        _pageLimitLogged = false;
+        _byteLimitLogged = false;
+
+        _log = log;
+
+        _scheduledUrls = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        _urlsToProcess = new Queue<string>();
         var seenUrls = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var urlsToProcess = new Queue<string>();
         var entryUrls = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
             baseUri.ToString()
         };
 
-        urlsToProcess.Enqueue(baseUri.ToString());
+        TryScheduleUrl(baseUri.ToString());
 
         if (extraEntryUrls is not null)
         {
@@ -121,23 +155,39 @@ public sealed class PublicExtensionDetector : IDisposable
                     continue;
                 }
 
-                urlsToProcess.Enqueue(entryUrl);
+                if (!TryScheduleUrl(entryUrl))
+                {
+                    entryUrls.Remove(entryUrl);
+                }
             }
         }
 
         var findings = new Dictionary<(string Type, string Slug), PublicExtensionFootprint>();
 
-        while (urlsToProcess.Count > 0)
+        while (_urlsToProcess.Count > 0)
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            var currentUrl = urlsToProcess.Dequeue();
+            var currentUrl = _urlsToProcess.Dequeue();
             if (!seenUrls.Add(currentUrl))
             {
                 continue;
             }
 
-            var content = await DownloadAsync(currentUrl, log, cancellationToken).ConfigureAwait(false);
+            ProcessedPageCount++;
+
+            var download = await DownloadAsync(currentUrl, log, cancellationToken).ConfigureAwait(false);
+            if (!string.IsNullOrEmpty(download.Content))
+            {
+                TotalBytesDownloaded += download.ByteCount;
+                if (LastMaxBytes.HasValue && TotalBytesDownloaded >= LastMaxBytes.Value)
+                {
+                    ByteLimitReached = true;
+                    ReportByteLimit(LastMaxBytes.Value);
+                }
+            }
+
+            var content = download.Content;
             if (string.IsNullOrEmpty(content))
             {
                 continue;
@@ -159,7 +209,7 @@ public sealed class PublicExtensionDetector : IDisposable
                         log?.Report($"Following {asset.PreloadDescription} asset {asset.Url}");
                     }
 
-                    urlsToProcess.Enqueue(asset.Url);
+                    TryScheduleUrl(asset.Url);
                 }
             }
         }
@@ -167,7 +217,16 @@ public sealed class PublicExtensionDetector : IDisposable
         return findings.Values.ToList();
     }
 
-    private async Task<string?> DownloadAsync(string url, IProgress<string>? log, CancellationToken cancellationToken)
+    private HashSet<string> _scheduledUrls = new(StringComparer.OrdinalIgnoreCase);
+    private Queue<string> _urlsToProcess = new();
+    private bool _pageLimitLogged;
+    private bool _byteLimitLogged;
+    private IProgress<string>? _log;
+
+    private async Task<(string? Content, long ByteCount)> DownloadAsync(
+        string url,
+        IProgress<string>? log,
+        CancellationToken cancellationToken)
     {
         try
         {
@@ -190,13 +249,16 @@ public sealed class PublicExtensionDetector : IDisposable
                 if ((int)response.StatusCode == 404)
                 {
                     log?.Report($"Public extension detection received 404 for {url}");
-                    return null;
+                    return (null, 0);
                 }
 
                 response.EnsureSuccessStatusCode();
             }
 
-            return await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+            var content = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+            var byteCount = response.Content.Headers.ContentLength
+                ?? Encoding.UTF8.GetByteCount(content);
+            return (content, byteCount);
         }
         catch (TaskCanceledException ex)
         {
@@ -215,7 +277,101 @@ public sealed class PublicExtensionDetector : IDisposable
             log?.Report($"Public extension detection request failed: {ex.Message}");
         }
 
-        return null;
+        return (null, 0);
+    }
+
+    private bool TryScheduleUrl(string url)
+    {
+        if (string.IsNullOrWhiteSpace(url))
+        {
+            return false;
+        }
+
+        if (!_scheduledUrls.Add(url))
+        {
+            return false;
+        }
+
+        if (!CanScheduleAdditionalUrl())
+        {
+            _scheduledUrls.Remove(url);
+            return false;
+        }
+
+        _urlsToProcess.Enqueue(url);
+        ScheduledPageCount++;
+        return true;
+    }
+
+    private bool CanScheduleAdditionalUrl()
+    {
+        if (LastMaxPages.HasValue && ScheduledPageCount >= LastMaxPages.Value)
+        {
+            PageLimitReached = true;
+            ReportPageLimit(LastMaxPages.Value);
+            return false;
+        }
+
+        if (LastMaxBytes.HasValue && TotalBytesDownloaded >= LastMaxBytes.Value)
+        {
+            ByteLimitReached = true;
+            ReportByteLimit(LastMaxBytes.Value);
+            return false;
+        }
+
+        return true;
+    }
+
+    private void ReportPageLimit(int limit)
+    {
+        if (_pageLimitLogged)
+        {
+            return;
+        }
+
+        _log?.Report($"Public extension detection page limit reached ({limit:N0} page(s)); skipping additional URLs.");
+        _pageLimitLogged = true;
+    }
+
+    private void ReportByteLimit(long limit)
+    {
+        if (_byteLimitLogged)
+        {
+            return;
+        }
+
+        _log?.Report($"Public extension detection byte limit reached ({FormatByteSize(limit)}); skipping additional URLs.");
+        _byteLimitLogged = true;
+    }
+
+    private static int? NormalizePageLimit(int? maxPages)
+        => maxPages.HasValue && maxPages.Value > 0 ? maxPages : null;
+
+    private static long? NormalizeByteLimit(long? maxBytes)
+        => maxBytes.HasValue && maxBytes.Value > 0 ? maxBytes : null;
+
+    private static string FormatByteSize(long bytes)
+    {
+        const double OneKb = 1024d;
+        const double OneMb = OneKb * 1024d;
+        const double OneGb = OneMb * 1024d;
+
+        if (bytes >= OneGb)
+        {
+            return $"{bytes / OneGb:0.##} GB";
+        }
+
+        if (bytes >= OneMb)
+        {
+            return $"{bytes / OneMb:0.##} MB";
+        }
+
+        if (bytes >= OneKb)
+        {
+            return $"{bytes / OneKb:0.##} KB";
+        }
+
+        return $"{bytes:N0} B";
     }
 
     private static void ScanForExtensions(
@@ -692,4 +848,13 @@ public sealed class PublicExtensionDetector : IDisposable
         return slug;
     }
 }
+
+public sealed record PublicExtensionDetectionSummary(
+    int? MaxPages,
+    long? MaxBytes,
+    int ScheduledPageCount,
+    int ProcessedPageCount,
+    long TotalBytesDownloaded,
+    bool PageLimitReached,
+    bool ByteLimitReached);
 }

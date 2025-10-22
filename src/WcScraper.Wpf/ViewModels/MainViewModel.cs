@@ -48,6 +48,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private bool _expThemesCsv = false;
     private bool _expThemesJsonl = false;
     private bool _expPublicExtensionFootprints = false;
+    private string _publicExtensionMaxPages = "75";
+    private string _publicExtensionMaxBytes = "3145728";
     private string _additionalPublicExtensionPages = string.Empty;
     private string _additionalDesignSnapshotPages = string.Empty;
     private string _designScreenshotBreakpointsText = string.Empty;
@@ -145,6 +147,37 @@ public sealed class MainViewModel : INotifyPropertyChanged
             }
 
             _additionalPublicExtensionPages = value ?? string.Empty;
+            OnPropertyChanged();
+        }
+    }
+    public string PublicExtensionMaxPages
+    {
+        get => _publicExtensionMaxPages;
+        set
+        {
+            var newValue = value ?? string.Empty;
+            if (_publicExtensionMaxPages == newValue)
+            {
+                return;
+            }
+
+            _publicExtensionMaxPages = newValue;
+            OnPropertyChanged();
+        }
+    }
+
+    public string PublicExtensionMaxBytes
+    {
+        get => _publicExtensionMaxBytes;
+        set
+        {
+            var newValue = value ?? string.Empty;
+            if (_publicExtensionMaxBytes == newValue)
+            {
+                return;
+            }
+
+            _publicExtensionMaxBytes = newValue;
             OnPropertyChanged();
         }
     }
@@ -364,6 +397,158 @@ public sealed class MainViewModel : INotifyPropertyChanged
             .ToList();
 
         return tokens;
+    }
+
+    private (int? PageLimit, long? ByteLimit) GetPublicExtensionLimits(IProgress<string>? log)
+    {
+        var pageLimit = ParsePositiveInt(PublicExtensionMaxPages, out var pageInvalid);
+        if (pageInvalid)
+        {
+            log?.Report($"Invalid public extension page limit '{PublicExtensionMaxPages}'. Treating as unlimited.");
+        }
+
+        var byteLimit = ParsePositiveLong(PublicExtensionMaxBytes, out var byteInvalid);
+        if (byteInvalid)
+        {
+            log?.Report($"Invalid public extension byte limit '{PublicExtensionMaxBytes}'. Treating as unlimited.");
+        }
+
+        return (pageLimit, byteLimit);
+    }
+
+    private static int? ParsePositiveInt(string? text, out bool invalid)
+    {
+        invalid = false;
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return null;
+        }
+
+        if (TryParseIntWithCultures(text, out var value))
+        {
+            if (value < 0)
+            {
+                invalid = true;
+                return null;
+            }
+
+            return value == 0 ? null : value;
+        }
+
+        invalid = true;
+        return null;
+    }
+
+    private static long? ParsePositiveLong(string? text, out bool invalid)
+    {
+        invalid = false;
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return null;
+        }
+
+        if (TryParseLongWithCultures(text, out var value))
+        {
+            if (value < 0)
+            {
+                invalid = true;
+                return null;
+            }
+
+            return value == 0 ? null : value;
+        }
+
+        invalid = true;
+        return null;
+    }
+
+    private static bool TryParseIntWithCultures(string text, out int value)
+    {
+        const NumberStyles styles = NumberStyles.Integer | NumberStyles.AllowThousands;
+        if (int.TryParse(text, styles, CultureInfo.InvariantCulture, out value))
+        {
+            return true;
+        }
+
+        if (!ReferenceEquals(CultureInfo.InvariantCulture, CultureInfo.CurrentCulture)
+            && int.TryParse(text, styles, CultureInfo.CurrentCulture, out value))
+        {
+            return true;
+        }
+
+        value = 0;
+        return false;
+    }
+
+    private static bool TryParseLongWithCultures(string text, out long value)
+    {
+        const NumberStyles styles = NumberStyles.Integer | NumberStyles.AllowThousands;
+        if (long.TryParse(text, styles, CultureInfo.InvariantCulture, out value))
+        {
+            return true;
+        }
+
+        if (!ReferenceEquals(CultureInfo.InvariantCulture, CultureInfo.CurrentCulture)
+            && long.TryParse(text, styles, CultureInfo.CurrentCulture, out value))
+        {
+            return true;
+        }
+
+        value = 0;
+        return false;
+    }
+
+    private static string BuildPublicExtensionLimitNote(
+        PublicExtensionDetectionSummary? summary,
+        bool includeLeadingSpace = true)
+    {
+        if (summary is null || (!summary.PageLimitReached && !summary.ByteLimitReached))
+        {
+            return string.Empty;
+        }
+
+        var parts = new List<string>();
+        if (summary.PageLimitReached)
+        {
+            parts.Add(summary.MaxPages.HasValue
+                ? $"page cap of {summary.MaxPages.Value:N0} page(s)"
+                : "configured page cap");
+        }
+
+        if (summary.ByteLimitReached)
+        {
+            parts.Add(summary.MaxBytes.HasValue
+                ? $"byte cap of {FormatByteSize(summary.MaxBytes.Value)}"
+                : "configured byte cap");
+        }
+
+        var joined = string.Join(" and ", parts);
+        var prefix = includeLeadingSpace ? " " : string.Empty;
+        return $"{prefix}Crawl stopped after {summary.ProcessedPageCount:N0} page(s) / {FormatByteSize(summary.TotalBytesDownloaded)} because the {joined} was reached.";
+    }
+
+    private static string FormatByteSize(long bytes)
+    {
+        const double OneKb = 1024d;
+        const double OneMb = OneKb * 1024d;
+        const double OneGb = OneMb * 1024d;
+
+        if (bytes >= OneGb)
+        {
+            return $"{bytes / OneGb:0.##} GB";
+        }
+
+        if (bytes >= OneMb)
+        {
+            return $"{bytes / OneMb:0.##} MB";
+        }
+
+        if (bytes >= OneKb)
+        {
+            return $"{bytes / OneKb:0.##} KB";
+        }
+
+        return $"{bytes:N0} B";
     }
     private IReadOnlyList<string> GetAdditionalDesignSnapshotPageUrls()
     {
@@ -667,6 +852,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
             List<InstalledPlugin> plugins = new();
             List<InstalledTheme> themes = new();
             List<PublicExtensionFootprint> publicExtensionFootprints = new();
+            PublicExtensionDetectionSummary? publicExtensionDetection = null;
             FrontEndDesignSnapshotResult? designSnapshot = null;
             bool attemptedDesignSnapshot = false;
             bool designSnapshotFailed = false;
@@ -831,11 +1017,15 @@ public sealed class MainViewModel : INotifyPropertyChanged
                         Append($"Including {additionalEntryUrls.Count} additional page(s) for public asset detection.");
                     }
 
+                    var (pageLimit, byteLimit) = GetPublicExtensionLimits(logger);
                     publicExtensionFootprints = await _wooScraper.FetchPublicExtensionFootprintsAsync(
                         targetUrl,
                         includeLinkedAssets: true,
                         log: logger,
-                        additionalEntryUrls: additionalEntryUrls);
+                        additionalEntryUrls: additionalEntryUrls,
+                        maxPages: pageLimit,
+                        maxBytes: byteLimit);
+                    publicExtensionDetection = _wooScraper.LastPublicExtensionDetection;
                     if (publicExtensionFootprints.Count > 0)
                     {
                         Append($"Detected {publicExtensionFootprints.Count} plugin/theme slug(s) from public assets (manual install required).");
@@ -1282,16 +1472,22 @@ public sealed class MainViewModel : INotifyPropertyChanged
                             ["directory_download_url"] = f.DirectoryDownloadUrl
                         });
                     CsvExporter.Write(csvPath, rows);
-                    Append($"Wrote {csvPath} (includes asset URLs and version cues when available; manual install required).");
+                    var limitNote = BuildPublicExtensionLimitNote(publicExtensionDetection);
+                    Append($"Wrote {csvPath} (includes asset URLs and version cues when available; manual install required).{limitNote}");
 
                     var jsonPath = Path.Combine(storeOutputFolder, $"{storeId}_{timestamp}_public_extension_footprints.json");
                     var json = JsonSerializer.Serialize(publicExtensionFootprints, _artifactWriteOptions);
                     await File.WriteAllTextAsync(jsonPath, json, Encoding.UTF8);
-                    Append($"Wrote {jsonPath} (includes asset URLs and version cues when available; manual install required).");
+                    Append($"Wrote {jsonPath} (includes asset URLs and version cues when available; manual install required).{limitNote}");
                 }
                 else if (attemptedPublicExtensionFootprintFetch)
                 {
                     Append("Public extension footprint export skipped (no slugs detected).");
+                    var limitNote = BuildPublicExtensionLimitNote(publicExtensionDetection, includeLeadingSpace: false);
+                    if (!string.IsNullOrEmpty(limitNote))
+                    {
+                        Append(limitNote);
+                    }
                 }
             }
 
@@ -1604,6 +1800,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 plugins,
                 themes,
                 publicExtensionFootprints,
+                publicExtensionDetection,
                 pluginBundles,
                 themeBundles,
                 SelectedPlatform == PlatformMode.WooCommerce && needsPluginInventory,

@@ -73,6 +73,30 @@ internal sealed class ManualMigrationReportBuilder
         return $"{value.TotalMilliseconds:0}ms";
     }
 
+    private static string FormatByteSize(long bytes)
+    {
+        const double OneKb = 1024d;
+        const double OneMb = OneKb * 1024d;
+        const double OneGb = OneMb * 1024d;
+
+        if (bytes >= OneGb)
+        {
+            return $"{bytes / OneGb:0.##} GB";
+        }
+
+        if (bytes >= OneMb)
+        {
+            return $"{bytes / OneMb:0.##} MB";
+        }
+
+        if (bytes >= OneKb)
+        {
+            return $"{bytes / OneKb:0.##} KB";
+        }
+
+        return $"{bytes:N0} B";
+    }
+
     private static void AppendExtensionFootprintSection(StringBuilder builder, ManualMigrationReportContext context)
     {
         builder.AppendLine("## Extension Footprint");
@@ -163,6 +187,13 @@ internal sealed class ManualMigrationReportBuilder
     private static void AppendPublicExtensionFootprints(StringBuilder builder, ManualMigrationReportContext context)
     {
         builder.AppendLine("### Public plugin/theme slugs");
+        var detection = context.PublicExtensionDetection;
+        if (detection is not null && (detection.PageLimitReached || detection.ByteLimitReached))
+        {
+            var limitDescription = DescribeDetectionLimit(detection);
+            builder.AppendLine($"> Crawl stopped after {detection.ProcessedPageCount:N0} page(s) / {FormatByteSize(detection.TotalBytesDownloaded)} because the {limitDescription} was reached.");
+            builder.AppendLine();
+        }
         if (!context.IsWooCommerce || !context.RequestedPublicExtensionFootprints)
         {
             builder.AppendLine("Not requested for this run.");
@@ -570,6 +601,26 @@ internal sealed class ManualMigrationReportBuilder
         }
     }
 
+    private static string DescribeDetectionLimit(PublicExtensionDetectionSummary detection)
+    {
+        var parts = new List<string>();
+        if (detection.PageLimitReached)
+        {
+            parts.Add(detection.MaxPages.HasValue
+                ? $"page cap of {detection.MaxPages.Value:N0} page(s)"
+                : "configured page cap");
+        }
+
+        if (detection.ByteLimitReached)
+        {
+            parts.Add(detection.MaxBytes.HasValue
+                ? $"byte cap of {FormatByteSize(detection.MaxBytes.Value)}"
+                : "configured byte cap");
+        }
+
+        return string.Join(" and ", parts);
+    }
+
     private static string MarkdownEscape(string? value)
     {
         if (string.IsNullOrWhiteSpace(value))
@@ -680,6 +731,7 @@ internal sealed record ManualMigrationReportContext(
     IReadOnlyList<InstalledPlugin> Plugins,
     IReadOnlyList<InstalledTheme> Themes,
     IReadOnlyList<PublicExtensionFootprint> PublicExtensions,
+    PublicExtensionDetectionSummary? PublicExtensionDetection,
     IReadOnlyList<ExtensionArtifact> PluginBundles,
     IReadOnlyList<ExtensionArtifact> ThemeBundles,
     bool RequestedPluginInventory,
