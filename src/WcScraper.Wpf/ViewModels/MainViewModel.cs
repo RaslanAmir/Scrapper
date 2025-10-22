@@ -1464,6 +1464,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
                             ["source_urls"] = string.Join(";", f.SourceUrls),
                             ["asset_url"] = f.AssetUrl,
                             ["version_hint"] = f.VersionHint,
+                            ["wordpress_version"] = f.WordPressVersion,
+                            ["woocommerce_version"] = f.WooCommerceVersion,
                             ["directory_status"] = f.DirectoryStatus,
                             ["directory_title"] = f.DirectoryTitle,
                             ["directory_author"] = f.DirectoryAuthor,
@@ -1792,6 +1794,15 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 logSnapshot = tempLogs;
             }
 
+            var detectedWordPressVersion = publicExtensionDetection?.WordPressVersion
+                ?? publicExtensionFootprints
+                    .Select(f => f.WordPressVersion)
+                    .FirstOrDefault(v => !string.IsNullOrWhiteSpace(v));
+            var detectedWooCommerceVersion = publicExtensionDetection?.WooCommerceVersion
+                ?? publicExtensionFootprints
+                    .Select(f => f.WooCommerceVersion)
+                    .FirstOrDefault(v => !string.IsNullOrWhiteSpace(v));
+
             var reportContext = new ManualMigrationReportContext(
                 targetUrl,
                 storeId,
@@ -1801,6 +1812,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 themes,
                 publicExtensionFootprints,
                 publicExtensionDetection,
+                detectedWordPressVersion,
+                detectedWooCommerceVersion,
                 pluginBundles,
                 themeBundles,
                 SelectedPlatform == PlatformMode.WooCommerce && needsPluginInventory,

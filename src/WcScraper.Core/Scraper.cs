@@ -337,6 +337,9 @@ public sealed class WooScraper : IDisposable
                 .DetectAsync(baseUrl, includeLinkedAssets, log, entryList, maxPages, maxBytes)
                 .ConfigureAwait(false);
 
+            var wordpressVersion = detector.WordPressVersion;
+            var wooCommerceVersion = detector.WooCommerceVersion;
+
             LastPublicExtensionDetection = BuildPublicExtensionSummary(detector);
 
             return findings
@@ -373,7 +376,9 @@ public sealed class WooScraper : IDisposable
                         SourceUrl = sourceUrl,
                         SourceUrls = combinedSourceUrls,
                         AssetUrl = assetUrl,
-                        VersionHint = versionHint
+                        VersionHint = versionHint,
+                        WordPressVersion = wordpressVersion,
+                        WooCommerceVersion = wooCommerceVersion
                     };
                 })
                 .ToList();
@@ -408,7 +413,9 @@ public sealed class WooScraper : IDisposable
             detector.ProcessedPageCount,
             detector.TotalBytesDownloaded,
             detector.PageLimitReached,
-            detector.ByteLimitReached);
+            detector.ByteLimitReached,
+            detector.WordPressVersion,
+            detector.WooCommerceVersion);
 
     private static List<string> CombineSourceUrls(IEnumerable<PublicExtensionFootprint> footprints)
     {

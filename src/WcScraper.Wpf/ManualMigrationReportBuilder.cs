@@ -40,6 +40,8 @@ internal sealed class ManualMigrationReportBuilder
 
         builder.AppendLine($"- **HTTP retries:** {FormatRetrySummary(context)}");
         builder.AppendLine();
+        AppendPlatformVersionSection(builder, context);
+        builder.AppendLine();
         AppendExtensionFootprintSection(builder, context);
         builder.AppendLine();
         AppendDesignSection(builder, context);
@@ -95,6 +97,42 @@ internal sealed class ManualMigrationReportBuilder
         }
 
         return $"{bytes:N0} B";
+    }
+
+    private static void AppendPlatformVersionSection(StringBuilder builder, ManualMigrationReportContext context)
+    {
+        builder.AppendLine("## Platform versions");
+
+        if (!context.IsWooCommerce)
+        {
+            builder.AppendLine("Not applicable for this platform.");
+            return;
+        }
+
+        if (!context.RequestedPublicExtensionFootprints)
+        {
+            builder.AppendLine("Public crawl not requested; no version cues captured.");
+            return;
+        }
+
+        var wordpress = context.WordPressVersion;
+        var woo = context.WooCommerceVersion;
+
+        if (string.IsNullOrWhiteSpace(wordpress) && string.IsNullOrWhiteSpace(woo))
+        {
+            builder.AppendLine("No version cues detected in public assets.");
+            return;
+        }
+
+        if (!string.IsNullOrWhiteSpace(wordpress))
+        {
+            builder.AppendLine($"- WordPress core: {MarkdownEscape(wordpress)}");
+        }
+
+        if (!string.IsNullOrWhiteSpace(woo))
+        {
+            builder.AppendLine($"- WooCommerce: {MarkdownEscape(woo)}");
+        }
     }
 
     private static void AppendExtensionFootprintSection(StringBuilder builder, ManualMigrationReportContext context)
@@ -732,6 +770,8 @@ internal sealed record ManualMigrationReportContext(
     IReadOnlyList<InstalledTheme> Themes,
     IReadOnlyList<PublicExtensionFootprint> PublicExtensions,
     PublicExtensionDetectionSummary? PublicExtensionDetection,
+    string? WordPressVersion,
+    string? WooCommerceVersion,
     IReadOnlyList<ExtensionArtifact> PluginBundles,
     IReadOnlyList<ExtensionArtifact> ThemeBundles,
     bool RequestedPluginInventory,
