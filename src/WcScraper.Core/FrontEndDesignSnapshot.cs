@@ -27,6 +27,10 @@ public static class FrontEndDesignSnapshot
         "url\\((['\"\\]?)([^'\"\\)]+)\\1\\)",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
+    private static readonly Regex CssImportRegex = new(
+        "@import\\s+(?:url\\(\\s*(?:['\"]?)(?<url>[^'\"\\)\\s]+)['\"]?\\s*\\)|['\"](?<url>[^'\"]+)['\"])(?:[^;]*);",
+        RegexOptions.IgnoreCase | RegexOptions.Singleline | RegexOptions.Compiled);
+
     private static readonly Regex LinkTagRegex = new(
         "<link\\b[^>]*>",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
@@ -90,6 +94,8 @@ public static class FrontEndDesignSnapshot
         if (baseUri is not null && stylesheetHrefs.Count > 0)
         {
             var seenStylesheets = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var stylesheetQueue = new Queue<StylesheetRequest>();
+
             foreach (var href in stylesheetHrefs)
             {
                 var resolved = ResolveAssetUrl(href, baseUri);
@@ -103,13 +109,20 @@ public static class FrontEndDesignSnapshot
                     continue;
                 }
 
+                stylesheetQueue.Enqueue(new StylesheetRequest(href, resolved, homeUrl));
+            }
+
+            while (stylesheetQueue.Count > 0)
+            {
+                var request = stylesheetQueue.Dequeue();
+
                 try
                 {
-                    log?.Report($"GET {resolved}");
-                    using var cssResponse = await httpClient.GetAsync(resolved, cancellationToken);
+                    log?.Report($"GET {request.ResolvedUrl}");
+                    using var cssResponse = await httpClient.GetAsync(request.ResolvedUrl, cancellationToken);
                     if (!cssResponse.IsSuccessStatusCode)
                     {
-                        log?.Report($"Stylesheet request failed for {resolved}: {(int)cssResponse.StatusCode} {cssResponse.ReasonPhrase}");
+                        log?.Report($"Stylesheet request failed for {request.ResolvedUrl}: {(int)cssResponse.StatusCode} {cssResponse.ReasonPhrase}");
                         continue;
                     }
 
@@ -117,27 +130,43 @@ public static class FrontEndDesignSnapshot
                     var cssText = DecodeText(cssBytes, cssResponse.Content.Headers.ContentType?.CharSet);
                     var contentType = cssResponse.Content.Headers.ContentType?.MediaType;
 
-                    var snapshot = new StylesheetSnapshot(href, resolved, cssBytes, cssText, contentType);
+                    var snapshot = new StylesheetSnapshot(request.SourceUrl, request.ResolvedUrl, request.ReferencedFrom, cssBytes, cssText, contentType);
                     stylesheetSnapshots.Add(snapshot);
 
-                    var stylesheetUri = TryCreateUri(resolved) ?? baseUri;
+                    var stylesheetUri = TryCreateUri(request.ResolvedUrl) ?? baseUri;
+                    foreach (var importCandidate in ExtractCssImportUrls(cssText))
+                    {
+                        var resolvedImport = ResolveAssetUrl(importCandidate, stylesheetUri);
+                        if (string.IsNullOrWhiteSpace(resolvedImport))
+                        {
+                            continue;
+                        }
+
+                        if (!seenStylesheets.Add(resolvedImport))
+                        {
+                            continue;
+                        }
+
+                        stylesheetQueue.Enqueue(new StylesheetRequest(importCandidate, resolvedImport, request.ResolvedUrl));
+                    }
+
                     foreach (var candidate in ExtractFontUrlCandidates(cssText, stylesheetUri))
                     {
-                        AddFontCandidate(fontCandidates, candidate, resolved);
+                        AddFontCandidate(fontCandidates, candidate, request.ResolvedUrl);
                     }
 
                     foreach (var candidate in ExtractImageUrlCandidates(cssText, stylesheetUri, fontCandidates))
                     {
-                        AddImageCandidate(imageCandidates, candidate, resolved);
+                        AddImageCandidate(imageCandidates, candidate, request.ResolvedUrl);
                     }
                 }
                 catch (TaskCanceledException ex)
                 {
-                    log?.Report($"Stylesheet request canceled for {resolved}: {ex.Message}");
+                    log?.Report($"Stylesheet request canceled for {request.ResolvedUrl}: {ex.Message}");
                 }
                 catch (HttpRequestException ex)
                 {
-                    log?.Report($"Stylesheet request failed for {resolved}: {ex.Message}");
+                    log?.Report($"Stylesheet request failed for {request.ResolvedUrl}: {ex.Message}");
                 }
             }
         }
@@ -378,6 +407,27 @@ public static class FrontEndDesignSnapshot
         }
     }
 
+    private static IEnumerable<string> ExtractCssImportUrls(string css)
+    {
+        if (string.IsNullOrWhiteSpace(css)) yield break;
+
+        foreach (Match match in CssImportRegex.Matches(css))
+        {
+            var value = match.Groups["url"].Value?.Trim();
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                continue;
+            }
+
+            if (value.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            yield return value;
+        }
+    }
+
     private static void AddImageCandidate(
         IDictionary<string, ImageAssetRequest> accumulator,
         ImageUrlCandidate candidate,
@@ -418,6 +468,8 @@ public static class FrontEndDesignSnapshot
     private sealed record FontAssetRequest(string RawUrl, string ResolvedUrl, string ReferencedFrom);
 
     private sealed record ImageAssetRequest(string RawUrl, string ResolvedUrl, string ReferencedFrom);
+
+    private sealed record StylesheetRequest(string SourceUrl, string ResolvedUrl, string ReferencedFrom);
 }
 
 public sealed class FrontEndDesignSnapshotResult
@@ -460,12 +512,14 @@ public sealed class StylesheetSnapshot
     public StylesheetSnapshot(
         string sourceUrl,
         string resolvedUrl,
+        string referencedFrom,
         byte[] content,
         string textContent,
         string? contentType)
     {
         SourceUrl = sourceUrl ?? string.Empty;
         ResolvedUrl = resolvedUrl ?? string.Empty;
+        ReferencedFrom = referencedFrom ?? string.Empty;
         Content = content ?? Array.Empty<byte>();
         TextContent = textContent ?? string.Empty;
         ContentType = contentType;
@@ -474,6 +528,8 @@ public sealed class StylesheetSnapshot
     public string SourceUrl { get; }
 
     public string ResolvedUrl { get; }
+
+    public string ReferencedFrom { get; }
 
     public byte[] Content { get; }
 
