@@ -151,6 +151,18 @@
                               Visibility="{Binding CanExportPublicExtensionFootprints, Converter={StaticResource BoolToVisibility}}"
                               Margin="0,0,16,0"/>
                 </WrapPanel>
+                <StackPanel Margin="0,8,0,0"
+                            Visibility="{Binding ExportPublicExtensionFootprints, Converter={StaticResource BoolToVisibility}}">
+                    <TextBlock Text="Additional pages to scan (one per line or comma-separated):"
+                               TextWrapping="Wrap"
+                               Margin="0,0,0,4"/>
+                    <TextBox Text="{Binding AdditionalPublicExtensionPages, UpdateSourceTrigger=PropertyChanged}"
+                             AcceptsReturn="True"
+                             TextWrapping="Wrap"
+                             MinWidth="320"
+                             MinHeight="60"
+                             VerticalScrollBarVisibility="Auto"/>
+                </StackPanel>
                 <CheckBox Content="Export public design snapshot (homepage HTML + inline CSS + fonts)"
                           IsChecked="{Binding ExportPublicDesignSnapshot}"
                           IsEnabled="{Binding CanExportPublicDesignSnapshot}"
