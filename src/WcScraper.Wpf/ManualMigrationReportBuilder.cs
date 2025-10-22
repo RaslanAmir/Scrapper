@@ -155,15 +155,94 @@ internal sealed class ManualMigrationReportBuilder
             return;
         }
 
-        builder.AppendLine("| Type | Slug | Directory Title | Version | Homepage | Status |");
-        builder.AppendLine("| --- | --- | --- | --- | --- | --- |");
-
-        foreach (var footprint in context.PublicExtensions
+        var orderedFootprints = context.PublicExtensions
             .OrderBy(f => f.Type, StringComparer.OrdinalIgnoreCase)
-            .ThenBy(f => f.Slug, StringComparer.OrdinalIgnoreCase))
+            .ThenBy(f => f.Slug, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        var anySourceUrls = orderedFootprints.Any(f => f.SourceUrls is { Count: > 0 });
+        if (!anySourceUrls)
         {
-            builder.AppendLine($"| {MarkdownEscape(footprint.Type)} | {MarkdownEscape(footprint.Slug)} | {MarkdownEscape(footprint.DirectoryTitle)} | {MarkdownEscape(footprint.DirectoryVersion)} | {MarkdownEscape(footprint.DirectoryHomepage)} | {MarkdownEscape(footprint.DirectoryStatus)} |");
+            builder.AppendLine("> No source URLs were captured for the detected slugs. Directory metadata is shown when available.");
+            builder.AppendLine();
         }
+        else
+        {
+            builder.AppendLine("> Primary source URLs reflect the first capture; complete lists appear in the detailed breakdown below.");
+            builder.AppendLine();
+        }
+
+        builder.AppendLine("| Type | Slug | Directory Title | Version | Homepage | Status | Primary Source URL | Asset URL | Version Hint | Source URLs |");
+        builder.AppendLine("| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |");
+
+        foreach (var footprint in orderedFootprints)
+        {
+            var primarySource = footprint.SourceUrls?.FirstOrDefault() ?? string.Empty;
+            var inlineSources = FormatInlineSourceUrls(footprint.SourceUrls);
+
+            builder.AppendLine(
+                $"| {MarkdownEscape(footprint.Type)} " +
+                $"| {MarkdownEscape(footprint.Slug)} " +
+                $"| {MarkdownEscape(footprint.DirectoryTitle)} " +
+                $"| {MarkdownEscape(footprint.DirectoryVersion)} " +
+                $"| {MarkdownEscape(footprint.DirectoryHomepage)} " +
+                $"| {MarkdownEscape(footprint.DirectoryStatus)} " +
+                $"| {MarkdownEscape(primarySource)} " +
+                $"| {MarkdownEscape(footprint.AssetUrl)} " +
+                $"| {MarkdownEscape(footprint.VersionHint)} " +
+                $"| {MarkdownEscape(inlineSources)} |");
+        }
+
+        builder.AppendLine();
+        builder.AppendLine("#### Public slug details");
+
+        foreach (var footprint in orderedFootprints)
+        {
+            builder.AppendLine($"- **{MarkdownEscape(footprint.Slug)}** ({MarkdownEscape(footprint.Type)})");
+
+            AppendDetailLine(builder, "Directory title", footprint.DirectoryTitle);
+            AppendDetailLine(builder, "Directory version", footprint.DirectoryVersion);
+            AppendDetailLine(builder, "Directory homepage", footprint.DirectoryHomepage);
+            AppendDetailLine(builder, "Directory status", footprint.DirectoryStatus);
+
+            if (footprint.SourceUrls is { Count: > 0 })
+            {
+                builder.AppendLine("  - Source URLs:");
+                foreach (var url in footprint.SourceUrls)
+                {
+                    builder.AppendLine("    - " + MarkdownEscape(url));
+                }
+            }
+            else
+            {
+                builder.AppendLine("  - Source URLs: None captured");
+            }
+
+            AppendDetailLine(builder, "Asset URL", footprint.AssetUrl);
+            AppendDetailLine(builder, "Version hint", footprint.VersionHint);
+
+            builder.AppendLine();
+        }
+    }
+
+    private static void AppendDetailLine(StringBuilder builder, string label, string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return;
+        }
+
+        builder.AppendLine($"  - {label}: {MarkdownEscape(value)}");
+    }
+
+    private static string FormatInlineSourceUrls(IReadOnlyList<string>? sourceUrls)
+    {
+        if (sourceUrls is not { Count: > 0 })
+        {
+            return "None captured";
+        }
+
+        return string.Join(";", sourceUrls);
     }
 
     private static void AppendExtensionArtifacts(StringBuilder builder, string heading, IReadOnlyList<ExtensionArtifact> artifacts)
