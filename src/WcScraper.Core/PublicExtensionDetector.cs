@@ -16,6 +16,10 @@ public sealed class PublicExtensionDetector : IDisposable
         @"/wp-content/(?<type>plugins|themes)/(?<slug>[A-Za-z0-9._-]+)/",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
+    private static readonly Regex VersionTokenRegex = new(
+        @"(?:^|[-_\.])(?:v(?:ersion)?[-_\.]?)?(?<version>\d+(?:\.\d+){1,})(?=$|[-_\.])",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
     private static readonly Regex LinkTagRegex = new(
         @"<link\b[^>]*>",
         RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.CultureInvariant);
@@ -174,15 +178,198 @@ public sealed class PublicExtensionDetector : IDisposable
                 continue;
             }
 
+            var assetUrl = ExtractAssetUrl(content, match);
+            var versionHint = ExtractVersionHint(assetUrl, match);
+
             var key = (type, slug);
-            findings[key] = new PublicExtensionFootprint
+            if (!findings.TryGetValue(key, out var footprint))
             {
-                Slug = slug,
-                Type = type,
-                SourceUrl = sourceUrl
-            };
+                footprint = new PublicExtensionFootprint
+                {
+                    Slug = slug,
+                    Type = type,
+                    SourceUrl = sourceUrl,
+                    AssetUrl = assetUrl,
+                    VersionHint = versionHint
+                };
+
+                findings[key] = footprint;
+                continue;
+            }
+
+            if (string.IsNullOrWhiteSpace(footprint.SourceUrl))
+            {
+                footprint.SourceUrl = sourceUrl;
+            }
+
+            if (string.IsNullOrWhiteSpace(footprint.AssetUrl) && !string.IsNullOrWhiteSpace(assetUrl))
+            {
+                footprint.AssetUrl = assetUrl;
+            }
+
+            if (string.IsNullOrWhiteSpace(footprint.VersionHint) && !string.IsNullOrWhiteSpace(versionHint))
+            {
+                footprint.VersionHint = versionHint;
+            }
         }
     }
+
+    private static string? ExtractAssetUrl(string content, Match match)
+    {
+        var start = DetermineAssetStartIndex(content, match.Index);
+        if (start < 0)
+        {
+            return null;
+        }
+
+        var (end, closingDelimiter) = DetermineAssetEndIndex(content, match.Index);
+        if (end < 0)
+        {
+            end = content.Length;
+        }
+
+        if (end <= start)
+        {
+            return null;
+        }
+
+        return content[start..end].Trim();
+    }
+
+    private static int DetermineAssetStartIndex(string content, int matchIndex)
+    {
+        for (var i = matchIndex - 1; i >= 0; i--)
+        {
+            var c = content[i];
+            if (c is '"' or '\'' or '(')
+            {
+                return i + 1;
+            }
+
+            if (char.IsWhiteSpace(c) || c == '>')
+            {
+                return matchIndex;
+            }
+        }
+
+        return matchIndex;
+    }
+
+    private static (int EndIndex, char ClosingDelimiter) DetermineAssetEndIndex(string content, int matchIndex)
+    {
+        char closingDelimiter = '\0';
+        for (var i = matchIndex - 1; i >= 0; i--)
+        {
+            var c = content[i];
+            if (c is '"' or '\'' or '(')
+            {
+                closingDelimiter = c switch
+                {
+                    '(' => ')',
+                    var quote => quote
+                };
+                break;
+            }
+        }
+
+        if (closingDelimiter is '"' or '\'' or ')')
+        {
+            var end = content.IndexOf(closingDelimiter, matchIndex);
+            if (end >= 0)
+            {
+                return (end, closingDelimiter);
+            }
+        }
+
+        for (var i = matchIndex; i < content.Length; i++)
+        {
+            var c = content[i];
+            if (char.IsWhiteSpace(c) || c is '>' or '"' or '\'' || (c == ')' && closingDelimiter == ')'))
+            {
+                return (i, closingDelimiter);
+            }
+        }
+
+        return (-1, closingDelimiter);
+    }
+
+    private static string? ExtractVersionHint(string? assetUrl, Match match)
+    {
+        if (!string.IsNullOrWhiteSpace(assetUrl))
+        {
+            var fromQuery = TryGetQueryVersion(assetUrl);
+            if (!string.IsNullOrWhiteSpace(fromQuery))
+            {
+                return fromQuery;
+            }
+
+            var normalized = assetUrl;
+            var fragmentIndex = normalized.IndexOf('#');
+            if (fragmentIndex >= 0)
+            {
+                normalized = normalized[..fragmentIndex];
+            }
+
+            var queryIndex = normalized.IndexOf('?');
+            if (queryIndex >= 0)
+            {
+                normalized = normalized[..queryIndex];
+            }
+
+            var fileName = normalized.Split('/', StringSplitOptions.RemoveEmptyEntries).LastOrDefault();
+            if (!string.IsNullOrWhiteSpace(fileName))
+            {
+                var matchVersion = VersionTokenRegex.Match(fileName);
+                if (matchVersion.Success)
+                {
+                    return matchVersion.Groups["version"].Value;
+                }
+            }
+        }
+
+        var fallback = VersionTokenRegex.Match(match.Value);
+        return fallback.Success ? fallback.Groups["version"].Value : null;
+    }
+
+    private static string? TryGetQueryVersion(string assetUrl)
+    {
+        var queryStart = assetUrl.IndexOf('?');
+        if (queryStart < 0)
+        {
+            return null;
+        }
+
+        var queryEnd = assetUrl.IndexOf('#', queryStart);
+        var query = queryEnd >= 0
+            ? assetUrl[(queryStart + 1)..queryEnd]
+            : assetUrl[(queryStart + 1)..];
+
+        foreach (var segment in query.Split('&', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var kvp = segment.Split('=', 2);
+            var key = Uri.UnescapeDataString(kvp[0]);
+            if (!IsVersionQueryKey(key))
+            {
+                continue;
+            }
+
+            if (kvp.Length == 2)
+            {
+                var value = Uri.UnescapeDataString(kvp[1]);
+                if (!string.IsNullOrWhiteSpace(value))
+                {
+                    return value;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private static bool IsVersionQueryKey(string key) =>
+        key.Equals("ver", StringComparison.OrdinalIgnoreCase)
+        || key.Equals("version", StringComparison.OrdinalIgnoreCase)
+        || key.Equals("v", StringComparison.OrdinalIgnoreCase);
 
     private static IEnumerable<string> ExtractLinkedAssets(string html, Uri baseUri)
     {
