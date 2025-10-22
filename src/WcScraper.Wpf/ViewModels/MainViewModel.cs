@@ -18,6 +18,7 @@ using WcScraper.Core;
 using WcScraper.Core.Exporters;
 using WcScraper.Core.Shopify;
 using WcScraper.Core.Models;
+using WcScraper.Wpf.Reporting;
 using WcScraper.Wpf.Services;
 
 namespace WcScraper.Wpf.ViewModels;
@@ -466,6 +467,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
             WordPressWidgetSnapshot widgets = new();
             var mediaReferenceMap = new Dictionary<string, MediaReference>(StringComparer.OrdinalIgnoreCase);
             WordPressSiteContent? siteContent = null;
+            var missingCredentialExports = new List<string>();
+            var designScreenshots = new List<DesignScreenshot>();
 
             if (SelectedPlatform == PlatformMode.WooCommerce)
             {
@@ -563,6 +566,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 if (string.IsNullOrWhiteSpace(WordPressUsername) || string.IsNullOrWhiteSpace(WordPressApplicationPassword))
                 {
                     Append("Skipping plugin/theme exports: provide WordPress username and application password.");
+                    missingCredentialExports.Add("Plugin and theme inventory exports (requires WordPress username and application password).");
                 }
                 else
                 {
@@ -658,6 +662,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
                     if (screenshots.Count > 0)
                     {
+                        designScreenshots.AddRange(screenshots);
                         Append($"Captured {screenshots.Count} breakpoint screenshot(s) to {screenshotFolder}.");
                         foreach (var shot in screenshots)
                         {
@@ -680,6 +685,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 if (string.IsNullOrWhiteSpace(WordPressUsername) || string.IsNullOrWhiteSpace(WordPressApplicationPassword))
                 {
                     Append("Skipping customer/coupon/order exports: provide WordPress username and application password.");
+                    missingCredentialExports.Add("Customer, coupon, order, and subscription exports (requires WordPress username and application password).");
                 }
                 else
                 {
@@ -780,6 +786,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 {
                     widgets = new WordPressWidgetSnapshot();
                     Append("Skipping widgets: provide WordPress username and application password.");
+                    missingCredentialExports.Add("Widget snapshots (requires WordPress username and application password).");
                 }
 
                 var mediaFolder = Path.Combine(storeOutputFolder, "media");
@@ -864,6 +871,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 if (string.IsNullOrWhiteSpace(WordPressUsername) || string.IsNullOrWhiteSpace(WordPressApplicationPassword))
                 {
                     Append("Skipping store configuration export: provide WordPress username and application password.");
+                    missingCredentialExports.Add("Store configuration export (requires WordPress username and application password).");
                 }
                 else
                 {
@@ -1327,6 +1335,49 @@ public sealed class MainViewModel : INotifyPropertyChanged
                     Append("Subscriptions export skipped (no subscription data).");
                 }
             }
+
+            List<string> logSnapshot;
+            if (App.Current is null)
+            {
+                logSnapshot = Logs.ToList();
+            }
+            else
+            {
+                var tempLogs = new List<string>();
+                App.Current.Dispatcher.Invoke(() => tempLogs.AddRange(Logs));
+                logSnapshot = tempLogs;
+            }
+
+            var reportContext = new ManualMigrationReportContext(
+                targetUrl,
+                storeId,
+                storeOutputFolder,
+                SelectedPlatform == PlatformMode.WooCommerce,
+                plugins,
+                themes,
+                publicExtensionFootprints,
+                pluginBundles,
+                themeBundles,
+                SelectedPlatform == PlatformMode.WooCommerce && needsPluginInventory,
+                SelectedPlatform == PlatformMode.WooCommerce && needsThemeInventory,
+                SelectedPlatform == PlatformMode.WooCommerce && ExportPublicExtensionFootprints,
+                attemptedPluginFetch,
+                attemptedThemeFetch,
+                attemptedPublicExtensionFootprintFetch,
+                designSnapshot,
+                designScreenshots,
+                SelectedPlatform == PlatformMode.WooCommerce && ExportPublicDesignSnapshot,
+                SelectedPlatform == PlatformMode.WooCommerce && ExportPublicDesignScreenshots,
+                designSnapshotFailed,
+                missingCredentialExports,
+                logSnapshot,
+                DateTime.UtcNow);
+
+            var reportBuilder = new ManualMigrationReportBuilder();
+            var report = reportBuilder.Build(reportContext);
+            var reportPath = Path.Combine(storeOutputFolder, "manual-migration-report.md");
+            await File.WriteAllTextAsync(reportPath, report, Encoding.UTF8);
+            Append($"Manual migration report: {reportPath}");
 
             SetProvisioningContext(prods, variations, configuration, pluginBundles, themeBundles, customers, coupons, orders, subscriptions, siteContent, categoryTerms);
 
