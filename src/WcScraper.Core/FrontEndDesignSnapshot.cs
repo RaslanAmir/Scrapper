@@ -39,6 +39,18 @@ public static class FrontEndDesignSnapshot
         "(?<name>[a-zA-Z0-9:_-]+)\\s*=\\s*(\"(?<value>[^\"]*)\"|'(?<value>[^']*)'|(?<value>[^\\s\"'>]+))",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
+    private static readonly Regex HexColorRegex = new(
+        "#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})\\b",
+        RegexOptions.Compiled);
+
+    private static readonly Regex RgbColorRegex = new(
+        "(?<func>rgba?)\\s*\\((?<args>[^)]*)\\)",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    private static readonly Regex CssCustomPropertyRegex = new(
+        "--[a-zA-Z0-9_-]+",
+        RegexOptions.Compiled);
+
     public static async Task<FrontEndDesignSnapshotResult> CaptureAsync(
         HttpClient httpClient,
         string baseUrl,
@@ -65,11 +77,14 @@ public static class FrontEndDesignSnapshot
                 Array.Empty<string>(),
                 Array.Empty<StylesheetSnapshot>(),
                 Array.Empty<FontAssetSnapshot>(),
-                Array.Empty<DesignImageSnapshot>());
+                Array.Empty<DesignImageSnapshot>(),
+                Array.Empty<ColorSwatch>());
         }
 
         var inlineStyles = ExtractInlineStyles(html);
-        var aggregatedCss = string.Join(Environment.NewLine + Environment.NewLine, inlineStyles);
+        var inlineCss = string.Join(Environment.NewLine + Environment.NewLine, inlineStyles);
+        var cssSources = new List<string>();
+        cssSources.AddRange(inlineStyles);
         var baseUri = TryCreateUri(homeUrl);
         var fontCandidates = new Dictionary<string, FontAssetRequest>(StringComparer.OrdinalIgnoreCase);
         var stylesheetSnapshots = new List<StylesheetSnapshot>();
@@ -132,6 +147,11 @@ public static class FrontEndDesignSnapshot
 
                     var snapshot = new StylesheetSnapshot(request.SourceUrl, request.ResolvedUrl, request.ReferencedFrom, cssBytes, cssText, contentType);
                     stylesheetSnapshots.Add(snapshot);
+
+                    if (!string.IsNullOrWhiteSpace(cssText))
+                    {
+                        cssSources.Add(cssText);
+                    }
 
                     var stylesheetUri = TryCreateUri(request.ResolvedUrl) ?? baseUri;
                     foreach (var importCandidate in ExtractCssImportUrls(cssText))
@@ -227,14 +247,21 @@ public static class FrontEndDesignSnapshot
 
         var fontUrls = fontCandidates.Keys.ToList();
 
+        var aggregatedCss = string.Join(
+            Environment.NewLine + Environment.NewLine,
+            cssSources.Where(s => !string.IsNullOrWhiteSpace(s)));
+
+        var colorSwatches = ExtractColorSwatches(aggregatedCss);
+
         return new FrontEndDesignSnapshotResult(
             homeUrl,
             html,
-            aggregatedCss,
+            inlineCss,
             fontUrls,
             stylesheetSnapshots,
             fontSnapshots,
-            imageSnapshots);
+            imageSnapshots,
+            colorSwatches);
     }
 
     private static IReadOnlyList<string> ExtractInlineStyles(string html)
@@ -461,6 +488,144 @@ public static class FrontEndDesignSnapshot
         return Encoding.UTF8.GetString(contentBytes);
     }
 
+    private static IReadOnlyList<ColorSwatch> ExtractColorSwatches(string aggregatedCss)
+    {
+        if (string.IsNullOrWhiteSpace(aggregatedCss))
+        {
+            return Array.Empty<ColorSwatch>();
+        }
+
+        var counts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+
+        void Increment(string key)
+        {
+            if (string.IsNullOrEmpty(key))
+            {
+                return;
+            }
+
+            if (counts.ContainsKey(key))
+            {
+                counts[key]++;
+            }
+            else
+            {
+                counts[key] = 1;
+            }
+        }
+
+        foreach (Match match in HexColorRegex.Matches(aggregatedCss))
+        {
+            if (!match.Success) continue;
+            var normalized = NormalizeHexColor(match.Value);
+            if (!string.IsNullOrEmpty(normalized))
+            {
+                Increment(normalized);
+            }
+        }
+
+        foreach (Match match in RgbColorRegex.Matches(aggregatedCss))
+        {
+            if (!match.Success) continue;
+            var normalized = NormalizeRgbColor(match);
+            if (!string.IsNullOrEmpty(normalized))
+            {
+                Increment(normalized);
+            }
+        }
+
+        foreach (Match match in CssCustomPropertyRegex.Matches(aggregatedCss))
+        {
+            if (!match.Success) continue;
+            var normalized = NormalizeCssCustomProperty(match.Value);
+            if (!string.IsNullOrEmpty(normalized))
+            {
+                Increment(normalized);
+            }
+        }
+
+        if (counts.Count == 0)
+        {
+            return Array.Empty<ColorSwatch>();
+        }
+
+        return counts
+            .Select(kvp => new ColorSwatch(kvp.Key, kvp.Value))
+            .OrderByDescending(s => s.Count)
+            .ThenBy(s => s.Value, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    private static string? NormalizeHexColor(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return null;
+        }
+
+        var hex = value.Trim();
+        if (!hex.StartsWith('#'))
+        {
+            return null;
+        }
+
+        hex = hex[1..];
+        if (hex.Length == 3)
+        {
+            var builder = new StringBuilder(6);
+            foreach (var c in hex)
+            {
+                var upper = char.ToUpperInvariant(c);
+                builder.Append(upper);
+                builder.Append(upper);
+            }
+
+            return "#" + builder.ToString();
+        }
+
+        if (hex.Length == 6 || hex.Length == 8)
+        {
+            return "#" + hex.ToUpperInvariant();
+        }
+
+        return null;
+    }
+
+    private static string? NormalizeRgbColor(Match match)
+    {
+        var func = match.Groups["func"].Value;
+        var args = match.Groups["args"].Value;
+        if (string.IsNullOrWhiteSpace(func) || string.IsNullOrWhiteSpace(args))
+        {
+            return null;
+        }
+
+        var normalizedArgs = args.Trim();
+        normalizedArgs = Regex.Replace(normalizedArgs, "\\s*,\\s*", ", ");
+        normalizedArgs = Regex.Replace(normalizedArgs, "\\s*/\\s*", " / ");
+        normalizedArgs = Regex.Replace(normalizedArgs, "\\s+", " ");
+        normalizedArgs = normalizedArgs.Replace("( ", "(").Replace(" )", ")");
+
+        var normalizedFunc = func.ToLowerInvariant();
+        if (normalizedFunc != "rgb" && normalizedFunc != "rgba")
+        {
+            return null;
+        }
+
+        return $"{normalizedFunc}({normalizedArgs})";
+    }
+
+    private static string? NormalizeCssCustomProperty(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return null;
+        }
+
+        var trimmed = value.Trim();
+        return trimmed.StartsWith("--", StringComparison.Ordinal) ? trimmed : null;
+    }
+
     private readonly record struct FontUrlCandidate(string RawUrl, string ResolvedUrl);
 
     private readonly record struct ImageUrlCandidate(string RawUrl, string ResolvedUrl);
@@ -481,7 +646,8 @@ public sealed class FrontEndDesignSnapshotResult
         IReadOnlyList<string> fontUrls,
         IReadOnlyList<StylesheetSnapshot> stylesheets,
         IReadOnlyList<FontAssetSnapshot> fontFiles,
-        IReadOnlyList<DesignImageSnapshot> imageFiles)
+        IReadOnlyList<DesignImageSnapshot> imageFiles,
+        IReadOnlyList<ColorSwatch> colorSwatches)
     {
         HomeUrl = homeUrl;
         RawHtml = rawHtml;
@@ -490,6 +656,7 @@ public sealed class FrontEndDesignSnapshotResult
         Stylesheets = stylesheets ?? Array.Empty<StylesheetSnapshot>();
         FontFiles = fontFiles ?? Array.Empty<FontAssetSnapshot>();
         ImageFiles = imageFiles ?? Array.Empty<DesignImageSnapshot>();
+        ColorSwatches = colorSwatches ?? Array.Empty<ColorSwatch>();
     }
 
     public string HomeUrl { get; }
@@ -505,6 +672,8 @@ public sealed class FrontEndDesignSnapshotResult
     public IReadOnlyList<FontAssetSnapshot> FontFiles { get; }
 
     public IReadOnlyList<DesignImageSnapshot> ImageFiles { get; }
+
+    public IReadOnlyList<ColorSwatch> ColorSwatches { get; }
 }
 
 public sealed class StylesheetSnapshot
@@ -591,3 +760,5 @@ public sealed class DesignImageSnapshot
 
     public string? ContentType { get; }
 }
+
+public sealed record ColorSwatch(string Value, int Count);

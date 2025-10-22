@@ -637,7 +637,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
                         var fontCount = designSnapshot.FontUrls.Count;
                         var inlineLength = designSnapshot.InlineCss.Length;
                         var imageCount = designSnapshot.ImageFiles.Count;
-                        Append($"Captured public design snapshot (inline CSS length: {inlineLength:N0} chars, fonts: {fontCount}, background images: {imageCount}).");
+                        var swatchCount = designSnapshot.ColorSwatches.Count;
+                        Append($"Captured public design snapshot (inline CSS length: {inlineLength:N0} chars, fonts: {fontCount}, background images: {imageCount}, palette colors: {swatchCount}).");
                     }
                 }
                 catch (Exception ex)
@@ -1078,6 +1079,33 @@ public sealed class MainViewModel : INotifyPropertyChanged
                     await File.WriteAllTextAsync(fontsPath, fontsJson, Encoding.UTF8);
                     Append($"Wrote {fontsPath}");
 
+                    if (designSnapshot.ColorSwatches.Count > 0)
+                    {
+                        var colorsCsvPath = Path.Combine(designRoot, "colors.csv");
+                        var csvBuilder = new StringBuilder();
+                        csvBuilder.AppendLine("color,count");
+                        foreach (var swatch in designSnapshot.ColorSwatches)
+                        {
+                            var escapedColor = swatch.Value?.Replace("\"", "\"\"") ?? string.Empty;
+                            csvBuilder.Append('"');
+                            csvBuilder.Append(escapedColor);
+                            csvBuilder.Append("\",");
+                            csvBuilder.AppendLine(swatch.Count.ToString(CultureInfo.InvariantCulture));
+                        }
+
+                        await File.WriteAllTextAsync(colorsCsvPath, csvBuilder.ToString(), Encoding.UTF8);
+                        Append($"Wrote {colorsCsvPath}");
+
+                        var colorsJsonPath = Path.Combine(designRoot, "colors.json");
+                        var colorsJson = JsonSerializer.Serialize(designSnapshot.ColorSwatches, _artifactWriteOptions);
+                        await File.WriteAllTextAsync(colorsJsonPath, colorsJson, Encoding.UTF8);
+                        Append($"Wrote {colorsJsonPath}");
+                    }
+                    else
+                    {
+                        Append("No CSS color swatches were detected.");
+                    }
+
                     var stylesheetManifest = new List<Dictionary<string, object?>>();
                     var fontManifest = new List<Dictionary<string, object?>>();
                     var imageManifest = new List<Dictionary<string, object?>>();
@@ -1178,7 +1206,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
                     {
                         ["stylesheets"] = stylesheetManifest,
                         ["fonts"] = fontManifest,
-                        ["images"] = imageManifest
+                        ["images"] = imageManifest,
+                        ["colors"] = designSnapshot.ColorSwatches
                     };
 
                     var manifestPath = Path.Combine(designRoot, "assets-manifest.json");
