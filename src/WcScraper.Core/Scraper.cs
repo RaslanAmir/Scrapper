@@ -169,8 +169,9 @@ public sealed class WooScraper : IDisposable
     public Task<FrontEndDesignSnapshotResult> FetchPublicDesignSnapshotAsync(
         string baseUrl,
         IProgress<string>? log = null,
+        IEnumerable<string>? additionalPageUrls = null,
         CancellationToken cancellationToken = default)
-        => FrontEndDesignSnapshot.CaptureAsync(_http, baseUrl, log, cancellationToken);
+        => FrontEndDesignSnapshot.CaptureAsync(_http, baseUrl, additionalPageUrls, log, cancellationToken);
 
     public async Task<List<WordPressMediaItem>> FetchWordPressMediaAsync(
         string baseUrl,

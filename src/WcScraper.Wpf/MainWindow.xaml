@@ -168,6 +168,18 @@
                           IsEnabled="{Binding CanExportPublicDesignSnapshot}"
                           Visibility="{Binding IsWooCommerce, Converter={StaticResource BoolToVisibility}}"
                           Margin="0,8,0,0"/>
+                <StackPanel Margin="0,4,0,0"
+                            Visibility="{Binding ExportPublicDesignSnapshot, Converter={StaticResource BoolToVisibility}}">
+                    <TextBlock Text="Additional design pages to capture (one per line or comma-separated):"
+                               TextWrapping="Wrap"
+                               Margin="0,0,0,4"/>
+                    <TextBox Text="{Binding AdditionalDesignSnapshotPages, UpdateSourceTrigger=PropertyChanged}"
+                             AcceptsReturn="True"
+                             TextWrapping="Wrap"
+                             MinWidth="320"
+                             MinHeight="60"
+                             VerticalScrollBarVisibility="Auto"/>
+                </StackPanel>
                 <CheckBox Content="Capture public design screenshots (PNG breakpoints)"
                           IsChecked="{Binding ExportPublicDesignScreenshots}"
                           IsEnabled="{Binding CanExportPublicDesignScreenshots}"
