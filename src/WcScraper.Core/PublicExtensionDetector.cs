@@ -347,7 +347,11 @@ public sealed class PublicExtensionDetector : IDisposable
         foreach (var segment in query.Split('&', StringSplitOptions.RemoveEmptyEntries))
         {
             var kvp = segment.Split('=', 2);
-            var key = Uri.UnescapeDataString(kvp[0]);
+            if (!TryUnescapeDataString(kvp[0], out var key))
+            {
+                continue;
+            }
+
             if (!IsVersionQueryKey(key))
             {
                 continue;
@@ -355,8 +359,8 @@ public sealed class PublicExtensionDetector : IDisposable
 
             if (kvp.Length == 2)
             {
-                var value = Uri.UnescapeDataString(kvp[1]);
-                if (!string.IsNullOrWhiteSpace(value))
+                if (TryUnescapeDataString(kvp[1], out var value)
+                    && !string.IsNullOrWhiteSpace(value))
                 {
                     return value;
                 }
@@ -364,6 +368,20 @@ public sealed class PublicExtensionDetector : IDisposable
         }
 
         return null;
+    }
+
+    private static bool TryUnescapeDataString(string segment, out string result)
+    {
+        try
+        {
+            result = Uri.UnescapeDataString(segment);
+            return true;
+        }
+        catch (UriFormatException)
+        {
+            result = segment;
+            return false;
+        }
     }
 
     private static bool IsVersionQueryKey(string key) =>
