@@ -1175,13 +1175,18 @@ public sealed class MainViewModel : INotifyPropertyChanged
                         await File.WriteAllBytesAsync(assetPath, content);
                         Append($"Wrote {assetPath}");
 
+                        var fileSize = content.Length;
+                        var sha256 = Convert.ToHexString(SHA256.HashData(content));
+
                         stylesheetManifest.Add(new Dictionary<string, object?>
                         {
                             ["file"] = NormalizeRelativePath(relativeAssetPath),
                             ["source_url"] = stylesheet?.SourceUrl,
                             ["resolved_url"] = stylesheet?.ResolvedUrl,
                             ["referenced_from"] = stylesheet?.ReferencedFrom,
-                            ["content_type"] = stylesheet?.ContentType
+                            ["content_type"] = stylesheet?.ContentType,
+                            ["file_size_bytes"] = fileSize,
+                            ["sha256"] = sha256
                         });
                     }
 
@@ -1202,6 +1207,9 @@ public sealed class MainViewModel : INotifyPropertyChanged
                         await File.WriteAllBytesAsync(assetPath, content);
                         Append($"Wrote {assetPath}");
 
+                        var fileSize = content.Length;
+                        var sha256 = Convert.ToHexString(SHA256.HashData(content));
+
                         fontManifest.Add(new Dictionary<string, object?>
                         {
                             ["file"] = NormalizeRelativePath(relativeAssetPath),
@@ -1211,7 +1219,9 @@ public sealed class MainViewModel : INotifyPropertyChanged
                             ["content_type"] = font?.ContentType,
                             ["font_family"] = font?.FontFamily,
                             ["font_style"] = font?.FontStyle,
-                            ["font_weight"] = font?.FontWeight
+                            ["font_weight"] = font?.FontWeight,
+                            ["file_size_bytes"] = fileSize,
+                            ["sha256"] = sha256
                         });
                     }
 
@@ -1232,13 +1242,18 @@ public sealed class MainViewModel : INotifyPropertyChanged
                         await File.WriteAllBytesAsync(assetPath, content);
                         Append($"Wrote {assetPath}");
 
+                        var fileSize = content.Length;
+                        var sha256 = Convert.ToHexString(SHA256.HashData(content));
+
                         imageManifest.Add(new Dictionary<string, object?>
                         {
                             ["file"] = NormalizeRelativePath(relativeAssetPath),
                             ["source_url"] = image?.SourceUrl,
                             ["resolved_url"] = image?.ResolvedUrl,
                             ["referenced_from"] = image?.ReferencedFrom,
-                            ["content_type"] = image?.ContentType
+                            ["content_type"] = image?.ContentType,
+                            ["file_size_bytes"] = fileSize,
+                            ["sha256"] = sha256
                         });
                     }
 

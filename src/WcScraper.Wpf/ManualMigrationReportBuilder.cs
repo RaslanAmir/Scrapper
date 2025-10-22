@@ -325,6 +325,9 @@ internal sealed class ManualMigrationReportBuilder
             builder.AppendLine($"  - {MarkdownEscape(snapshot.HomeUrl)}");
         }
         builder.AppendLine("- **Design folder:** `" + Path.Combine(context.OutputFolder, "design") + "`");
+        builder.AppendLine(
+            "- **Asset manifest:** `" + Path.Combine(context.OutputFolder, "design", "assets-manifest.json") +
+            "` (includes `file_size_bytes` and `sha256` for every stylesheet, font, and background image).");
     }
 
     private static void AppendTypographySummary(StringBuilder builder, ManualMigrationReportContext context)
