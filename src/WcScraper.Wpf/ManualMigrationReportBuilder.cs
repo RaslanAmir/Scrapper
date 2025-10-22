@@ -272,6 +272,8 @@ internal sealed class ManualMigrationReportBuilder
 
         AppendDesignSnapshotSummary(builder, context);
         builder.AppendLine();
+        AppendTypographySummary(builder, context);
+        builder.AppendLine();
         AppendColorPalette(builder, context);
         builder.AppendLine();
         AppendDesignScreenshots(builder, context);
@@ -325,6 +327,80 @@ internal sealed class ManualMigrationReportBuilder
         builder.AppendLine("- **Design folder:** `" + Path.Combine(context.OutputFolder, "design") + "`");
     }
 
+    private static void AppendTypographySummary(StringBuilder builder, ManualMigrationReportContext context)
+    {
+        builder.AppendLine("### Typography");
+
+        if (!context.RequestedDesignSnapshot)
+        {
+            builder.AppendLine("Not requested for this run.");
+            return;
+        }
+
+        if (context.DesignSnapshot is null)
+        {
+            builder.AppendLine("No design snapshot data available.");
+            return;
+        }
+
+        if (context.DesignSnapshot.FontFiles.Count == 0)
+        {
+            builder.AppendLine("No font files were captured.");
+            return;
+        }
+
+        var fontsWithFamilies = new List<(string Family, FontAssetSnapshot Font)>();
+        var fontsWithoutFamilies = new List<FontAssetSnapshot>();
+
+        foreach (var font in context.DesignSnapshot.FontFiles)
+        {
+            var family = ExtractPrimaryFontFamily(font.FontFamily);
+            if (string.IsNullOrWhiteSpace(family))
+            {
+                fontsWithoutFamilies.Add(font);
+                continue;
+            }
+
+            fontsWithFamilies.Add((family!, font));
+        }
+
+        if (fontsWithFamilies.Count == 0)
+        {
+            builder.AppendLine("No font family metadata detected.");
+            if (fontsWithoutFamilies.Count > 0)
+            {
+                builder.AppendLine($"Fonts without family metadata: {fontsWithoutFamilies.Count}");
+            }
+            return;
+        }
+
+        foreach (var group in fontsWithFamilies
+            .GroupBy(f => f.Family, StringComparer.OrdinalIgnoreCase)
+            .OrderBy(g => g.Key, StringComparer.OrdinalIgnoreCase))
+        {
+            var variants = group
+                .Select(g => FormatFontVariant(g.Font))
+                .Where(v => !string.IsNullOrWhiteSpace(v))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(v => v, StringComparer.OrdinalIgnoreCase)
+                .Select(MarkdownEscape)
+                .ToList();
+
+            var line = $"- {MarkdownEscape(group.Key)} × {group.Count()}";
+            if (variants.Count > 0)
+            {
+                line += " (" + string.Join(", ", variants) + ")";
+            }
+
+            builder.AppendLine(line);
+        }
+
+        if (fontsWithoutFamilies.Count > 0)
+        {
+            builder.AppendLine($"- Fonts without family metadata: {fontsWithoutFamilies.Count}");
+        }
+    }
+
     private static void AppendColorPalette(StringBuilder builder, ManualMigrationReportContext context)
     {
         builder.AppendLine("### Color palette");
@@ -368,6 +444,57 @@ internal sealed class ManualMigrationReportBuilder
         {
             builder.AppendLine($"- {MarkdownEscape(screenshot.Label)} ({screenshot.Width}×{screenshot.Height}): `{screenshot.FilePath}`");
         }
+    }
+
+    private static string? ExtractPrimaryFontFamily(string? fontFamilyValue)
+    {
+        if (string.IsNullOrWhiteSpace(fontFamilyValue))
+        {
+            return null;
+        }
+
+        foreach (var candidate in fontFamilyValue.Split(','))
+        {
+            var trimmed = candidate.Trim();
+            if (trimmed.Length == 0)
+            {
+                continue;
+            }
+
+            if ((trimmed.StartsWith("\"") && trimmed.EndsWith("\"")) || (trimmed.StartsWith("'") && trimmed.EndsWith("'")))
+            {
+                trimmed = trimmed[1..^1];
+            }
+
+            if (!string.IsNullOrWhiteSpace(trimmed))
+            {
+                return trimmed;
+            }
+        }
+
+        return null;
+    }
+
+    private static string? FormatFontVariant(FontAssetSnapshot font)
+    {
+        var parts = new List<string>();
+
+        if (!string.IsNullOrWhiteSpace(font.FontStyle))
+        {
+            parts.Add(font.FontStyle!);
+        }
+
+        if (!string.IsNullOrWhiteSpace(font.FontWeight))
+        {
+            parts.Add(font.FontWeight!);
+        }
+
+        if (parts.Count == 0)
+        {
+            return null;
+        }
+
+        return string.Join(" ", parts);
     }
 
     private static void AppendCredentialNotes(StringBuilder builder, ManualMigrationReportContext context)

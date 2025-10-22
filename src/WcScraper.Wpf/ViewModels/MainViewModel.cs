@@ -1208,7 +1208,10 @@ public sealed class MainViewModel : INotifyPropertyChanged
                             ["source_url"] = font?.SourceUrl,
                             ["resolved_url"] = font?.ResolvedUrl,
                             ["referenced_from"] = font?.ReferencedFrom,
-                            ["content_type"] = font?.ContentType
+                            ["content_type"] = font?.ContentType,
+                            ["font_family"] = font?.FontFamily,
+                            ["font_style"] = font?.FontStyle,
+                            ["font_weight"] = font?.FontWeight
                         });
                     }
 
