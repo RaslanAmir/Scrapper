@@ -4803,8 +4803,7 @@ public sealed class WooProvisioningService : IDisposable
     }
 
     private static bool ShouldSkipExistingProductLookup(StoreProduct product)
-        => string.IsNullOrWhiteSpace(product.Sku)
-           || string.Equals(product.Sku, "PLACEHOLDER", StringComparison.OrdinalIgnoreCase);
+        => string.Equals(product.Sku, "PLACEHOLDER", StringComparison.OrdinalIgnoreCase);
 
     private static void AddIfValue(IDictionary<string, object?> dict, string key, object? value)
     {
