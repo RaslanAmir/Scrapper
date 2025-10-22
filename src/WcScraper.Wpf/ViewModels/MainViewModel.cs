@@ -29,6 +29,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private readonly ShopifyScraper _shopifyScraper;
     private readonly HttpClient _httpClient;
     private readonly WooProvisioningService _wooProvisioningService;
+    private readonly HeadlessBrowserScreenshotService _designScreenshotService;
     private readonly WordPressDirectoryClient _wpDirectoryClient;
     private static readonly TimeSpan DirectoryLookupDelay = TimeSpan.FromMilliseconds(400);
     private bool _isRunning;
@@ -47,6 +48,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private bool _expPublicExtensionFootprints = false;
     private string _additionalPublicExtensionPages = string.Empty;
     private bool _expPublicDesignSnapshot = false;
+    private bool _expPublicDesignScreenshots = false;
     private bool _expStoreConfiguration = false;
     private bool _importStoreConfiguration = false;
     private PlatformMode _selectedPlatform = PlatformMode.WooCommerce;
@@ -74,7 +76,21 @@ public sealed class MainViewModel : INotifyPropertyChanged
     {
     }
 
-    internal MainViewModel(IDialogService dialogs, WooScraper wooScraper, ShopifyScraper shopifyScraper, HttpClient httpClient)
+    internal MainViewModel(
+        IDialogService dialogs,
+        WooScraper wooScraper,
+        ShopifyScraper shopifyScraper,
+        HttpClient httpClient)
+        : this(dialogs, wooScraper, shopifyScraper, httpClient, new HeadlessBrowserScreenshotService())
+    {
+    }
+
+    internal MainViewModel(
+        IDialogService dialogs,
+        WooScraper wooScraper,
+        ShopifyScraper shopifyScraper,
+        HttpClient httpClient,
+        HeadlessBrowserScreenshotService designScreenshotService)
     {
         _dialogs = dialogs;
         _wooScraper = wooScraper;
@@ -82,6 +98,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         _httpClient = httpClient;
         _wooProvisioningService = new WooProvisioningService();
         _wpDirectoryClient = new WordPressDirectoryClient(_httpClient);
+        _designScreenshotService = designScreenshotService ?? throw new ArgumentNullException(nameof(designScreenshotService));
         BrowseCommand = new RelayCommand(OnBrowse);
         RunCommand = new RelayCommand(async () => await OnRunAsync(), () => !IsRunning);
         SelectAllCategoriesCommand = new RelayCommand(() => SetSelection(CategoryChoices, true));
@@ -124,6 +141,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         }
     }
     public bool ExportPublicDesignSnapshot { get => _expPublicDesignSnapshot; set { _expPublicDesignSnapshot = value; OnPropertyChanged(); } }
+    public bool ExportPublicDesignScreenshots { get => _expPublicDesignScreenshots; set { _expPublicDesignScreenshots = value; OnPropertyChanged(); } }
     public bool ExportStoreConfiguration { get => _expStoreConfiguration; set { _expStoreConfiguration = value; OnPropertyChanged(); } }
     public bool IsRunning
     {
@@ -234,6 +252,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     }
     public bool CanExportPublicDesignSnapshot => !HasWordPressCredentials;
 
+    public bool CanExportPublicDesignScreenshots => !HasWordPressCredentials;
     public bool CanExportStoreConfiguration => HasWordPressCredentials;
     public string TargetStoreUrl { get => _targetStoreUrl; set { _targetStoreUrl = value; OnPropertyChanged(); } }
     public string TargetConsumerKey { get => _targetConsumerKey; set { _targetConsumerKey = value; OnPropertyChanged(); } }
@@ -624,6 +643,33 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 {
                     designSnapshotFailed = true;
                     Append($"Design snapshot capture failed: {ex.Message}");
+                }
+            }
+
+            if (SelectedPlatform == PlatformMode.WooCommerce && ExportPublicDesignScreenshots)
+            {
+                try
+                {
+                    Append("Capturing public design screenshots…");
+                    var screenshotFolder = Path.Combine(storeOutputFolder, "design", "screenshots");
+                    var screenshots = await _designScreenshotService.CaptureScreenshotsAsync(targetUrl, screenshotFolder);
+
+                    if (screenshots.Count > 0)
+                    {
+                        Append($"Captured {screenshots.Count} breakpoint screenshot(s) to {screenshotFolder}.");
+                        foreach (var shot in screenshots)
+                        {
+                            Append($" - {shot.Label} ({shot.Width}x{shot.Height}): {shot.FilePath}");
+                        }
+                    }
+                    else
+                    {
+                        Append("No screenshots were captured.");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Append($"Design screenshot capture failed: {ex.Message}");
                 }
             }
 
@@ -2576,6 +2622,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         OnPropertyChanged(nameof(CanExportStoreConfiguration));
         OnPropertyChanged(nameof(CanExportPublicExtensionFootprints));
         OnPropertyChanged(nameof(CanExportPublicDesignSnapshot));
+        OnPropertyChanged(nameof(CanExportPublicDesignScreenshots));
 
         if (HasWordPressCredentials && ExportPublicExtensionFootprints)
         {
@@ -2585,6 +2632,11 @@ public sealed class MainViewModel : INotifyPropertyChanged
         if (HasWordPressCredentials && ExportPublicDesignSnapshot)
         {
             ExportPublicDesignSnapshot = false;
+        }
+
+        if (HasWordPressCredentials && ExportPublicDesignScreenshots)
+        {
+            ExportPublicDesignScreenshots = false;
         }
     }
 }
