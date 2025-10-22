@@ -16,7 +16,7 @@ public static class FrontEndDesignSnapshot
         RegexOptions.Singleline | RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     private static readonly Regex FontUrlRegex = new(
-        "url\\((['\"\\]?)([^'\"\\)]+)\\1\\)",
+        @"url\((['""]?)(?<url>(?(1)(?:\\.|[^\\])*?|[^'""\\)]+))\1\)",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     private static readonly Regex FontFaceBlockRegex = new(
@@ -24,7 +24,7 @@ public static class FrontEndDesignSnapshot
         RegexOptions.Singleline | RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     private static readonly Regex CssUrlTokenRegex = new(
-        "url\\((['\"\\]?)([^'\"\\)]+)\\1\\)",
+        @"url\((['""]?)(?<url>(?(1)(?:\\.|[^\\])*?|[^'""\\)]+))\1\)",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     private static readonly Regex LinkTagRegex = new(
