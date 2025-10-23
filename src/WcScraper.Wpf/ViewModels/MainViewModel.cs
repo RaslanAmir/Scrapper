@@ -1497,7 +1497,34 @@ public sealed class MainViewModel : INotifyPropertyChanged
             {
                 var contextSummary = _chatAssistantService.BuildContextualPrompt(context);
 
-                await foreach (var token in _chatAssistantService.StreamChatCompletionAsync(session, history, contextSummary, CancellationToken.None))
+                var toolbox = new ChatAssistantToolbox(
+                    () => LatestRunSnapshotJson,
+                    limit =>
+                    {
+                        try
+                        {
+                            return CollectRecentExportFiles(limit);
+                        }
+                        catch (Exception ex)
+                        {
+                            Append($"Assistant export file lookup failed: {ex.Message}");
+                            throw;
+                        }
+                    },
+                    limit =>
+                    {
+                        try
+                        {
+                            return CollectRecentLogs(limit);
+                        }
+                        catch (Exception ex)
+                        {
+                            Append($"Assistant log retrieval failed: {ex.Message}");
+                            throw;
+                        }
+                    });
+
+                await foreach (var token in _chatAssistantService.StreamChatCompletionAsync(session, history, contextSummary, toolbox, CancellationToken.None))
                 {
                     assistantMessage.Append(token);
                 }
@@ -1532,6 +1559,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         {
             assistantMessage.Content = $"Error: {ex.Message}";
             ChatStatusMessage = "Assistant encountered an error. Review the latest response.";
+            Append($"Assistant error: {ex.Message}");
         }
         finally
         {
@@ -1988,6 +2016,78 @@ public sealed class MainViewModel : INotifyPropertyChanged
             AdditionalDesignSnapshotPages,
             datasets.Count,
             datasetNames);
+    }
+
+    private IReadOnlyList<ChatAssistantToolbox.ExportFileSummary> CollectRecentExportFiles(int limit)
+    {
+        if (limit <= 0)
+        {
+            return Array.Empty<ChatAssistantToolbox.ExportFileSummary>();
+        }
+
+        try
+        {
+            if (!Directory.Exists(OutputFolder))
+            {
+                return Array.Empty<ChatAssistantToolbox.ExportFileSummary>();
+            }
+
+            var files = Directory
+                .EnumerateFiles(OutputFolder, "*", SearchOption.AllDirectories)
+                .Select(path =>
+                {
+                    try
+                    {
+                        return new FileInfo(path);
+                    }
+                    catch (Exception)
+                    {
+                        return null;
+                    }
+                })
+                .Where(info => info is { Exists: true } candidate && IsLikelyExportFile(candidate))
+                .Select(info => info!)
+                .OrderByDescending(info => info.LastWriteTimeUtc)
+                .Take(limit)
+                .Select(info => new ChatAssistantToolbox.ExportFileSummary(
+                    info.Name,
+                    info.FullName,
+                    info.Length,
+                    info.LastWriteTimeUtc))
+                .ToList();
+
+            return files;
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException($"{ex.Message}", ex);
+        }
+    }
+
+    private IReadOnlyList<string> CollectRecentLogs(int limit)
+    {
+        if (limit <= 0 || Logs.Count == 0)
+        {
+            return Array.Empty<string>();
+        }
+
+        var start = Math.Max(0, Logs.Count - limit);
+        return Logs.Skip(start).Take(limit).ToArray();
+    }
+
+    private static bool IsLikelyExportFile(FileInfo info)
+    {
+        var extension = info.Extension;
+        if (string.IsNullOrEmpty(extension))
+        {
+            return false;
+        }
+
+        return extension.Equals(".csv", StringComparison.OrdinalIgnoreCase)
+            || extension.Equals(".json", StringComparison.OrdinalIgnoreCase)
+            || extension.Equals(".jsonl", StringComparison.OrdinalIgnoreCase)
+            || extension.Equals(".xlsx", StringComparison.OrdinalIgnoreCase)
+            || extension.Equals(".zip", StringComparison.OrdinalIgnoreCase);
     }
 
     private bool HasShopifyCredentials()

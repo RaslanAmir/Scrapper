@@ -45,6 +45,7 @@ public sealed class ChatAssistantService
         ChatSessionSettings settings,
         IReadOnlyList<ChatMessage> history,
         string contextSummary,
+        ChatAssistantToolbox? toolbox = null,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(settings);
@@ -72,11 +73,6 @@ public sealed class ChatAssistantService
 
         var client = new OpenAIClient(endpoint, new AzureKeyCredential(settings.ApiKey));
 
-        var options = new ChatCompletionsOptions
-        {
-            DeploymentName = settings.Model,
-        };
-
         var promptBuilder = new StringBuilder();
         if (!string.IsNullOrWhiteSpace(settings.SystemPrompt))
         {
@@ -94,7 +90,10 @@ public sealed class ChatAssistantService
             promptBuilder.AppendLine(contextSummary.Trim());
         }
 
-        options.Messages.Add(new Azure.AI.OpenAI.ChatMessage(ChatRole.System, promptBuilder.ToString()));
+        var requestMessages = new List<ChatRequestMessage>
+        {
+            new ChatRequestSystemMessage(promptBuilder.ToString())
+        };
 
         foreach (var message in history)
         {
@@ -103,27 +102,143 @@ public sealed class ChatAssistantService
                 continue;
             }
 
-            options.Messages.Add(new Azure.AI.OpenAI.ChatMessage(ToChatRole(message.Role), message.Content));
-        }
-
-        var response = await client.GetChatCompletionsStreamingAsync(options, cancellationToken).ConfigureAwait(false);
-        await using var streaming = response.Value;
-
-        await foreach (var choice in streaming.GetChoicesStreaming(cancellationToken))
-        {
-            await foreach (var chatMessage in choice.GetMessageStreaming(cancellationToken))
+            if (TryCreateRequestMessage(message, out var requestMessage))
             {
-                foreach (var content in chatMessage.Content)
-                {
-                    if (content is ChatMessageTextContent textContent && !string.IsNullOrEmpty(textContent.Text))
-                    {
-                        yield return textContent.Text;
-                    }
-                }
+                requestMessages.Add(requestMessage);
             }
         }
 
-        await streaming.CompleteAsync().ConfigureAwait(false);
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var options = new ChatCompletionsOptions
+            {
+                DeploymentName = settings.Model,
+            };
+
+            foreach (var message in requestMessages)
+            {
+                options.Messages.Add(message);
+            }
+
+            if (toolbox is not null)
+            {
+                foreach (var tool in toolbox.ToolDefinitions)
+                {
+                    options.Tools.Add(tool);
+                }
+            }
+
+            var response = await client.GetChatCompletionsStreamingAsync(options, cancellationToken).ConfigureAwait(false);
+            await using var streaming = response.Value;
+
+            var finishReason = default(CompletionsFinishReason?);
+            var encounteredToolCalls = false;
+            Dictionary<int, ToolCallState>? toolCallStates = toolbox is null ? null : new Dictionary<int, ToolCallState>();
+
+            await foreach (var update in streaming.EnumerateValues().WithCancellation(cancellationToken))
+            {
+                if (toolbox is not null && update.ToolCallUpdate is StreamingFunctionToolCallUpdate functionToolCall)
+                {
+                    encounteredToolCalls = true;
+                    var state = GetOrCreateToolState(toolCallStates!, functionToolCall.ToolCallIndex);
+                    if (!string.IsNullOrEmpty(functionToolCall.Id))
+                    {
+                        state.Id = functionToolCall.Id;
+                    }
+
+                    if (!string.IsNullOrEmpty(functionToolCall.Name))
+                    {
+                        state.Name = functionToolCall.Name;
+                    }
+
+                    var chunk = functionToolCall.ArgumentsUpdate?.ToString();
+                    if (!string.IsNullOrEmpty(chunk))
+                    {
+                        state.Arguments.Append(chunk);
+                    }
+
+                    continue;
+                }
+
+                if (toolbox is not null && !string.IsNullOrEmpty(update.FunctionName))
+                {
+                    encounteredToolCalls = true;
+                    var state = GetOrCreateToolState(toolCallStates!, 0);
+                    state.Name ??= update.FunctionName;
+                    var chunk = update.FunctionArgumentsUpdate?.ToString();
+                    if (!string.IsNullOrEmpty(chunk))
+                    {
+                        state.Arguments.Append(chunk);
+                    }
+
+                    continue;
+                }
+
+                if (update.ContentUpdate is { Count: > 0 } contentParts)
+                {
+                    foreach (var part in contentParts)
+                    {
+                        if (part is ChatMessageTextContent textContent && !string.IsNullOrEmpty(textContent.Text))
+                        {
+                            yield return textContent.Text;
+                        }
+                    }
+                }
+
+                if (update.FinishReason is { } reason)
+                {
+                    finishReason = reason;
+                }
+            }
+
+            await streaming.CompleteAsync().ConfigureAwait(false);
+
+            if (toolbox is null || !encounteredToolCalls)
+            {
+                break;
+            }
+
+            if (finishReason != CompletionsFinishReason.ToolCalls || toolCallStates is null || toolCallStates.Count == 0)
+            {
+                break;
+            }
+
+            var orderedCalls = toolCallStates
+                .Values
+                .OrderBy(state => state.Index)
+                .ToList();
+
+            var assistantToolMessage = new ChatRequestAssistantMessage(string.Empty);
+            var toolMessages = new List<ChatRequestToolMessage>();
+
+            foreach (var call in orderedCalls)
+            {
+                if (string.IsNullOrWhiteSpace(call.Name))
+                {
+                    continue;
+                }
+
+                var toolId = string.IsNullOrWhiteSpace(call.Id) ? $"tool_{call.Index}" : call.Id!;
+                var arguments = call.Arguments.ToString();
+                assistantToolMessage.ToolCalls.Add(new ChatCompletionsFunctionToolCall(toolId, call.Name!, arguments));
+
+                var result = await toolbox.InvokeAsync(call.Name, arguments, cancellationToken).ConfigureAwait(false);
+                toolMessages.Add(new ChatRequestToolMessage(toolId, result));
+            }
+
+            if (assistantToolMessage.ToolCalls.Count == 0)
+            {
+                break;
+            }
+
+            requestMessages.Add(assistantToolMessage);
+            foreach (var toolMessage in toolMessages)
+            {
+                requestMessages.Add(toolMessage);
+            }
+        }
     }
 
     public async IAsyncEnumerable<string> StreamDatasetAnswerAsync(
@@ -1315,6 +1430,48 @@ public sealed class ChatAssistantService
         builder.AppendLine("Answer the operator using only the referenced data. If you need to estimate, explain the assumption.");
 
         return builder.ToString();
+    }
+
+    private static bool TryCreateRequestMessage(ChatMessage message, out ChatRequestMessage? requestMessage)
+    {
+        requestMessage = message.Role switch
+        {
+            ChatMessageRole.System => new ChatRequestSystemMessage(message.Content),
+            ChatMessageRole.User => new ChatRequestUserMessage(message.Content),
+            ChatMessageRole.Assistant => new ChatRequestAssistantMessage(message.Content),
+            ChatMessageRole.Tool when !string.IsNullOrWhiteSpace(message.Content) => new ChatRequestAssistantMessage(message.Content),
+            _ => null,
+        };
+
+        return requestMessage is not null;
+    }
+
+    private static ToolCallState GetOrCreateToolState(Dictionary<int, ToolCallState> states, int index)
+    {
+        if (!states.TryGetValue(index, out var state))
+        {
+            state = new ToolCallState(index);
+            states[index] = state;
+        }
+
+        return state;
+    }
+
+    private sealed class ToolCallState
+    {
+        public ToolCallState(int index)
+        {
+            Index = index;
+            Arguments = new StringBuilder();
+        }
+
+        public int Index { get; }
+
+        public string? Id { get; set; }
+
+        public string? Name { get; set; }
+
+        public StringBuilder Arguments { get; }
     }
 }
 
