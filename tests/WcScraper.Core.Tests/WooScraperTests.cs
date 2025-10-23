@@ -11,6 +11,33 @@ namespace WcScraper.Core.Tests;
 
 public sealed class WooScraperTests
 {
+    [Theory]
+    [InlineData("https://example.com/", "https://example.com")]
+    [InlineData("http://example.com/store", "http://example.com/store")]
+    [InlineData("example.com", "https://example.com")]
+    [InlineData("example.com/store/", "https://example.com/store")]
+    [InlineData(" //example.com/path ", "https://example.com/path")]
+    public void CleanBaseUrl_NormalizesAndValidatesAbsoluteUrls(string input, string expected)
+    {
+        var normalized = WooScraper.CleanBaseUrl(input);
+        Assert.Equal(expected, normalized);
+    }
+
+    [Fact]
+    public void CleanBaseUrl_NullInputThrows()
+    {
+        Assert.Throws<ArgumentNullException>(() => WooScraper.CleanBaseUrl(null!));
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("not a url")]
+    [InlineData("ftp://example.com")]
+    public void CleanBaseUrl_InvalidInputThrowsArgumentException(string input)
+    {
+        Assert.Throws<ArgumentException>(() => WooScraper.CleanBaseUrl(input));
+    }
+
     [Fact]
     public async Task FetchStoreProductsAsync_PopulatesSeoMetadataFromApi()
     {
