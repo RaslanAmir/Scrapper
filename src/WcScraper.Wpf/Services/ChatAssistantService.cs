@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Text;
@@ -105,6 +106,97 @@ public sealed class ChatAssistantService
         }
 
         await streaming.CompleteAsync().ConfigureAwait(false);
+    }
+
+    public async Task<AssistantDirectiveBatch?> ParseAssistantDirectivesAsync(
+        ChatSessionSettings settings,
+        ChatSessionContext context,
+        string latestUserMessage,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+        ArgumentNullException.ThrowIfNull(context);
+
+        if (string.IsNullOrWhiteSpace(latestUserMessage))
+        {
+            return null;
+        }
+
+        if (string.IsNullOrWhiteSpace(settings.ApiKey))
+        {
+            throw new ArgumentException("An API key is required.", nameof(settings));
+        }
+
+        if (string.IsNullOrWhiteSpace(settings.Endpoint))
+        {
+            throw new ArgumentException("An endpoint is required.", nameof(settings));
+        }
+
+        if (!Uri.TryCreate(settings.Endpoint, UriKind.Absolute, out var endpoint))
+        {
+            throw new ArgumentException("The API endpoint must be an absolute URI.", nameof(settings));
+        }
+
+        if (string.IsNullOrWhiteSpace(settings.Model))
+        {
+            throw new ArgumentException("A model or deployment identifier is required.", nameof(settings));
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var client = new OpenAIClient(endpoint, new AzureKeyCredential(settings.ApiKey));
+
+        var options = new ChatCompletionsOptions
+        {
+            DeploymentName = settings.Model,
+            Temperature = 0.1f,
+        };
+
+        var systemPrompt = new StringBuilder();
+        if (!string.IsNullOrWhiteSpace(settings.SystemPrompt))
+        {
+            systemPrompt.AppendLine(settings.SystemPrompt.Trim());
+            systemPrompt.AppendLine();
+        }
+
+        systemPrompt.AppendLine("You translate WC Local Scraper operator requests into structured directives.");
+        systemPrompt.AppendLine("Respond ONLY with minified JSON matching this schema:");
+        systemPrompt.AppendLine("{");
+        systemPrompt.AppendLine("  \"summary\": \"human readable headline\",");
+        systemPrompt.AppendLine("  \"changes\": [");
+        systemPrompt.AppendLine("    {\"type\": \"toggle\", \"name\": \"ExportPublicDesignSnapshot\", \"value\": true, \"justification\": \"why\", \"risk_level\": \"low|medium|high\", \"confidence\": 0.8, \"requires_confirmation\": false}");
+        systemPrompt.AppendLine("  ],");
+        systemPrompt.AppendLine("  \"retry\": {\"enable\": true, \"attempts\": 4, \"base_delay_seconds\": 1.5, \"max_delay_seconds\": 40, \"justification\": \"why\"},");
+        systemPrompt.AppendLine("  \"credential_reminders\": [{\"credential\": \"WordPress\", \"message\": \"Ask for admin password\"}],");
+        systemPrompt.AppendLine("  \"requires_confirmation\": false,");
+        systemPrompt.AppendLine("  \"risk_note\": \"summarize any risks\"");
+        systemPrompt.AppendLine("}");
+        systemPrompt.AppendLine("If there are no actionable changes, return empty arrays and false flags.");
+
+        options.Messages.Add(new Azure.AI.OpenAI.ChatMessage(ChatRole.System, systemPrompt.ToString()));
+
+        var contextPrompt = BuildContextualPrompt(context);
+
+        var userPrompt = new StringBuilder();
+        userPrompt.AppendLine("Latest operator message:");
+        userPrompt.AppendLine(latestUserMessage.Trim());
+        userPrompt.AppendLine();
+        userPrompt.AppendLine("Current session context:");
+        userPrompt.AppendLine(contextPrompt.Trim());
+        userPrompt.AppendLine();
+        userPrompt.AppendLine("Return JSON only. Do not include markdown fences.");
+
+        options.Messages.Add(new Azure.AI.OpenAI.ChatMessage(ChatRole.User, userPrompt.ToString()));
+
+        var response = await client.GetChatCompletionsAsync(options, cancellationToken).ConfigureAwait(false);
+        var choice = response.Value.Choices.FirstOrDefault();
+        var content = choice?.Message?.Content;
+        if (string.IsNullOrWhiteSpace(content))
+        {
+            return null;
+        }
+
+        return ParseAssistantDirectivePayload(content);
     }
 
     public async Task<LogTriageResult?> SummarizeLogsAsync(
@@ -438,6 +530,212 @@ public sealed class ChatAssistantService
         return builder.ToString();
     }
 
+    internal static AssistantDirectiveBatch? ParseAssistantDirectivePayload(string response)
+    {
+        if (string.IsNullOrWhiteSpace(response))
+        {
+            return null;
+        }
+
+        var jsonText = ExtractJsonPayload(response);
+        if (string.IsNullOrWhiteSpace(jsonText))
+        {
+            return null;
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(jsonText);
+            var root = document.RootElement;
+
+            var summary = root.TryGetProperty("summary", out var summaryElement)
+                ? summaryElement.GetString()
+                : null;
+            var requiresConfirmation = root.TryGetProperty("requires_confirmation", out var confirmationElement)
+                && confirmationElement.ValueKind == JsonValueKind.True;
+            var riskNote = root.TryGetProperty("risk_note", out var riskNoteElement)
+                ? riskNoteElement.GetString()
+                : null;
+
+            var toggles = new List<AssistantToggleDirective>();
+            if (root.TryGetProperty("changes", out var changesElement) && changesElement.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var changeElement in changesElement.EnumerateArray())
+                {
+                    var type = changeElement.TryGetProperty("type", out var typeElement)
+                        ? typeElement.GetString()
+                        : null;
+                    if (!string.Equals(type, "toggle", StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+
+                    var name = changeElement.TryGetProperty("name", out var nameElement)
+                        ? nameElement.GetString()
+                        : null;
+                    if (string.IsNullOrWhiteSpace(name))
+                    {
+                        continue;
+                    }
+
+                    bool? value = null;
+                    if (changeElement.TryGetProperty("value", out var valueElement))
+                    {
+                        value = valueElement.ValueKind switch
+                        {
+                            JsonValueKind.True => true,
+                            JsonValueKind.False => false,
+                            JsonValueKind.String when bool.TryParse(valueElement.GetString(), out var parsedBool) => parsedBool,
+                            _ => null,
+                        };
+                    }
+
+                    if (value is null)
+                    {
+                        continue;
+                    }
+
+                    string? justification = changeElement.TryGetProperty("justification", out var justificationElement)
+                        ? justificationElement.GetString()
+                        : null;
+                    string? riskLevel = changeElement.TryGetProperty("risk_level", out var riskElement)
+                        ? riskElement.GetString()
+                        : null;
+
+                    double? confidence = null;
+                    if (changeElement.TryGetProperty("confidence", out var confidenceElement))
+                    {
+                        confidence = confidenceElement.ValueKind switch
+                        {
+                            JsonValueKind.Number when confidenceElement.TryGetDouble(out var parsedConfidence) => parsedConfidence,
+                            JsonValueKind.String when double.TryParse(confidenceElement.GetString(), NumberStyles.Float, CultureInfo.InvariantCulture, out var parsedConfidence) => parsedConfidence,
+                            _ => null,
+                        };
+                    }
+
+                    var toggleRequiresConfirmation = changeElement.TryGetProperty("requires_confirmation", out var toggleConfirmationElement)
+                        && toggleConfirmationElement.ValueKind == JsonValueKind.True;
+
+                    toggles.Add(new AssistantToggleDirective(
+                        name.Trim(),
+                        value.Value,
+                        string.IsNullOrWhiteSpace(justification) ? null : justification.Trim(),
+                        string.IsNullOrWhiteSpace(riskLevel) ? null : riskLevel.Trim(),
+                        confidence,
+                        toggleRequiresConfirmation));
+                }
+            }
+
+            AssistantRetryDirective? retryDirective = null;
+            if (root.TryGetProperty("retry", out var retryElement) && retryElement.ValueKind == JsonValueKind.Object)
+            {
+                bool? enable = null;
+                if (retryElement.TryGetProperty("enable", out var enableElement))
+                {
+                    enable = enableElement.ValueKind switch
+                    {
+                        JsonValueKind.True => true,
+                        JsonValueKind.False => false,
+                        JsonValueKind.String when bool.TryParse(enableElement.GetString(), out var parsedEnable) => parsedEnable,
+                        _ => null,
+                    };
+                }
+
+                int? attempts = null;
+                if (retryElement.TryGetProperty("attempts", out var attemptsElement))
+                {
+                    attempts = attemptsElement.ValueKind switch
+                    {
+                        JsonValueKind.Number when attemptsElement.TryGetInt32(out var parsedAttempts) => parsedAttempts,
+                        JsonValueKind.String when int.TryParse(attemptsElement.GetString(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedAttempts) => parsedAttempts,
+                        _ => null,
+                    };
+                }
+
+                double? baseDelay = null;
+                if (retryElement.TryGetProperty("base_delay_seconds", out var baseDelayElement))
+                {
+                    baseDelay = baseDelayElement.ValueKind switch
+                    {
+                        JsonValueKind.Number when baseDelayElement.TryGetDouble(out var parsedBase) => parsedBase,
+                        JsonValueKind.String when double.TryParse(baseDelayElement.GetString(), NumberStyles.Float, CultureInfo.InvariantCulture, out var parsedBase) => parsedBase,
+                        _ => null,
+                    };
+                }
+
+                double? maxDelay = null;
+                if (retryElement.TryGetProperty("max_delay_seconds", out var maxDelayElement))
+                {
+                    maxDelay = maxDelayElement.ValueKind switch
+                    {
+                        JsonValueKind.Number when maxDelayElement.TryGetDouble(out var parsedMax) => parsedMax,
+                        JsonValueKind.String when double.TryParse(maxDelayElement.GetString(), NumberStyles.Float, CultureInfo.InvariantCulture, out var parsedMax) => parsedMax,
+                        _ => null,
+                    };
+                }
+
+                string? justification = retryElement.TryGetProperty("justification", out var retryJustificationElement)
+                    ? retryJustificationElement.GetString()
+                    : null;
+
+                if (enable is not null || attempts is not null || baseDelay is not null || maxDelay is not null)
+                {
+                    retryDirective = new AssistantRetryDirective(
+                        enable,
+                        attempts,
+                        baseDelay,
+                        maxDelay,
+                        string.IsNullOrWhiteSpace(justification) ? null : justification.Trim());
+                }
+            }
+
+            var reminders = new List<AssistantCredentialReminder>();
+            if (root.TryGetProperty("credential_reminders", out var remindersElement) && remindersElement.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var reminderElement in remindersElement.EnumerateArray())
+                {
+                    var credential = reminderElement.TryGetProperty("credential", out var credentialElement)
+                        ? credentialElement.GetString()
+                        : null;
+                    var message = reminderElement.TryGetProperty("message", out var messageElement)
+                        ? messageElement.GetString()
+                        : null;
+
+                    if (string.IsNullOrWhiteSpace(message))
+                    {
+                        continue;
+                    }
+
+                    reminders.Add(new AssistantCredentialReminder(
+                        string.IsNullOrWhiteSpace(credential) ? "General" : credential.Trim(),
+                        message.Trim()));
+                }
+            }
+
+            if (toggles.Count == 0 && retryDirective is null && reminders.Count == 0)
+            {
+                return null;
+            }
+
+            var normalizedSummary = string.IsNullOrWhiteSpace(summary)
+                ? "Assistant directive update."
+                : summary.Trim();
+            var normalizedRiskNote = string.IsNullOrWhiteSpace(riskNote) ? null : riskNote.Trim();
+
+            return new AssistantDirectiveBatch(
+                normalizedSummary,
+                toggles,
+                retryDirective,
+                reminders,
+                requiresConfirmation,
+                normalizedRiskNote);
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
     private static (string Overview, IReadOnlyList<LogTriageIssue> Issues)? ParseLogTriage(string response)
     {
         if (string.IsNullOrWhiteSpace(response))
@@ -646,6 +944,31 @@ public sealed class ChatAssistantService
 }
 
 public sealed record ChatSessionSettings(string Endpoint, string ApiKey, string Model, string? SystemPrompt);
+
+public sealed record AssistantDirectiveBatch(
+    string Summary,
+    IReadOnlyList<AssistantToggleDirective> Toggles,
+    AssistantRetryDirective? Retry,
+    IReadOnlyList<AssistantCredentialReminder> CredentialReminders,
+    bool RequiresConfirmation,
+    string? RiskNote);
+
+public sealed record AssistantToggleDirective(
+    string Name,
+    bool Value,
+    string? Justification,
+    string? RiskLevel,
+    double? Confidence,
+    bool RequiresConfirmation);
+
+public sealed record AssistantRetryDirective(
+    bool? Enable,
+    int? Attempts,
+    double? BaseDelaySeconds,
+    double? MaxDelaySeconds,
+    string? Justification);
+
+public sealed record AssistantCredentialReminder(string Credential, string Message);
 
 public sealed record ChatSessionContext(
     PlatformMode SelectedPlatform,
