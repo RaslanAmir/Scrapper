@@ -15,7 +15,7 @@ namespace WcScraper.Core;
 public sealed class PublicExtensionDetector : IDisposable
 {
     private static readonly Regex ExtensionPathRegex = new(
-        @"/wp-content/(?<type>plugins|themes)/(?<slug>[A-Za-z0-9._-]+)/",
+        @"/wp-content/(?<type>plugins|themes|mu-plugins)/(?<slug>[A-Za-z0-9._-]+)(?=$|/|\\?|\.|#)",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     private static readonly Regex VersionTokenRegex = new(
@@ -397,7 +397,7 @@ public sealed class PublicExtensionDetector : IDisposable
                 continue;
             }
 
-            var type = match.Groups["type"].Value.Equals("themes", StringComparison.OrdinalIgnoreCase) ? "theme" : "plugin";
+            var type = NormalizeExtensionType(match.Groups["type"].Value);
             var slug = NormalizeSlug(match.Groups["slug"].Value);
             if (string.IsNullOrEmpty(slug))
             {
@@ -616,6 +616,21 @@ public sealed class PublicExtensionDetector : IDisposable
 
         var fallback = VersionTokenRegex.Match(match.Value);
         return fallback.Success ? fallback.Groups["version"].Value : null;
+    }
+
+    private static string NormalizeExtensionType(string rawType)
+    {
+        if (string.IsNullOrWhiteSpace(rawType))
+        {
+            return "plugin";
+        }
+
+        return rawType.Trim().ToLowerInvariant() switch
+        {
+            "themes" or "theme" => "theme",
+            "mu-plugins" or "mu-plugin" => "mu-plugin",
+            _ => "plugin"
+        };
     }
 
     private static string? TryGetQueryVersion(string assetUrl)

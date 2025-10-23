@@ -1460,7 +1460,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                             ["type"] = f.Type,
                             ["slug"] = f.Slug,
                             ["source_url"] = f.SourceUrl,
-                            ["source_urls"] = string.Join(";", f.SourceUrls),
+                            ["source_urls"] = f.SourceUrls is { Count: > 0 } ? string.Join(";", f.SourceUrls) : string.Empty,
                             ["asset_url"] = f.AssetUrl,
                             ["version_hint"] = f.VersionHint,
                             ["wordpress_version"] = f.WordPressVersion,
@@ -2374,6 +2374,13 @@ public sealed class MainViewModel : INotifyPropertyChanged
             if (string.IsNullOrWhiteSpace(slug))
             {
                 ApplyDirectoryMetadata(footprint, null, "missing_slug");
+                continue;
+            }
+
+            if (string.Equals(footprint.Type, "mu-plugin", StringComparison.OrdinalIgnoreCase))
+            {
+                ApplyDirectoryMetadata(footprint, null, "skipped_mu_plugin");
+                log.Report($"Skipping WordPress.org lookup for mu-plugin slug '{slug}' (must-use plugins are not listed in the public directory).");
                 continue;
             }
 
