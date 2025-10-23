@@ -28,45 +28,50 @@
     </Window.DataContext>
     <Grid Margin="12">
         <Grid.RowDefinitions>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
             <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
-        <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="Auto"/>
-            <ColumnDefinition Width="*"/>
-            <ColumnDefinition Width="Auto"/>
-        </Grid.ColumnDefinitions>
 
-        <!-- Platform selection -->
-        <GroupBox Grid.Row="0" Grid.ColumnSpan="3" Header="Platform" Margin="0,0,0,8">
-            <StackPanel Orientation="Horizontal" Margin="8,4,0,4">
-                <RadioButton Content="WooCommerce" IsChecked="{Binding IsWooCommerce, Mode=TwoWay}" Margin="0,0,16,0"/>
-                <RadioButton Content="Shopify" IsChecked="{Binding IsShopify, Mode=TwoWay}"/>
-            </StackPanel>
-        </GroupBox>
+        <ScrollViewer Grid.Row="0" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+            <Grid Margin="0,0,0,12">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
 
-        <!-- URL + Run -->
-        <TextBlock Grid.Row="1" Text="{Binding StoreUrlLabel}" VerticalAlignment="Center" Margin="0,0,8,0"/>
-        <TextBox Grid.Row="1" Grid.Column="1" Text="{Binding StoreUrl, UpdateSourceTrigger=PropertyChanged}" MinWidth="520"
-                 Visibility="{Binding IsWooCommerce, Converter={StaticResource BoolToVisibility}}" />
-        <TextBox Grid.Row="1" Grid.Column="1" Text="{Binding ShopifyStoreUrl, UpdateSourceTrigger=PropertyChanged}" MinWidth="520"
-                 Visibility="{Binding IsShopify, Converter={StaticResource BoolToVisibility}}" />
-        <Button Grid.Row="1" Grid.Column="2" Content="Run" Margin="8,0,0,0" Padding="16,6" Command="{Binding RunCommand}" />
+                <!-- Platform selection -->
+                <GroupBox Grid.Row="0" Grid.ColumnSpan="3" Header="Platform" Margin="0,0,0,8">
+                    <StackPanel Orientation="Horizontal" Margin="8,4,0,4">
+                        <RadioButton Content="WooCommerce" IsChecked="{Binding IsWooCommerce, Mode=TwoWay}" Margin="0,0,16,0"/>
+                        <RadioButton Content="Shopify" IsChecked="{Binding IsShopify, Mode=TwoWay}"/>
+                    </StackPanel>
+                </GroupBox>
 
-        <!-- Output -->
-        <TextBlock Grid.Row="2" Text="Output folder:" VerticalAlignment="Center" Margin="0,8,8,0"/>
-        <TextBox Grid.Row="2" Grid.Column="1" Text="{Binding OutputFolder, UpdateSourceTrigger=PropertyChanged}" />
-        <Button Grid.Row="2" Grid.Column="2" Content="Browse…" Margin="8,8,0,0" Padding="12,6" Command="{Binding BrowseCommand}" />
+                <!-- URL + Run -->
+                <TextBlock Grid.Row="1" Text="{Binding StoreUrlLabel}" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                <TextBox Grid.Row="1" Grid.Column="1" Text="{Binding StoreUrl, UpdateSourceTrigger=PropertyChanged}" MinWidth="520"
+                         Visibility="{Binding IsWooCommerce, Converter={StaticResource BoolToVisibility}}" />
+                <TextBox Grid.Row="1" Grid.Column="1" Text="{Binding ShopifyStoreUrl, UpdateSourceTrigger=PropertyChanged}" MinWidth="520"
+                         Visibility="{Binding IsShopify, Converter={StaticResource BoolToVisibility}}" />
+                <Button Grid.Row="1" Grid.Column="2" Content="Run" Margin="8,0,0,0" Padding="16,6" Command="{Binding RunCommand}" />
 
-        <GroupBox Grid.Row="3" Grid.ColumnSpan="3" Header="WooCommerce Credentials" Margin="0,12,0,0"
-                  Visibility="{Binding IsWooCommerce, Converter={StaticResource BoolToVisibility}}">
+                <!-- Output -->
+                <TextBlock Grid.Row="2" Text="Output folder:" VerticalAlignment="Center" Margin="0,8,8,0"/>
+                <TextBox Grid.Row="2" Grid.Column="1" Text="{Binding OutputFolder, UpdateSourceTrigger=PropertyChanged}" />
+                <Button Grid.Row="2" Grid.Column="2" Content="Browse…" Margin="8,8,0,0" Padding="12,6" Command="{Binding BrowseCommand}" />
+
+                <GroupBox Grid.Row="3" Grid.ColumnSpan="3" Header="WooCommerce Credentials" Margin="0,12,0,0"
+                          Visibility="{Binding IsWooCommerce, Converter={StaticResource BoolToVisibility}}">
             <Grid Margin="8">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto"/>
@@ -302,17 +307,24 @@
             </StackPanel>
         </GroupBox>
 
-        <!-- Log -->
-        <GroupBox Grid.Row="7" Grid.ColumnSpan="3" Header="Log">
-            <ListBox ItemsSource="{Binding Logs}" />
-        </GroupBox>
+        <Grid Grid.Row="1">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
 
-        <!-- Status -->
-        <StatusBar Grid.Row="8" Grid.ColumnSpan="3" Margin="0,8,0,0">
-            <StatusBarItem Content="{Binding Path=Logs.Count, StringFormat=Messages: {0}}" />
-            <StatusBarItem>
-                <TextBlock Text="{Binding IsRunning, StringFormat=Running: {0}}" />
-            </StatusBarItem>
-        </StatusBar>
+            <!-- Log -->
+            <GroupBox Grid.Row="0" Header="Log" Margin="0,12,0,0">
+                <ListBox ItemsSource="{Binding Logs}" />
+            </GroupBox>
+
+            <!-- Status -->
+            <StatusBar Grid.Row="1" Margin="0,8,0,0">
+                <StatusBarItem Content="{Binding Path=Logs.Count, StringFormat=Messages: {0}}" />
+                <StatusBarItem>
+                    <TextBlock Text="{Binding IsRunning, StringFormat=Running: {0}}" />
+                </StatusBarItem>
+            </StatusBar>
+        </Grid>
     </Grid>
 </Window>
