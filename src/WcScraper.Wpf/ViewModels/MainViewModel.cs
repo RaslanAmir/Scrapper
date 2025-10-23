@@ -1581,24 +1581,24 @@ public sealed class MainViewModel : INotifyPropertyChanged
                         });
 
                         manifestCsvRows.Add(new DesignAssetManifestCsvRow(
-                            type: "stylesheet",
-                            file: NormalizeRelativePath(relativeAssetPath),
-                            sourceUrl: stylesheet?.SourceUrl,
-                            resolvedUrl: stylesheet?.ResolvedUrl,
-                            referencedFrom: stylesheet?.ReferencedFrom,
-                            contentType: stylesheet?.ContentType,
-                            fileSizeBytes: fileSize,
-                            sha256: sha256,
-                            fontFamily: null,
-                            fontStyle: null,
-                            fontWeight: null,
-                            rel: null,
-                            linkType: null,
-                            sizes: null,
-                            color: null,
-                            media: null,
-                            origins: null,
-                            references: null));
+                            Type: "stylesheet",
+                            File: NormalizeRelativePath(relativeAssetPath),
+                            SourceUrl: stylesheet?.SourceUrl,
+                            ResolvedUrl: stylesheet?.ResolvedUrl,
+                            ReferencedFrom: stylesheet?.ReferencedFrom,
+                            ContentType: stylesheet?.ContentType,
+                            FileSizeBytes: fileSize,
+                            Sha256: sha256,
+                            FontFamily: null,
+                            FontStyle: null,
+                            FontWeight: null,
+                            Rel: null,
+                            LinkType: null,
+                            Sizes: null,
+                            Color: null,
+                            Media: null,
+                            Origins: null,
+                            References: null));
                     }
 
                     for (var i = 0; i < designSnapshot.FontFiles.Count; i++)
@@ -1636,24 +1636,24 @@ public sealed class MainViewModel : INotifyPropertyChanged
                         });
 
                         manifestCsvRows.Add(new DesignAssetManifestCsvRow(
-                            type: "font",
-                            file: NormalizeRelativePath(relativeAssetPath),
-                            sourceUrl: font?.SourceUrl,
-                            resolvedUrl: font?.ResolvedUrl,
-                            referencedFrom: font?.ReferencedFrom,
-                            contentType: font?.ContentType,
-                            fileSizeBytes: fileSize,
-                            sha256: sha256,
-                            fontFamily: font?.FontFamily,
-                            fontStyle: font?.FontStyle,
-                            fontWeight: font?.FontWeight,
-                            rel: null,
-                            linkType: null,
-                            sizes: null,
-                            color: null,
-                            media: null,
-                            origins: null,
-                            references: null));
+                            Type: "font",
+                            File: NormalizeRelativePath(relativeAssetPath),
+                            SourceUrl: font?.SourceUrl,
+                            ResolvedUrl: font?.ResolvedUrl,
+                            ReferencedFrom: font?.ReferencedFrom,
+                            ContentType: font?.ContentType,
+                            FileSizeBytes: fileSize,
+                            Sha256: sha256,
+                            FontFamily: font?.FontFamily,
+                            FontStyle: font?.FontStyle,
+                            FontWeight: font?.FontWeight,
+                            Rel: null,
+                            LinkType: null,
+                            Sizes: null,
+                            Color: null,
+                            Media: null,
+                            Origins: null,
+                            References: null));
                     }
 
                     for (var i = 0; i < designSnapshot.ImageFiles.Count; i++)
@@ -1698,24 +1698,24 @@ public sealed class MainViewModel : INotifyPropertyChanged
                         });
 
                         manifestCsvRows.Add(new DesignAssetManifestCsvRow(
-                            type: "image",
-                            file: NormalizeRelativePath(relativeAssetPath),
-                            sourceUrl: image?.SourceUrl,
-                            resolvedUrl: image?.ResolvedUrl,
-                            referencedFrom: image?.ReferencedFrom,
-                            contentType: image?.ContentType,
-                            fileSizeBytes: fileSize,
-                            sha256: sha256,
-                            fontFamily: null,
-                            fontStyle: null,
-                            fontWeight: null,
-                            rel: null,
-                            linkType: null,
-                            sizes: null,
-                            color: null,
-                            media: null,
-                            origins: origins,
-                            references: references));
+                            Type: "image",
+                            File: NormalizeRelativePath(relativeAssetPath),
+                            SourceUrl: image?.SourceUrl,
+                            ResolvedUrl: image?.ResolvedUrl,
+                            ReferencedFrom: image?.ReferencedFrom,
+                            ContentType: image?.ContentType,
+                            FileSizeBytes: fileSize,
+                            Sha256: sha256,
+                            FontFamily: null,
+                            FontStyle: null,
+                            FontWeight: null,
+                            Rel: null,
+                            LinkType: null,
+                            Sizes: null,
+                            Color: null,
+                            Media: null,
+                            Origins: origins,
+                            References: references));
                     }
 
                     string? iconsRoot = null;
@@ -1766,24 +1766,24 @@ public sealed class MainViewModel : INotifyPropertyChanged
                             });
 
                             manifestCsvRows.Add(new DesignAssetManifestCsvRow(
-                                type: "icon",
-                                file: NormalizeRelativePath(relativeIconPath),
-                                sourceUrl: icon?.SourceUrl,
-                                resolvedUrl: icon?.ResolvedUrl,
-                                referencedFrom: icon?.ReferencedFrom,
-                                contentType: icon?.ContentType,
-                                fileSizeBytes: fileSize,
-                                sha256: sha256,
-                                fontFamily: null,
-                                fontStyle: null,
-                                fontWeight: null,
-                                rel: icon?.Rel,
-                                linkType: icon?.LinkType,
-                                sizes: icon?.Sizes,
-                                color: icon?.Color,
-                                media: icon?.Media,
-                                origins: null,
-                                references: references));
+                                Type: "icon",
+                                File: NormalizeRelativePath(relativeIconPath),
+                                SourceUrl: icon?.SourceUrl,
+                                ResolvedUrl: icon?.ResolvedUrl,
+                                ReferencedFrom: icon?.ReferencedFrom,
+                                ContentType: icon?.ContentType,
+                                FileSizeBytes: fileSize,
+                                Sha256: sha256,
+                                FontFamily: null,
+                                FontStyle: null,
+                                FontWeight: null,
+                                Rel: icon?.Rel,
+                                LinkType: icon?.LinkType,
+                                Sizes: icon?.Sizes,
+                                Color: icon?.Color,
+                                Media: icon?.Media,
+                                Origins: null,
+                                References: references));
                         }
 
                         Append($"Captured {designSnapshot.IconFiles.Count} design icon(s); assets saved under {iconsRoot}.");
