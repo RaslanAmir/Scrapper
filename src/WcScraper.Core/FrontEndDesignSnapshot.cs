@@ -87,6 +87,8 @@ public static class FrontEndDesignSnapshot
 
         var fontCandidates = new Dictionary<string, FontAssetRequest>(StringComparer.OrdinalIgnoreCase);
         var fontCandidateOrder = new List<string>();
+        var iconCandidates = new Dictionary<string, IconAssetRequest>(StringComparer.OrdinalIgnoreCase);
+        var iconCandidateOrder = new List<string>();
         var imageCandidates = new Dictionary<string, ImageAssetRequest>(StringComparer.OrdinalIgnoreCase);
         var imageCandidateOrder = new List<string>();
 
@@ -100,6 +102,8 @@ public static class FrontEndDesignSnapshot
                 stylesheetLookup,
                 fontCandidates,
                 fontCandidateOrder,
+                iconCandidates,
+                iconCandidateOrder,
                 imageCandidates,
                 imageCandidateOrder,
                 aggregatedCssSources,
@@ -159,6 +163,50 @@ public static class FrontEndDesignSnapshot
             catch (HttpRequestException ex)
             {
                 log?.Report($"Font request failed for {request.ResolvedUrl}: {ex.Message}");
+            }
+        }
+
+        var iconSnapshotsMap = new Dictionary<string, DesignIconSnapshot>(StringComparer.OrdinalIgnoreCase);
+        var iconSnapshots = new List<DesignIconSnapshot>();
+
+        foreach (var request in iconCandidates.Values)
+        {
+            try
+            {
+                log?.Report($"GET {request.ResolvedUrl}");
+                using var iconResponse = await retryPolicy.SendAsync(
+                    () => httpClient.GetAsync(request.ResolvedUrl, cancellationToken),
+                    cancellationToken,
+                    attempt => ReportRetry(log, request.ResolvedUrl, attempt));
+                if (!iconResponse.IsSuccessStatusCode)
+                {
+                    log?.Report($"Icon request failed for {request.ResolvedUrl}: {(int)iconResponse.StatusCode} {iconResponse.ReasonPhrase}");
+                    continue;
+                }
+
+                var iconBytes = await iconResponse.Content.ReadAsByteArrayAsync(cancellationToken);
+                var contentType = iconResponse.Content.Headers.ContentType?.MediaType;
+                var iconSnapshot = new DesignIconSnapshot(
+                    request.RawUrl,
+                    request.ResolvedUrl,
+                    request.References,
+                    iconBytes,
+                    contentType,
+                    request.Rel,
+                    request.LinkType,
+                    request.Sizes,
+                    request.Color,
+                    request.Media);
+                iconSnapshotsMap[request.ResolvedUrl] = iconSnapshot;
+                iconSnapshots.Add(iconSnapshot);
+            }
+            catch (TaskCanceledException ex)
+            {
+                log?.Report($"Icon request canceled for {request.ResolvedUrl}: {ex.Message}");
+            }
+            catch (HttpRequestException ex)
+            {
+                log?.Report($"Icon request failed for {request.ResolvedUrl}: {ex.Message}");
             }
         }
 
@@ -223,7 +271,7 @@ public static class FrontEndDesignSnapshot
         var colorSwatches = ExtractColorSwatches(aggregatedCss);
 
         var pages = pageBuilders
-            .Select(builder => builder.Build(fontSnapshotsMap, imageSnapshotsMap))
+            .Select(builder => builder.Build(fontSnapshotsMap, iconSnapshotsMap, imageSnapshotsMap))
             .ToList();
 
         return new FrontEndDesignSnapshotResult(
@@ -233,6 +281,7 @@ public static class FrontEndDesignSnapshot
             fontCandidateOrder,
             aggregatedStylesheets,
             fontSnapshots,
+            iconSnapshots,
             imageSnapshots,
             cssImageSnapshots,
             htmlImageSnapshots,
@@ -288,6 +337,8 @@ public static class FrontEndDesignSnapshot
         Dictionary<string, StylesheetSnapshot> stylesheetLookup,
         Dictionary<string, FontAssetRequest> fontCandidates,
         List<string> fontCandidateOrder,
+        Dictionary<string, IconAssetRequest> iconCandidates,
+        List<string> iconCandidateOrder,
         Dictionary<string, ImageAssetRequest> imageCandidates,
         List<string> imageCandidateOrder,
         List<string> aggregatedCssSources,
@@ -352,7 +403,39 @@ public static class FrontEndDesignSnapshot
             imageCandidates,
             imageCandidateOrder);
 
-        var stylesheetHrefs = ExtractStylesheetHrefs(html);
+        var linkAssets = ExtractLinkAssetReferences(html);
+
+        foreach (var iconReference in linkAssets.IconReferences)
+        {
+            if (ShouldSkipIconCandidate(iconReference.Href))
+            {
+                continue;
+            }
+
+            var resolved = ResolveAssetUrl(iconReference.Href, pageUri);
+            if (string.IsNullOrWhiteSpace(resolved))
+            {
+                continue;
+            }
+
+            var candidate = new IconUrlCandidate(
+                iconReference.Href,
+                resolved,
+                iconReference.Rel,
+                iconReference.LinkType,
+                iconReference.Sizes,
+                iconReference.Color,
+                iconReference.Media);
+
+            if (AddIconCandidate(iconCandidates, candidate, pageUrl))
+            {
+                iconCandidateOrder.Add(candidate.ResolvedUrl);
+            }
+
+            builder.AddIconUrl(candidate.ResolvedUrl);
+        }
+
+        var stylesheetHrefs = linkAssets.StylesheetHrefs;
         if (stylesheetHrefs.Count == 0)
         {
             return builder;
@@ -542,9 +625,11 @@ public static class FrontEndDesignSnapshot
         return styles;
     }
 
-    private static IReadOnlyList<string> ExtractStylesheetHrefs(string html)
+    private static LinkAssetExtractionResult ExtractLinkAssetReferences(string html)
     {
-        var hrefs = new List<string>();
+        var stylesheetHrefs = new List<string>();
+        var iconReferences = new List<LinkIconReference>();
+
         foreach (Match match in LinkTagRegex.Matches(html))
         {
             var tag = match.Value;
@@ -553,45 +638,119 @@ public static class FrontEndDesignSnapshot
                 continue;
             }
 
-            string? rel = null;
+            string? relRaw = null;
             string? href = null;
+            string? linkType = null;
+            string? sizes = null;
+            string? color = null;
+            string? media = null;
 
             foreach (Match attr in AttributeRegex.Matches(tag))
             {
-                if (!attr.Success) continue;
+                if (!attr.Success)
+                {
+                    continue;
+                }
 
                 var name = attr.Groups["name"].Value;
                 var value = attr.Groups["value"].Value;
+                if (string.IsNullOrWhiteSpace(name))
+                {
+                    continue;
+                }
 
+                var decoded = DecodeHtmlAttributeValue(value);
                 if (string.Equals(name, "rel", StringComparison.OrdinalIgnoreCase))
                 {
-                    rel = value;
+                    relRaw = decoded;
                 }
                 else if (string.Equals(name, "href", StringComparison.OrdinalIgnoreCase))
                 {
-                    href = value;
+                    href = decoded;
+                }
+                else if (string.Equals(name, "type", StringComparison.OrdinalIgnoreCase))
+                {
+                    linkType = decoded;
+                }
+                else if (string.Equals(name, "sizes", StringComparison.OrdinalIgnoreCase))
+                {
+                    sizes = decoded;
+                }
+                else if (string.Equals(name, "color", StringComparison.OrdinalIgnoreCase))
+                {
+                    color = decoded;
+                }
+                else if (string.Equals(name, "media", StringComparison.OrdinalIgnoreCase))
+                {
+                    media = decoded;
                 }
             }
 
-            if (string.IsNullOrWhiteSpace(rel) || string.IsNullOrWhiteSpace(href))
+            if (string.IsNullOrWhiteSpace(relRaw) || string.IsNullOrWhiteSpace(href))
             {
                 continue;
             }
 
-            var relTokens = rel
+            var relTokens = relRaw
                 .Split(new[] { ' ', '\t', '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)
                 .Select(r => r.Trim())
-                .Where(r => !string.IsNullOrEmpty(r));
+                .Where(r => !string.IsNullOrEmpty(r))
+                .ToArray();
 
-            if (!relTokens.Any(r => string.Equals(r, "stylesheet", StringComparison.OrdinalIgnoreCase)))
+            if (relTokens.Any(r => string.Equals(r, "stylesheet", StringComparison.OrdinalIgnoreCase)))
             {
-                continue;
+                stylesheetHrefs.Add(href);
             }
 
-            hrefs.Add(href);
+            if (relTokens.Any(IsIconRelToken))
+            {
+                iconReferences.Add(new LinkIconReference(href, relRaw, linkType, sizes, color, media));
+            }
         }
 
-        return hrefs;
+        return new LinkAssetExtractionResult(stylesheetHrefs, iconReferences);
+    }
+
+    private static bool IsIconRelToken(string relToken)
+    {
+        if (string.IsNullOrWhiteSpace(relToken))
+        {
+            return false;
+        }
+
+        var normalized = relToken.Trim();
+
+        if (string.Equals(normalized, "icon", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        if (string.Equals(normalized, "favicon", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        if (string.Equals(normalized, "shortcut-icon", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        if (normalized.StartsWith("apple-touch-icon", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        if (normalized.StartsWith("mask-icon", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        if (normalized.StartsWith("fluid-icon", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        return false;
     }
 
     private static void CollectHtmlImageReferences(
@@ -832,6 +991,25 @@ public static class FrontEndDesignSnapshot
         return false;
     }
 
+    private static bool ShouldSkipIconCandidate(string candidateValue)
+    {
+        if (string.IsNullOrWhiteSpace(candidateValue))
+        {
+            return true;
+        }
+
+        var trimmed = candidateValue.Trim();
+        if (trimmed.StartsWith("data:", StringComparison.OrdinalIgnoreCase)) return true;
+        if (trimmed.StartsWith("blob:", StringComparison.OrdinalIgnoreCase)) return true;
+        if (trimmed.StartsWith("#", StringComparison.Ordinal)) return true;
+        if (trimmed.StartsWith("mailto:", StringComparison.OrdinalIgnoreCase)) return true;
+        if (trimmed.StartsWith("tel:", StringComparison.OrdinalIgnoreCase)) return true;
+        if (trimmed.StartsWith("javascript:", StringComparison.OrdinalIgnoreCase)) return true;
+        if (trimmed.StartsWith("about:", StringComparison.OrdinalIgnoreCase)) return true;
+
+        return false;
+    }
+
     private static IEnumerable<FontUrlCandidate> ExtractFontUrlCandidates(string css, Uri? baseUri)
     {
         if (string.IsNullOrWhiteSpace(css)) yield break;
@@ -934,6 +1112,30 @@ public static class FrontEndDesignSnapshot
             candidate.FontFamily,
             candidate.FontStyle,
             candidate.FontWeight);
+        return true;
+    }
+
+    private static bool AddIconCandidate(
+        IDictionary<string, IconAssetRequest> accumulator,
+        IconUrlCandidate candidate,
+        string referencedFrom)
+    {
+        if (accumulator.TryGetValue(candidate.ResolvedUrl, out var existing))
+        {
+            existing.AddReference(referencedFrom);
+            existing.MergeMetadata(candidate);
+            return false;
+        }
+
+        accumulator[candidate.ResolvedUrl] = new IconAssetRequest(
+            candidate.RawUrl,
+            candidate.ResolvedUrl,
+            referencedFrom,
+            candidate.Rel,
+            candidate.LinkType,
+            candidate.Sizes,
+            candidate.Color,
+            candidate.Media);
         return true;
     }
 
@@ -1172,12 +1374,14 @@ public static class FrontEndDesignSnapshot
     {
         private readonly HashSet<string> _stylesheetUrls = new(StringComparer.OrdinalIgnoreCase);
         private readonly HashSet<string> _fontUrls = new(StringComparer.OrdinalIgnoreCase);
+        private readonly HashSet<string> _iconUrls = new(StringComparer.OrdinalIgnoreCase);
         private readonly HashSet<string> _imageUrls = new(StringComparer.OrdinalIgnoreCase);
         private readonly HashSet<string> _cssImageUrls = new(StringComparer.OrdinalIgnoreCase);
         private readonly HashSet<string> _htmlImageUrls = new(StringComparer.OrdinalIgnoreCase);
         private readonly List<string> _cssSources = new();
         private readonly List<StylesheetSnapshot> _stylesheets = new();
         private readonly List<string> _fontUrlList = new();
+        private readonly List<string> _iconUrlList = new();
         private readonly List<string> _imageUrlList = new();
         private readonly List<string> _cssImageUrlList = new();
         private readonly List<string> _htmlImageUrlList = new();
@@ -1231,6 +1435,20 @@ public static class FrontEndDesignSnapshot
             }
         }
 
+        public void AddIconUrl(string? url)
+        {
+            if (string.IsNullOrWhiteSpace(url))
+            {
+                return;
+            }
+
+            var normalized = url.Trim();
+            if (_iconUrls.Add(normalized))
+            {
+                _iconUrlList.Add(normalized);
+            }
+        }
+
         public void AddImageUrl(string? url, DesignImageOrigin origin = DesignImageOrigin.Css)
         {
             if (string.IsNullOrWhiteSpace(url))
@@ -1265,12 +1483,19 @@ public static class FrontEndDesignSnapshot
 
         public DesignPageSnapshot Build(
             IReadOnlyDictionary<string, FontAssetSnapshot> fontSnapshots,
+            IReadOnlyDictionary<string, DesignIconSnapshot> iconSnapshots,
             IReadOnlyDictionary<string, DesignImageSnapshot> imageSnapshots)
         {
             var fontFiles = _fontUrlList
                 .Select(url => fontSnapshots.TryGetValue(url, out var snapshot) ? snapshot : null)
                 .Where(snapshot => snapshot is not null)
                 .Cast<FontAssetSnapshot>()
+                .ToList();
+
+            var iconFiles = _iconUrlList
+                .Select(url => iconSnapshots.TryGetValue(url, out var snapshot) ? snapshot : null)
+                .Where(snapshot => snapshot is not null)
+                .Cast<DesignIconSnapshot>()
                 .ToList();
 
             var imageFiles = _imageUrlList
@@ -1304,6 +1529,7 @@ public static class FrontEndDesignSnapshot
                 _fontUrlList,
                 _stylesheets,
                 fontFiles,
+                iconFiles,
                 imageFiles,
                 cssImageFiles,
                 htmlImageFiles,
@@ -1393,6 +1619,27 @@ public static class FrontEndDesignSnapshot
 
     private readonly record struct FontUrlCandidate(string RawUrl, string ResolvedUrl, string? FontFamily, string? FontStyle, string? FontWeight);
 
+    private readonly record struct IconUrlCandidate(
+        string RawUrl,
+        string ResolvedUrl,
+        string? Rel,
+        string? LinkType,
+        string? Sizes,
+        string? Color,
+        string? Media);
+
+    private sealed record LinkAssetExtractionResult(
+        IReadOnlyList<string> StylesheetHrefs,
+        IReadOnlyList<LinkIconReference> IconReferences);
+
+    private readonly record struct LinkIconReference(
+        string Href,
+        string? Rel,
+        string? LinkType,
+        string? Sizes,
+        string? Color,
+        string? Media);
+
     private readonly record struct ImageUrlCandidate(string RawUrl, string ResolvedUrl, DesignImageOrigin Origin);
 
     private sealed class FontAssetRequest
@@ -1440,6 +1687,91 @@ public static class FrontEndDesignSnapshot
             if (string.IsNullOrWhiteSpace(FontWeight) && !string.IsNullOrWhiteSpace(candidate.FontWeight))
             {
                 FontWeight = candidate.FontWeight;
+            }
+        }
+    }
+
+    private sealed class IconAssetRequest
+    {
+        private readonly HashSet<string> _referenceSet = new(StringComparer.OrdinalIgnoreCase);
+        private readonly List<string> _references = new();
+
+        public IconAssetRequest(
+            string rawUrl,
+            string resolvedUrl,
+            string referencedFrom,
+            string? rel,
+            string? linkType,
+            string? sizes,
+            string? color,
+            string? media)
+        {
+            RawUrl = rawUrl ?? string.Empty;
+            ResolvedUrl = resolvedUrl ?? string.Empty;
+            Rel = rel;
+            LinkType = linkType;
+            Sizes = sizes;
+            Color = color;
+            Media = media;
+            AddReference(referencedFrom);
+        }
+
+        public string RawUrl { get; }
+
+        public string ResolvedUrl { get; }
+
+        public string? Rel { get; private set; }
+
+        public string? LinkType { get; private set; }
+
+        public string? Sizes { get; private set; }
+
+        public string? Color { get; private set; }
+
+        public string? Media { get; private set; }
+
+        public string ReferencedFrom => _references.Count > 0 ? _references[0] : string.Empty;
+
+        public IReadOnlyList<string> References => _references;
+
+        public void AddReference(string? reference)
+        {
+            if (string.IsNullOrWhiteSpace(reference))
+            {
+                return;
+            }
+
+            if (_referenceSet.Add(reference))
+            {
+                _references.Add(reference);
+            }
+        }
+
+        public void MergeMetadata(IconUrlCandidate candidate)
+        {
+            if (string.IsNullOrWhiteSpace(Rel) && !string.IsNullOrWhiteSpace(candidate.Rel))
+            {
+                Rel = candidate.Rel;
+            }
+
+            if (string.IsNullOrWhiteSpace(LinkType) && !string.IsNullOrWhiteSpace(candidate.LinkType))
+            {
+                LinkType = candidate.LinkType;
+            }
+
+            if (string.IsNullOrWhiteSpace(Sizes) && !string.IsNullOrWhiteSpace(candidate.Sizes))
+            {
+                Sizes = candidate.Sizes;
+            }
+
+            if (string.IsNullOrWhiteSpace(Color) && !string.IsNullOrWhiteSpace(candidate.Color))
+            {
+                Color = candidate.Color;
+            }
+
+            if (string.IsNullOrWhiteSpace(Media) && !string.IsNullOrWhiteSpace(candidate.Media))
+            {
+                Media = candidate.Media;
             }
         }
     }
@@ -1507,6 +1839,7 @@ public sealed class FrontEndDesignSnapshotResult
         IReadOnlyList<string> fontUrls,
         IReadOnlyList<StylesheetSnapshot> stylesheets,
         IReadOnlyList<FontAssetSnapshot> fontFiles,
+        IReadOnlyList<DesignIconSnapshot> iconFiles,
         IReadOnlyList<DesignImageSnapshot> imageFiles,
         IReadOnlyList<DesignImageSnapshot> cssImageFiles,
         IReadOnlyList<DesignImageSnapshot> htmlImageFiles,
@@ -1520,6 +1853,7 @@ public sealed class FrontEndDesignSnapshotResult
         FontUrls = fontUrls ?? Array.Empty<string>();
         Stylesheets = stylesheets ?? Array.Empty<StylesheetSnapshot>();
         FontFiles = fontFiles ?? Array.Empty<FontAssetSnapshot>();
+        IconFiles = iconFiles ?? Array.Empty<DesignIconSnapshot>();
         ImageFiles = imageFiles ?? Array.Empty<DesignImageSnapshot>();
         CssImageFiles = cssImageFiles ?? Array.Empty<DesignImageSnapshot>();
         HtmlImageFiles = htmlImageFiles ?? Array.Empty<DesignImageSnapshot>();
@@ -1539,6 +1873,8 @@ public sealed class FrontEndDesignSnapshotResult
     public IReadOnlyList<StylesheetSnapshot> Stylesheets { get; }
 
     public IReadOnlyList<FontAssetSnapshot> FontFiles { get; }
+
+    public IReadOnlyList<DesignIconSnapshot> IconFiles { get; }
 
     public IReadOnlyList<DesignImageSnapshot> ImageFiles { get; }
 
@@ -1562,6 +1898,7 @@ public sealed class DesignPageSnapshot
         IReadOnlyList<string> fontUrls,
         IReadOnlyList<StylesheetSnapshot> stylesheets,
         IReadOnlyList<FontAssetSnapshot> fontFiles,
+        IReadOnlyList<DesignIconSnapshot> iconFiles,
         IReadOnlyList<DesignImageSnapshot> imageFiles,
         IReadOnlyList<DesignImageSnapshot> cssImageFiles,
         IReadOnlyList<DesignImageSnapshot> htmlImageFiles,
@@ -1573,6 +1910,7 @@ public sealed class DesignPageSnapshot
         FontUrls = fontUrls ?? Array.Empty<string>();
         Stylesheets = stylesheets ?? Array.Empty<StylesheetSnapshot>();
         FontFiles = fontFiles ?? Array.Empty<FontAssetSnapshot>();
+        IconFiles = iconFiles ?? Array.Empty<DesignIconSnapshot>();
         ImageFiles = imageFiles ?? Array.Empty<DesignImageSnapshot>();
         CssImageFiles = cssImageFiles ?? Array.Empty<DesignImageSnapshot>();
         HtmlImageFiles = htmlImageFiles ?? Array.Empty<DesignImageSnapshot>();
@@ -1590,6 +1928,8 @@ public sealed class DesignPageSnapshot
     public IReadOnlyList<StylesheetSnapshot> Stylesheets { get; }
 
     public IReadOnlyList<FontAssetSnapshot> FontFiles { get; }
+
+    public IReadOnlyList<DesignIconSnapshot> IconFiles { get; }
 
     public IReadOnlyList<DesignImageSnapshot> ImageFiles { get; }
 
@@ -1668,6 +2008,56 @@ public sealed class FontAssetSnapshot
     public string? FontStyle { get; }
 
     public string? FontWeight { get; }
+}
+
+public sealed class DesignIconSnapshot
+{
+    public DesignIconSnapshot(
+        string sourceUrl,
+        string resolvedUrl,
+        IReadOnlyList<string> references,
+        byte[] content,
+        string? contentType,
+        string? rel,
+        string? linkType,
+        string? sizes,
+        string? color,
+        string? media)
+    {
+        SourceUrl = sourceUrl ?? string.Empty;
+        ResolvedUrl = resolvedUrl ?? string.Empty;
+        References = references ?? Array.Empty<string>();
+        ReferencedFrom = References.Count > 0 ? References[0] : string.Empty;
+        Content = content ?? Array.Empty<byte>();
+        ContentType = contentType;
+        Rel = rel;
+        LinkType = linkType;
+        Sizes = sizes;
+        Color = color;
+        Media = media;
+    }
+
+    public string SourceUrl { get; }
+
+    public string ResolvedUrl { get; }
+
+    public string ReferencedFrom { get; }
+
+    public IReadOnlyList<string> References { get; }
+
+    public byte[] Content { get; }
+
+    public string? ContentType { get; }
+
+    public string? Rel { get; }
+
+    public string? LinkType { get; }
+
+    public string? Sizes { get; }
+
+    public string? Color { get; }
+
+    public string? Media { get; }
 }
 
 public sealed class DesignImageSnapshot

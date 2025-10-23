@@ -1544,6 +1544,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
                     var stylesheetManifest = new List<Dictionary<string, object?>>();
                     var fontManifest = new List<Dictionary<string, object?>>();
                     var imageManifest = new List<Dictionary<string, object?>>();
+                    var iconManifest = new List<Dictionary<string, object?>>();
+                    var manifestCsvRows = new List<DesignAssetManifestCsvRow>();
 
                     for (var i = 0; i < designSnapshot.Stylesheets.Count; i++)
                     {
@@ -1577,6 +1579,26 @@ public sealed class MainViewModel : INotifyPropertyChanged
                             ["file_size_bytes"] = fileSize,
                             ["sha256"] = sha256
                         });
+
+                        manifestCsvRows.Add(new DesignAssetManifestCsvRow(
+                            type: "stylesheet",
+                            file: NormalizeRelativePath(relativeAssetPath),
+                            sourceUrl: stylesheet?.SourceUrl,
+                            resolvedUrl: stylesheet?.ResolvedUrl,
+                            referencedFrom: stylesheet?.ReferencedFrom,
+                            contentType: stylesheet?.ContentType,
+                            fileSizeBytes: fileSize,
+                            sha256: sha256,
+                            fontFamily: null,
+                            fontStyle: null,
+                            fontWeight: null,
+                            rel: null,
+                            linkType: null,
+                            sizes: null,
+                            color: null,
+                            media: null,
+                            origins: null,
+                            references: null));
                     }
 
                     for (var i = 0; i < designSnapshot.FontFiles.Count; i++)
@@ -1612,6 +1634,26 @@ public sealed class MainViewModel : INotifyPropertyChanged
                             ["file_size_bytes"] = fileSize,
                             ["sha256"] = sha256
                         });
+
+                        manifestCsvRows.Add(new DesignAssetManifestCsvRow(
+                            type: "font",
+                            file: NormalizeRelativePath(relativeAssetPath),
+                            sourceUrl: font?.SourceUrl,
+                            resolvedUrl: font?.ResolvedUrl,
+                            referencedFrom: font?.ReferencedFrom,
+                            contentType: font?.ContentType,
+                            fileSizeBytes: fileSize,
+                            sha256: sha256,
+                            fontFamily: font?.FontFamily,
+                            fontStyle: font?.FontStyle,
+                            fontWeight: font?.FontWeight,
+                            rel: null,
+                            linkType: null,
+                            sizes: null,
+                            color: null,
+                            media: null,
+                            origins: null,
+                            references: null));
                     }
 
                     for (var i = 0; i < designSnapshot.ImageFiles.Count; i++)
@@ -1654,6 +1696,101 @@ public sealed class MainViewModel : INotifyPropertyChanged
                             ["file_size_bytes"] = fileSize,
                             ["sha256"] = sha256
                         });
+
+                        manifestCsvRows.Add(new DesignAssetManifestCsvRow(
+                            type: "image",
+                            file: NormalizeRelativePath(relativeAssetPath),
+                            sourceUrl: image?.SourceUrl,
+                            resolvedUrl: image?.ResolvedUrl,
+                            referencedFrom: image?.ReferencedFrom,
+                            contentType: image?.ContentType,
+                            fileSizeBytes: fileSize,
+                            sha256: sha256,
+                            fontFamily: null,
+                            fontStyle: null,
+                            fontWeight: null,
+                            rel: null,
+                            linkType: null,
+                            sizes: null,
+                            color: null,
+                            media: null,
+                            origins: origins,
+                            references: references));
+                    }
+
+                    string? iconsRoot = null;
+                    if (designSnapshot.IconFiles.Count > 0)
+                    {
+                        iconsRoot = Path.Combine(designRoot, "icons");
+                        Directory.CreateDirectory(iconsRoot);
+
+                        for (var i = 0; i < designSnapshot.IconFiles.Count; i++)
+                        {
+                            var icon = designSnapshot.IconFiles[i];
+                            var fileName = CreateDesignAssetFileName(
+                                prefix: "icon",
+                                index: i + 1,
+                                url: icon?.ResolvedUrl ?? icon?.SourceUrl,
+                                contentType: icon?.ContentType,
+                                defaultExtension: ".ico");
+
+                            var relativeIconPath = Path.Combine("icons", fileName);
+                            var iconPath = Path.Combine(iconsRoot, fileName);
+                            var content = icon?.Content ?? Array.Empty<byte>();
+
+                            await File.WriteAllBytesAsync(iconPath, content);
+                            Append($"Wrote {iconPath}");
+
+                            var fileSize = content.Length;
+                            var sha256 = Convert.ToHexString(SHA256.HashData(content));
+                            var references = icon?.References?
+                                .Where(r => !string.IsNullOrWhiteSpace(r))
+                                .Distinct(StringComparer.OrdinalIgnoreCase)
+                                .ToList();
+
+                            iconManifest.Add(new Dictionary<string, object?>
+                            {
+                                ["file"] = NormalizeRelativePath(relativeIconPath),
+                                ["source_url"] = icon?.SourceUrl,
+                                ["resolved_url"] = icon?.ResolvedUrl,
+                                ["referenced_from"] = icon?.ReferencedFrom,
+                                ["references"] = references ?? Array.Empty<string>(),
+                                ["content_type"] = icon?.ContentType,
+                                ["rel"] = icon?.Rel,
+                                ["link_type"] = icon?.LinkType,
+                                ["sizes"] = icon?.Sizes,
+                                ["color"] = icon?.Color,
+                                ["media"] = icon?.Media,
+                                ["file_size_bytes"] = fileSize,
+                                ["sha256"] = sha256
+                            });
+
+                            manifestCsvRows.Add(new DesignAssetManifestCsvRow(
+                                type: "icon",
+                                file: NormalizeRelativePath(relativeIconPath),
+                                sourceUrl: icon?.SourceUrl,
+                                resolvedUrl: icon?.ResolvedUrl,
+                                referencedFrom: icon?.ReferencedFrom,
+                                contentType: icon?.ContentType,
+                                fileSizeBytes: fileSize,
+                                sha256: sha256,
+                                fontFamily: null,
+                                fontStyle: null,
+                                fontWeight: null,
+                                rel: icon?.Rel,
+                                linkType: icon?.LinkType,
+                                sizes: icon?.Sizes,
+                                color: icon?.Color,
+                                media: icon?.Media,
+                                origins: null,
+                                references: references));
+                        }
+
+                        Append($"Captured {designSnapshot.IconFiles.Count} design icon(s); assets saved under {iconsRoot}.");
+                    }
+                    else
+                    {
+                        Append("No design icons were captured from link tags.");
                     }
 
                     var cssImageCount = designSnapshot.CssImageFiles
@@ -1682,11 +1819,16 @@ public sealed class MainViewModel : INotifyPropertyChanged
                         ["stylesheets"] = stylesheetManifest,
                         ["fonts"] = fontManifest,
                         ["images"] = imageManifest,
+                        ["icons"] = iconManifest,
                         ["image_summary"] = new Dictionary<string, object?>
                         {
                             ["total"] = designSnapshot.ImageFiles.Count,
                             ["css"] = cssImageCount,
                             ["html"] = htmlImageCount
+                        },
+                        ["icon_summary"] = new Dictionary<string, object?>
+                        {
+                            ["total"] = designSnapshot.IconFiles.Count
                         },
                         ["colors"] = designSnapshot.ColorSwatches
                     };
@@ -1695,6 +1837,39 @@ public sealed class MainViewModel : INotifyPropertyChanged
                     var manifestJson = JsonSerializer.Serialize(manifest, _artifactWriteOptions);
                     await File.WriteAllTextAsync(manifestPath, manifestJson, Encoding.UTF8);
                     Append($"Wrote {manifestPath}");
+
+                    var manifestCsvPath = Path.Combine(designRoot, "assets-manifest.csv");
+                    var manifestCsvBuilder = new StringBuilder();
+                    manifestCsvBuilder.AppendLine("type,file,source_url,resolved_url,referenced_from,content_type,file_size_bytes,sha256,font_family,font_style,font_weight,rel,link_type,sizes,color,media,origins,references");
+                    foreach (var row in manifestCsvRows)
+                    {
+                        var originsValue = row.Origins is { Count: > 0 } ? string.Join(';', row.Origins) : string.Empty;
+                        var referencesValue = row.References is { Count: > 0 } ? string.Join(';', row.References) : string.Empty;
+                        manifestCsvBuilder.AppendLine(string.Join(',', new[]
+                        {
+                            EscapeCsv(row.Type),
+                            EscapeCsv(row.File),
+                            EscapeCsv(row.SourceUrl),
+                            EscapeCsv(row.ResolvedUrl),
+                            EscapeCsv(row.ReferencedFrom),
+                            EscapeCsv(row.ContentType),
+                            EscapeCsv(row.FileSizeBytes.ToString(CultureInfo.InvariantCulture)),
+                            EscapeCsv(row.Sha256),
+                            EscapeCsv(row.FontFamily),
+                            EscapeCsv(row.FontStyle),
+                            EscapeCsv(row.FontWeight),
+                            EscapeCsv(row.Rel),
+                            EscapeCsv(row.LinkType),
+                            EscapeCsv(row.Sizes),
+                            EscapeCsv(row.Color),
+                            EscapeCsv(row.Media),
+                            EscapeCsv(originsValue),
+                            EscapeCsv(referencesValue)
+                        }));
+                    }
+
+                    await File.WriteAllTextAsync(manifestCsvPath, manifestCsvBuilder.ToString(), Encoding.UTF8);
+                    Append($"Wrote {manifestCsvPath}");
                 }
                 else if (attemptedDesignSnapshot && !designSnapshotFailed)
                 {
@@ -2852,7 +3027,14 @@ public sealed class MainViewModel : INotifyPropertyChanged
         ["application/font-woff"] = ".woff",
         ["application/font-woff2"] = ".woff2",
         ["application/x-font-ttf"] = ".ttf",
-        ["application/x-font-opentype"] = ".otf"
+        ["application/x-font-opentype"] = ".otf",
+        ["image/png"] = ".png",
+        ["image/jpeg"] = ".jpg",
+        ["image/gif"] = ".gif",
+        ["image/webp"] = ".webp",
+        ["image/svg+xml"] = ".svg",
+        ["image/x-icon"] = ".ico",
+        ["image/vnd.microsoft.icon"] = ".ico"
     };
 
     private static string GuessMimeTypeFromExtension(string? extension)
@@ -2929,6 +3111,26 @@ public sealed class MainViewModel : INotifyPropertyChanged
         return $"{sanitized}-{hash}{extension}";
     }
 
+    private sealed record DesignAssetManifestCsvRow(
+        string Type,
+        string File,
+        string? SourceUrl,
+        string? ResolvedUrl,
+        string? ReferencedFrom,
+        string? ContentType,
+        long FileSizeBytes,
+        string Sha256,
+        string? FontFamily,
+        string? FontStyle,
+        string? FontWeight,
+        string? Rel,
+        string? LinkType,
+        string? Sizes,
+        string? Color,
+        string? Media,
+        IReadOnlyList<string>? Origins,
+        IReadOnlyList<string>? References);
+
     private static string GetDesignAssetExtension(string? url, string? contentType, string defaultExtension)
     {
         var fromUrl = TryExtractExtensionFromUrl(url);
@@ -2943,6 +3145,18 @@ public sealed class MainViewModel : INotifyPropertyChanged
         }
 
         return defaultExtension;
+    }
+
+    private static string EscapeCsv(string? value)
+    {
+        if (string.IsNullOrEmpty(value))
+        {
+            return string.Empty;
+        }
+
+        var needsQuotes = value.IndexOfAny(new[] { ',', '"', '\n', '\r' }) >= 0;
+        var escaped = value.Replace("\"", "\"\"");
+        return needsQuotes ? $"\"{escaped}\"" : escaped;
     }
 
     private static string? TryExtractExtensionFromUrl(string? url)
