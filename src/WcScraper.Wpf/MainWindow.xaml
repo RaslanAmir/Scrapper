@@ -28,298 +28,371 @@
     </Window.DataContext>
     <Grid Margin="12">
         <Grid.RowDefinitions>
-            <RowDefinition Height="*"/>
-            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
-        <ScrollViewer Grid.Row="0" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+        <ScrollViewer Grid.Row="0"
+                      VerticalScrollBarVisibility="Auto"
+                      HorizontalScrollBarVisibility="Disabled">
             <Grid Margin="0,0,0,12">
                 <Grid.RowDefinitions>
-                    <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
                 </Grid.RowDefinitions>
                 <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="*"/>
-                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
 
                 <!-- Platform selection -->
                 <GroupBox Grid.Row="0" Grid.ColumnSpan="3" Header="Platform" Margin="0,0,0,8">
                     <StackPanel Orientation="Horizontal" Margin="8,4,0,4">
-                        <RadioButton Content="WooCommerce" IsChecked="{Binding IsWooCommerce, Mode=TwoWay}" Margin="0,0,16,0"/>
-                        <RadioButton Content="Shopify" IsChecked="{Binding IsShopify, Mode=TwoWay}"/>
+                        <RadioButton Content="WooCommerce"
+                                     IsChecked="{Binding IsWooCommerce, Mode=TwoWay}"
+                                     Margin="0,0,16,0" />
+                        <RadioButton Content="Shopify" IsChecked="{Binding IsShopify, Mode=TwoWay}" />
                     </StackPanel>
                 </GroupBox>
 
                 <!-- URL + Run -->
-                <TextBlock Grid.Row="1" Text="{Binding StoreUrlLabel}" VerticalAlignment="Center" Margin="0,0,8,0"/>
-                <TextBox Grid.Row="1" Grid.Column="1" Text="{Binding StoreUrl, UpdateSourceTrigger=PropertyChanged}" MinWidth="520"
+                <TextBlock Grid.Row="1"
+                           Text="{Binding StoreUrlLabel}"
+                           VerticalAlignment="Center"
+                           Margin="0,0,8,0" />
+                <TextBox Grid.Row="1"
+                         Grid.Column="1"
+                         Text="{Binding StoreUrl, UpdateSourceTrigger=PropertyChanged}"
+                         MinWidth="520"
                          Visibility="{Binding IsWooCommerce, Converter={StaticResource BoolToVisibility}}" />
-                <TextBox Grid.Row="1" Grid.Column="1" Text="{Binding ShopifyStoreUrl, UpdateSourceTrigger=PropertyChanged}" MinWidth="520"
+                <TextBox Grid.Row="1"
+                         Grid.Column="1"
+                         Text="{Binding ShopifyStoreUrl, UpdateSourceTrigger=PropertyChanged}"
+                         MinWidth="520"
                          Visibility="{Binding IsShopify, Converter={StaticResource BoolToVisibility}}" />
-                <Button Grid.Row="1" Grid.Column="2" Content="Run" Margin="8,0,0,0" Padding="16,6" Command="{Binding RunCommand}" />
+                <Button Grid.Row="1"
+                        Grid.Column="2"
+                        Content="Run"
+                        Margin="8,0,0,0"
+                        Padding="16,6"
+                        Command="{Binding RunCommand}" />
 
                 <!-- Output -->
-                <TextBlock Grid.Row="2" Text="Output folder:" VerticalAlignment="Center" Margin="0,8,8,0"/>
-                <TextBox Grid.Row="2" Grid.Column="1" Text="{Binding OutputFolder, UpdateSourceTrigger=PropertyChanged}" />
-                <Button Grid.Row="2" Grid.Column="2" Content="Browse…" Margin="8,8,0,0" Padding="12,6" Command="{Binding BrowseCommand}" />
+                <TextBlock Grid.Row="2"
+                           Text="Output folder:"
+                           VerticalAlignment="Center"
+                           Margin="0,8,8,0" />
+                <TextBox Grid.Row="2"
+                         Grid.Column="1"
+                         Text="{Binding OutputFolder, UpdateSourceTrigger=PropertyChanged}" />
+                <Button Grid.Row="2"
+                        Grid.Column="2"
+                        Content="Browse…"
+                        Margin="8,8,0,0"
+                        Padding="12,6"
+                        Command="{Binding BrowseCommand}" />
 
-                <GroupBox Grid.Row="3" Grid.ColumnSpan="3" Header="WooCommerce Credentials" Margin="0,12,0,0"
+                <!-- WooCommerce credentials -->
+                <GroupBox Grid.Row="3"
+                          Grid.ColumnSpan="3"
+                          Header="WooCommerce Credentials"
+                          Margin="0,12,0,0"
                           Visibility="{Binding IsWooCommerce, Converter={StaticResource BoolToVisibility}}">
-            <Grid Margin="8">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="*"/>
-                </Grid.ColumnDefinitions>
-                <Grid.RowDefinitions>
-                    <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="Auto"/>
-                </Grid.RowDefinitions>
-                <TextBlock Text="Admin username:" Margin="0,0,8,4" VerticalAlignment="Center"/>
-                <TextBox Grid.Column="1" Text="{Binding WordPressUsername, UpdateSourceTrigger=PropertyChanged}"/>
-                <TextBlock Grid.Row="1" Text="Application password:" Margin="0,8,8,0" VerticalAlignment="Center"/>
-                <TextBox Grid.Row="1" Grid.Column="1" Text="{Binding WordPressApplicationPassword, UpdateSourceTrigger=PropertyChanged}"/>
-                <TextBlock Grid.Row="2" Grid.ColumnSpan="2"
-                           Text="Plugins, themes, and configuration exports require a WordPress application password."
-                           TextWrapping="Wrap"
-                           Margin="0,8,0,0"/>
-            </Grid>
-        </GroupBox>
-
-        <!-- Shopify credentials -->
-        <GroupBox Grid.Row="3" Grid.ColumnSpan="3" Header="Shopify Credentials" Margin="0,12,0,0"
-                  Visibility="{Binding IsShopify, Converter={StaticResource BoolToVisibility}}">
-            <Grid Margin="8">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="*"/>
-                </Grid.ColumnDefinitions>
-                <Grid.RowDefinitions>
-                    <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="Auto"/>
-                </Grid.RowDefinitions>
-                <TextBlock Text="Admin access token:" Margin="0,0,8,4" VerticalAlignment="Center"/>
-                <TextBox Grid.Column="1" Text="{Binding ShopifyAdminAccessToken, UpdateSourceTrigger=PropertyChanged}"/>
-                <TextBlock Grid.Row="1" Text="Storefront access token:" Margin="0,8,8,4" VerticalAlignment="Center"/>
-                <TextBox Grid.Row="1" Grid.Column="1" Text="{Binding ShopifyStorefrontAccessToken, UpdateSourceTrigger=PropertyChanged}"/>
-                <TextBlock Grid.Row="2" Text="API key:" Margin="0,8,8,4" VerticalAlignment="Center"/>
-                <TextBox Grid.Row="2" Grid.Column="1" Text="{Binding ShopifyApiKey, UpdateSourceTrigger=PropertyChanged}"/>
-                <TextBlock Grid.Row="3" Text="API secret:" Margin="0,8,8,0" VerticalAlignment="Center"/>
-                <TextBox Grid.Row="3" Grid.Column="1" Text="{Binding ShopifyApiSecret, UpdateSourceTrigger=PropertyChanged}"/>
-            </Grid>
-        </GroupBox>
-
-        <!-- Exports -->
-        <GroupBox Grid.Row="4" Grid.ColumnSpan="3" Header="Exports" Margin="0,12,0,8">
-            <StackPanel Margin="8">
-                <WrapPanel>
-                    <CheckBox Content="Generic CSV" IsChecked="{Binding ExportCsv}" Margin="0,0,16,0"/>
-                    <CheckBox Content="Shopify CSV (variants)" IsChecked="{Binding ExportShopify}" Margin="0,0,16,0"/>
-                    <CheckBox Content="WooCommerce CSV" IsChecked="{Binding ExportWoo}" Margin="0,0,16,0"/>
-                    <CheckBox Content="Reviews CSV (Store API)" IsChecked="{Binding ExportReviews}" Margin="0,0,16,0"/>
-                    <CheckBox Content="XLSX" IsChecked="{Binding ExportXlsx}" Margin="0,0,16,0"/>
-                    <CheckBox Content="JSONL" IsChecked="{Binding ExportJsonl}"/>
-                </WrapPanel>
-                <WrapPanel Margin="0,8,0,0"
-                           Visibility="{Binding IsWooCommerce, Converter={StaticResource BoolToVisibility}}">
-                    <CheckBox Content="Plugins CSV"
-                              IsChecked="{Binding ExportPluginsCsv}"
-                              IsEnabled="{Binding CanExportExtensions}"
-                              Margin="0,0,16,0"
-                              Style="{StaticResource CredentialDependentCheckBoxStyle}"/>
-                    <CheckBox Content="Plugins JSONL"
-                              IsChecked="{Binding ExportPluginsJsonl}"
-                              IsEnabled="{Binding CanExportExtensions}"
-                              Margin="0,0,16,0"
-                              Style="{StaticResource CredentialDependentCheckBoxStyle}"/>
-                    <CheckBox Content="Themes CSV"
-                              IsChecked="{Binding ExportThemesCsv}"
-                              IsEnabled="{Binding CanExportExtensions}"
-                              Margin="0,0,16,0"
-                              Style="{StaticResource CredentialDependentCheckBoxStyle}"/>
-                    <CheckBox Content="Themes JSONL"
-                              IsChecked="{Binding ExportThemesJsonl}"
-                              IsEnabled="{Binding CanExportExtensions}"
-                              Style="{StaticResource CredentialDependentCheckBoxStyle}"/>
-                    <CheckBox Content="Public plugin/theme slugs only (manual install required)"
-                              IsChecked="{Binding ExportPublicExtensionFootprints}"
-                              IsEnabled="{Binding CanExportPublicExtensionFootprints}"
-                              Visibility="{Binding CanExportPublicExtensionFootprints, Converter={StaticResource BoolToVisibility}}"
-                              Margin="0,0,16,0"/>
-                </WrapPanel>
-                <StackPanel Margin="0,8,0,0"
-                            Visibility="{Binding ExportPublicExtensionFootprints, Converter={StaticResource BoolToVisibility}}">
-                    <TextBlock Text="Additional pages to scan (one per line or comma-separated):"
-                               TextWrapping="Wrap"
-                               Margin="0,0,0,4"/>
-                    <TextBox Text="{Binding AdditionalPublicExtensionPages, UpdateSourceTrigger=PropertyChanged}"
-                             AcceptsReturn="True"
-                             TextWrapping="Wrap"
-                             MinWidth="320"
-                             MinHeight="60"
-                             VerticalScrollBarVisibility="Auto"/>
-                    <Grid Margin="0,8,0,0">
+                    <Grid Margin="8">
                         <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="Auto"/>
-                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
                         </Grid.ColumnDefinitions>
                         <Grid.RowDefinitions>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
                         </Grid.RowDefinitions>
-                        <TextBlock Text="Max pages to crawl (0 or blank = unlimited):"
+                        <TextBlock Text="Admin username:"
                                    Margin="0,0,8,4"
-                                   VerticalAlignment="Center"/>
+                                   VerticalAlignment="Center" />
                         <TextBox Grid.Column="1"
-                                 Text="{Binding PublicExtensionMaxPages, UpdateSourceTrigger=PropertyChanged}"
-                                 MinWidth="120"/>
+                                 Text="{Binding WordPressUsername, UpdateSourceTrigger=PropertyChanged}" />
                         <TextBlock Grid.Row="1"
-                                   Text="Max bytes to download (0 or blank = unlimited):"
+                                   Text="Application password:"
                                    Margin="0,8,8,0"
-                                   VerticalAlignment="Center"/>
+                                   VerticalAlignment="Center" />
                         <TextBox Grid.Row="1"
                                  Grid.Column="1"
-                                 Text="{Binding PublicExtensionMaxBytes, UpdateSourceTrigger=PropertyChanged}"
-                                 MinWidth="120"
-                                 ToolTip="Enter total byte ceiling for the public asset crawl. Example: 3145728 (~3 MB)."/>
+                                 Text="{Binding WordPressApplicationPassword, UpdateSourceTrigger=PropertyChanged}" />
+                        <TextBlock Grid.Row="2"
+                                   Grid.ColumnSpan="2"
+                                   Text="Plugins, themes, and configuration exports require a WordPress application password."
+                                   TextWrapping="Wrap"
+                                   Margin="0,8,0,0" />
                     </Grid>
-                </StackPanel>
-                <CheckBox Content="Export public design snapshot (homepage HTML + inline CSS + fonts)"
-                          IsChecked="{Binding ExportPublicDesignSnapshot}"
-                          IsEnabled="{Binding CanExportPublicDesignSnapshot}"
-                          Visibility="{Binding IsWooCommerce, Converter={StaticResource BoolToVisibility}}"
-                          Margin="0,8,0,0"/>
-                <StackPanel Margin="0,4,0,0"
-                            Visibility="{Binding ExportPublicDesignSnapshot, Converter={StaticResource BoolToVisibility}}">
-                    <TextBlock Text="Additional design pages to capture (one per line or comma-separated):"
-                               TextWrapping="Wrap"
-                               Margin="0,0,0,4"/>
-                    <TextBox Text="{Binding AdditionalDesignSnapshotPages, UpdateSourceTrigger=PropertyChanged}"
-                             AcceptsReturn="True"
-                             TextWrapping="Wrap"
-                             MinWidth="320"
-                             MinHeight="60"
-                             VerticalScrollBarVisibility="Auto"/>
-                </StackPanel>
-                <CheckBox Content="Capture public design screenshots (PNG breakpoints)"
-                          IsChecked="{Binding ExportPublicDesignScreenshots}"
-                          IsEnabled="{Binding CanExportPublicDesignScreenshots}"
-                          Visibility="{Binding IsWooCommerce, Converter={StaticResource BoolToVisibility}}"
-                          Margin="0,8,0,0"/>
-                <StackPanel Margin="0,4,0,0"
-                            Visibility="{Binding ExportPublicDesignScreenshots, Converter={StaticResource BoolToVisibility}}">
-                    <TextBlock Text="Design screenshot breakpoints (label:widthxheight; separate entries with semicolons):"
-                               TextWrapping="Wrap"
-                               Margin="0,0,0,4"/>
-                    <TextBox Text="{Binding DesignScreenshotBreakpointsText, UpdateSourceTrigger=PropertyChanged}"
-                             MinWidth="320"
-                             ToolTip="Leave blank to use defaults: mobile:375x812; tablet:768x1024; desktop:1280x720"/>
-                    <TextBlock Text="Leave blank to capture mobile, tablet, and desktop breakpoints by default."
-                               TextWrapping="Wrap"
-                               Margin="0,4,0,0"
-                               Foreground="Gray"/>
-                </StackPanel>
-                <CheckBox Content="Capture store configuration (settings, shipping, payments)"
-                          IsChecked="{Binding ExportStoreConfiguration}"
-                          IsEnabled="{Binding CanExportStoreConfiguration}"
-                          Style="{StaticResource CredentialDependentCheckBoxStyle}"
-                          Margin="0,8,0,0"
-                          Visibility="{Binding IsWooCommerce, Converter={StaticResource BoolToVisibility}}"/>
-            </StackPanel>
-        </GroupBox>
+                </GroupBox>
 
-        <!-- Provisioning -->
-        <GroupBox Grid.Row="5" Grid.ColumnSpan="3" Header="Provisioning (WooCommerce target)" Margin="0,12,0,8">
-            <StackPanel Margin="8">
-                <TextBlock Text="Target base URL:" Margin="0,0,0,4"/>
-                <TextBox Text="{Binding TargetStoreUrl, UpdateSourceTrigger=PropertyChanged}" MinWidth="320"/>
-                <TextBlock Text="Consumer key:" Margin="0,8,0,4"/>
-                <TextBox Text="{Binding TargetConsumerKey, UpdateSourceTrigger=PropertyChanged}"/>
-                <TextBlock Text="Consumer secret:" Margin="0,8,0,4"/>
-                <TextBox Text="{Binding TargetConsumerSecret, UpdateSourceTrigger=PropertyChanged}"/>
-                <TextBlock Text="Run an export, then configure the target WooCommerce REST credentials and click Replicate store." TextWrapping="Wrap" Margin="0,12,0,8"/>
-                <CheckBox Content="Apply captured store configuration before provisioning"
-                          IsChecked="{Binding ImportStoreConfiguration}"
-                          Margin="0,0,0,4"/>
-                <TextBlock Text="Requires an export with store configuration enabled and WordPress credentials."
-                           TextWrapping="Wrap"
-                           Margin="0,0,0,8"/>
-                <TextBlock Text="{Binding CanReplicate, StringFormat=Export ready: {0}}" Margin="0,0,0,4"/>
-                <Button Content="Replicate store" HorizontalAlignment="Right" Padding="16,6" Command="{Binding ReplicateCommand}" />
-            </StackPanel>
-        </GroupBox>
+                <!-- Shopify credentials -->
+                <GroupBox Grid.Row="3"
+                          Grid.ColumnSpan="3"
+                          Header="Shopify Credentials"
+                          Margin="0,12,0,0"
+                          Visibility="{Binding IsShopify, Converter={StaticResource BoolToVisibility}}">
+                    <Grid Margin="8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+                        <TextBlock Text="Admin access token:"
+                                   Margin="0,0,8,4"
+                                   VerticalAlignment="Center" />
+                        <TextBox Grid.Column="1"
+                                 Text="{Binding ShopifyAdminAccessToken, UpdateSourceTrigger=PropertyChanged}" />
+                        <TextBlock Grid.Row="1"
+                                   Text="Storefront access token:"
+                                   Margin="0,8,8,4"
+                                   VerticalAlignment="Center" />
+                        <TextBox Grid.Row="1"
+                                 Grid.Column="1"
+                                 Text="{Binding ShopifyStorefrontAccessToken, UpdateSourceTrigger=PropertyChanged}" />
+                        <TextBlock Grid.Row="2"
+                                   Text="API key:"
+                                   Margin="0,8,8,4"
+                                   VerticalAlignment="Center" />
+                        <TextBox Grid.Row="2"
+                                 Grid.Column="1"
+                                 Text="{Binding ShopifyApiKey, UpdateSourceTrigger=PropertyChanged}" />
+                        <TextBlock Grid.Row="3"
+                                   Text="API secret:"
+                                   Margin="0,8,8,0"
+                                   VerticalAlignment="Center" />
+                        <TextBox Grid.Row="3"
+                                 Grid.Column="1"
+                                 Text="{Binding ShopifyApiSecret, UpdateSourceTrigger=PropertyChanged}" />
+                    </Grid>
+                </GroupBox>
 
-        <!-- Filters -->
-        <GroupBox Grid.Row="6" Grid.ColumnSpan="3" Header="Filters (optional)">
-            <StackPanel Margin="8">
-                <Button Content="Export collections/categories"
-                        Command="{Binding ExportCollectionsCommand}"
-                        HorizontalAlignment="Right"
-                        Margin="0,0,0,8"
-                        Padding="12,4" />
-                <Grid>
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*"/>
-                        <ColumnDefinition Width="*"/>
-                    </Grid.ColumnDefinitions>
-                    <StackPanel Grid.Column="0">
-                        <TextBlock Text="Categories" FontWeight="Bold" />
-                        <StackPanel Orientation="Horizontal" Margin="0,4,0,4">
-                            <Button Content="Select all" Command="{Binding SelectAllCategoriesCommand}" Margin="0,0,8,0" />
-                            <Button Content="Clear" Command="{Binding ClearCategoriesCommand}" />
+                <!-- Exports -->
+                <GroupBox Grid.Row="4" Grid.ColumnSpan="3" Header="Exports" Margin="0,12,0,8">
+                    <StackPanel Margin="8">
+                        <WrapPanel>
+                            <CheckBox Content="Generic CSV" IsChecked="{Binding ExportCsv}" Margin="0,0,16,0" />
+                            <CheckBox Content="Shopify CSV (variants)" IsChecked="{Binding ExportShopify}" Margin="0,0,16,0" />
+                            <CheckBox Content="WooCommerce CSV" IsChecked="{Binding ExportWoo}" Margin="0,0,16,0" />
+                            <CheckBox Content="Reviews CSV (Store API)" IsChecked="{Binding ExportReviews}" Margin="0,0,16,0" />
+                            <CheckBox Content="XLSX" IsChecked="{Binding ExportXlsx}" Margin="0,0,16,0" />
+                            <CheckBox Content="JSONL" IsChecked="{Binding ExportJsonl}" />
+                        </WrapPanel>
+                        <WrapPanel Margin="0,8,0,0"
+                                   Visibility="{Binding IsWooCommerce, Converter={StaticResource BoolToVisibility}}">
+                            <CheckBox Content="Plugins CSV"
+                                      IsChecked="{Binding ExportPluginsCsv}"
+                                      IsEnabled="{Binding CanExportExtensions}"
+                                      Margin="0,0,16,0"
+                                      Style="{StaticResource CredentialDependentCheckBoxStyle}" />
+                            <CheckBox Content="Plugins JSONL"
+                                      IsChecked="{Binding ExportPluginsJsonl}"
+                                      IsEnabled="{Binding CanExportExtensions}"
+                                      Margin="0,0,16,0"
+                                      Style="{StaticResource CredentialDependentCheckBoxStyle}" />
+                            <CheckBox Content="Themes CSV"
+                                      IsChecked="{Binding ExportThemesCsv}"
+                                      IsEnabled="{Binding CanExportExtensions}"
+                                      Margin="0,0,16,0"
+                                      Style="{StaticResource CredentialDependentCheckBoxStyle}" />
+                            <CheckBox Content="Themes JSONL"
+                                      IsChecked="{Binding ExportThemesJsonl}"
+                                      IsEnabled="{Binding CanExportExtensions}"
+                                      Style="{StaticResource CredentialDependentCheckBoxStyle}" />
+                            <CheckBox Content="Public plugin/theme slugs only (manual install required)"
+                                      IsChecked="{Binding ExportPublicExtensionFootprints}"
+                                      IsEnabled="{Binding CanExportPublicExtensionFootprints}"
+                                      Visibility="{Binding CanExportPublicExtensionFootprints, Converter={StaticResource BoolToVisibility}}"
+                                      Margin="0,0,16,0" />
+                        </WrapPanel>
+                        <StackPanel Margin="0,8,0,0"
+                                    Visibility="{Binding ExportPublicExtensionFootprints, Converter={StaticResource BoolToVisibility}}">
+                            <TextBlock Text="Additional pages to scan (one per line or comma-separated):"
+                                       TextWrapping="Wrap"
+                                       Margin="0,0,0,4" />
+                            <TextBox Text="{Binding AdditionalPublicExtensionPages, UpdateSourceTrigger=PropertyChanged}"
+                                     AcceptsReturn="True"
+                                     TextWrapping="Wrap"
+                                     MinWidth="320"
+                                     MinHeight="60"
+                                     VerticalScrollBarVisibility="Auto" />
+                            <Grid Margin="0,8,0,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
+                                <TextBlock Text="Max pages to crawl (0 or blank = unlimited):"
+                                           Margin="0,0,8,4"
+                                           VerticalAlignment="Center" />
+                                <TextBox Grid.Column="1"
+                                         Text="{Binding PublicExtensionMaxPages, UpdateSourceTrigger=PropertyChanged}"
+                                         MinWidth="120" />
+                                <TextBlock Grid.Row="1"
+                                           Text="Max bytes to download (0 or blank = unlimited):"
+                                           Margin="0,8,8,0"
+                                           VerticalAlignment="Center" />
+                                <TextBox Grid.Row="1"
+                                         Grid.Column="1"
+                                         Text="{Binding PublicExtensionMaxBytes, UpdateSourceTrigger=PropertyChanged}"
+                                         MinWidth="120"
+                                         ToolTip="Enter total byte ceiling for the public asset crawl. Example: 3145728 (~3 MB)." />
+                            </Grid>
                         </StackPanel>
-                        <ScrollViewer Height="140" VerticalScrollBarVisibility="Auto">
-                            <ItemsControl ItemsSource="{Binding CategoryChoices}">
-                                <ItemsControl.ItemTemplate>
-                                    <DataTemplate>
-                                        <CheckBox Content="{Binding Name}" IsChecked="{Binding IsSelected, Mode=TwoWay}" Margin="0,2"/>
-                                    </DataTemplate>
-                                </ItemsControl.ItemTemplate>
-                            </ItemsControl>
-                        </ScrollViewer>
-                    </StackPanel>
-                    <StackPanel Grid.Column="1">
-                        <TextBlock Text="Tags" FontWeight="Bold" />
-                        <StackPanel Orientation="Horizontal" Margin="0,4,0,4">
-                            <Button Content="Select all" Command="{Binding SelectAllTagsCommand}" Margin="0,0,8,0" />
-                            <Button Content="Clear" Command="{Binding ClearTagsCommand}" />
+                        <CheckBox Content="Export public design snapshot (homepage HTML + inline CSS + fonts)"
+                                  IsChecked="{Binding ExportPublicDesignSnapshot}"
+                                  IsEnabled="{Binding CanExportPublicDesignSnapshot}"
+                                  Visibility="{Binding IsWooCommerce, Converter={StaticResource BoolToVisibility}}"
+                                  Margin="0,8,0,0" />
+                        <StackPanel Margin="0,4,0,0"
+                                    Visibility="{Binding ExportPublicDesignSnapshot, Converter={StaticResource BoolToVisibility}}">
+                            <TextBlock Text="Additional design pages to capture (one per line or comma-separated):"
+                                       TextWrapping="Wrap"
+                                       Margin="0,0,0,4" />
+                            <TextBox Text="{Binding AdditionalDesignSnapshotPages, UpdateSourceTrigger=PropertyChanged}"
+                                     AcceptsReturn="True"
+                                     TextWrapping="Wrap"
+                                     MinWidth="320"
+                                     MinHeight="60"
+                                     VerticalScrollBarVisibility="Auto" />
                         </StackPanel>
-                        <ScrollViewer Height="140" VerticalScrollBarVisibility="Auto">
-                            <ItemsControl ItemsSource="{Binding TagChoices}">
-                                <ItemsControl.ItemTemplate>
-                                    <DataTemplate>
-                                        <CheckBox Content="{Binding Name}" IsChecked="{Binding IsSelected, Mode=TwoWay}" Margin="0,2"/>
-                                    </DataTemplate>
-                                </ItemsControl.ItemTemplate>
-                            </ItemsControl>
-                        </ScrollViewer>
+                        <CheckBox Content="Capture public design screenshots (PNG breakpoints)"
+                                  IsChecked="{Binding ExportPublicDesignScreenshots}"
+                                  IsEnabled="{Binding CanExportPublicDesignScreenshots}"
+                                  Visibility="{Binding IsWooCommerce, Converter={StaticResource BoolToVisibility}}"
+                                  Margin="0,8,0,0" />
+                        <StackPanel Margin="0,4,0,0"
+                                    Visibility="{Binding ExportPublicDesignScreenshots, Converter={StaticResource BoolToVisibility}}">
+                            <TextBlock Text="Design screenshot breakpoints (label:widthxheight; separate entries with semicolons):"
+                                       TextWrapping="Wrap"
+                                       Margin="0,0,0,4" />
+                            <TextBox Text="{Binding DesignScreenshotBreakpointsText, UpdateSourceTrigger=PropertyChanged}"
+                                     MinWidth="320"
+                                     ToolTip="Leave blank to use defaults: mobile:375x812; tablet:768x1024; desktop:1280x720" />
+                            <TextBlock Text="Leave blank to capture mobile, tablet, and desktop breakpoints by default."
+                                       TextWrapping="Wrap"
+                                       Margin="0,4,0,0"
+                                       Foreground="Gray" />
+                        </StackPanel>
+                        <CheckBox Content="Capture store configuration (settings, shipping, payments)"
+                                  IsChecked="{Binding ExportStoreConfiguration}"
+                                  IsEnabled="{Binding CanExportStoreConfiguration}"
+                                  Style="{StaticResource CredentialDependentCheckBoxStyle}"
+                                  Margin="0,8,0,0"
+                                  Visibility="{Binding IsWooCommerce, Converter={StaticResource BoolToVisibility}}" />
                     </StackPanel>
-                </Grid>
-            </StackPanel>
-        </GroupBox>
+                </GroupBox>
+
+                <!-- Provisioning -->
+                <GroupBox Grid.Row="5" Grid.ColumnSpan="3" Header="Provisioning (WooCommerce target)" Margin="0,12,0,8">
+                    <StackPanel Margin="8">
+                        <TextBlock Text="Target base URL:" Margin="0,0,0,4" />
+                        <TextBox Text="{Binding TargetStoreUrl, UpdateSourceTrigger=PropertyChanged}" MinWidth="320" />
+                        <TextBlock Text="Consumer key:" Margin="0,8,0,4" />
+                        <TextBox Text="{Binding TargetConsumerKey, UpdateSourceTrigger=PropertyChanged}" />
+                        <TextBlock Text="Consumer secret:" Margin="0,8,0,4" />
+                        <TextBox Text="{Binding TargetConsumerSecret, UpdateSourceTrigger=PropertyChanged}" />
+                        <TextBlock Text="Run an export, then configure the target WooCommerce REST credentials and click Replicate store."
+                                   TextWrapping="Wrap"
+                                   Margin="0,12,0,8" />
+                        <CheckBox Content="Apply captured store configuration before provisioning"
+                                  IsChecked="{Binding ImportStoreConfiguration}"
+                                  Margin="0,0,0,4" />
+                        <TextBlock Text="Requires an export with store configuration enabled and WordPress credentials."
+                                   TextWrapping="Wrap"
+                                   Margin="0,0,0,8" />
+                        <TextBlock Text="{Binding CanReplicate, StringFormat=Export ready: {0}}" Margin="0,0,0,4" />
+                        <Button Content="Replicate store"
+                                HorizontalAlignment="Right"
+                                Padding="16,6"
+                                Command="{Binding ReplicateCommand}" />
+                    </StackPanel>
+                </GroupBox>
+
+                <!-- Filters -->
+                <GroupBox Grid.Row="6" Grid.ColumnSpan="3" Header="Filters (optional)">
+                    <StackPanel Margin="8">
+                        <Button Content="Export collections/categories"
+                                Command="{Binding ExportCollectionsCommand}"
+                                HorizontalAlignment="Right"
+                                Margin="0,0,0,8"
+                                Padding="12,4" />
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Grid.Column="0">
+                                <TextBlock Text="Categories" FontWeight="Bold" />
+                                <StackPanel Orientation="Horizontal" Margin="0,4,0,4">
+                                    <Button Content="Select all" Command="{Binding SelectAllCategoriesCommand}" Margin="0,0,8,0" />
+                                    <Button Content="Clear" Command="{Binding ClearCategoriesCommand}" />
+                                </StackPanel>
+                                <ScrollViewer Height="140" VerticalScrollBarVisibility="Auto">
+                                    <ItemsControl ItemsSource="{Binding CategoryChoices}">
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <CheckBox Content="{Binding Name}"
+                                                          IsChecked="{Binding IsSelected, Mode=TwoWay}"
+                                                          Margin="0,2" />
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                </ScrollViewer>
+                            </StackPanel>
+                            <StackPanel Grid.Column="1">
+                                <TextBlock Text="Tags" FontWeight="Bold" />
+                                <StackPanel Orientation="Horizontal" Margin="0,4,0,4">
+                                    <Button Content="Select all" Command="{Binding SelectAllTagsCommand}" Margin="0,0,8,0" />
+                                    <Button Content="Clear" Command="{Binding ClearTagsCommand}" />
+                                </StackPanel>
+                                <ScrollViewer Height="140" VerticalScrollBarVisibility="Auto">
+                                    <ItemsControl ItemsSource="{Binding TagChoices}">
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <CheckBox Content="{Binding Name}"
+                                                          IsChecked="{Binding IsSelected, Mode=TwoWay}"
+                                                          Margin="0,2" />
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                </ScrollViewer>
+                            </StackPanel>
+                        </Grid>
+                    </StackPanel>
+                </GroupBox>
+            </Grid>
+        </ScrollViewer>
 
         <Grid Grid.Row="1">
             <Grid.RowDefinitions>
-                <RowDefinition Height="Auto"/>
-                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
             </Grid.RowDefinitions>
 
             <!-- Log -->
-            <GroupBox Grid.Row="0" Header="Log" Margin="0,12,0,0">
-                <ListBox ItemsSource="{Binding Logs}" />
+            <GroupBox Grid.Row="0" Header="Log" Margin="0,0,0,8">
+                <ListBox ItemsSource="{Binding Logs}" MinHeight="120" />
             </GroupBox>
 
             <!-- Status -->
-            <StatusBar Grid.Row="1" Margin="0,8,0,0">
+            <StatusBar Grid.Row="1">
                 <StatusBarItem Content="{Binding Path=Logs.Count, StringFormat=Messages: {0}}" />
                 <StatusBarItem>
                     <TextBlock Text="{Binding IsRunning, StringFormat=Running: {0}}" />
