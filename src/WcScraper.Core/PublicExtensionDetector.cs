@@ -27,19 +27,19 @@ public sealed class PublicExtensionDetector : IDisposable
         RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     private static readonly Regex LinkRelRegex = new(
-        @"rel\s*=\s*(['\"])(?<value>.*?)\1",
+        @"rel\s*=\s*(['""])(?<value>.*?)\1",
         RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.Singleline);
 
     private static readonly Regex LinkAsRegex = new(
-        @"as\s*=\s*(['\"])(?<value>.*?)\1",
+        @"as\s*=\s*(['""])(?<value>.*?)\1",
         RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.Singleline);
 
     private static readonly Regex ScriptSrcRegex = new(
-        @"<script\b[^>]*src\s*=\s*(['\"]) (?<url>.*?)\1",
+        @"<script\b[^>]*src\s*=\s*(['""])(?<url>.*?)\1",
         RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.Singleline | RegexOptions.IgnorePatternWhitespace);
 
     private static readonly Regex HrefRegex = new(
-        @"href\s*=\s*(['\"])(?<url>.*?)\1",
+        @"href\s*=\s*(['""])(?<url>.*?)\1",
         RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.Singleline);
 
     private readonly HttpClient _httpClient;
@@ -1073,4 +1073,3 @@ public sealed record PublicExtensionDetectionSummary(
     bool ByteLimitReached,
     string? WordPressVersion,
     string? WooCommerceVersion);
-}
