@@ -97,6 +97,12 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private bool _isLogSummaryBusy;
     private LogTriageResult? _latestLogSummary;
     private string _latestLogSummaryOverview = string.Empty;
+    private string _manualRunGoals = string.Empty;
+    private string _latestRunGoalsSnapshot = string.Empty;
+    private string _latestRunSnapshotJson = string.Empty;
+    private string _latestRunAiNarrative = string.Empty;
+    private string? _latestRunAiBriefPath;
+    private bool _isAssistantPanelExpanded;
 
     public MainViewModel(IDialogService dialogs)
         : this(dialogs, new WooScraper(), new ShopifyScraper(), new HttpClient())
@@ -1116,6 +1122,82 @@ public sealed class MainViewModel : INotifyPropertyChanged
         }
     }
 
+    public string ManualRunGoals
+    {
+        get => _manualRunGoals;
+        set
+        {
+            var newValue = value ?? string.Empty;
+            if (_manualRunGoals == newValue)
+            {
+                return;
+            }
+
+            _manualRunGoals = newValue;
+            OnPropertyChanged();
+        }
+    }
+
+    public string LatestRunSnapshotJson
+    {
+        get => _latestRunSnapshotJson;
+        private set
+        {
+            if (_latestRunSnapshotJson == value)
+            {
+                return;
+            }
+
+            _latestRunSnapshotJson = value;
+            OnPropertyChanged();
+        }
+    }
+
+    public string LatestRunAiNarrative
+    {
+        get => _latestRunAiNarrative;
+        private set
+        {
+            if (_latestRunAiNarrative == value)
+            {
+                return;
+            }
+
+            _latestRunAiNarrative = value;
+            OnPropertyChanged();
+        }
+    }
+
+    public string? LatestRunAiBriefPath
+    {
+        get => _latestRunAiBriefPath;
+        private set
+        {
+            if (_latestRunAiBriefPath == value)
+            {
+                return;
+            }
+
+            _latestRunAiBriefPath = value;
+            OnPropertyChanged();
+        }
+    }
+
+    public bool IsAssistantPanelExpanded
+    {
+        get => _isAssistantPanelExpanded;
+        set
+        {
+            if (_isAssistantPanelExpanded == value)
+            {
+                return;
+            }
+
+            _isAssistantPanelExpanded = value;
+            OnPropertyChanged();
+        }
+    }
+
     public string? LatestLogSummaryStatus => BuildLogSummaryStatus(LatestLogSummary);
 
     public bool IsLogSummaryBusy
@@ -1796,6 +1878,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
             return;
         }
 
+        var runGoals = ManualRunGoals?.Trim();
+
         var retrySettings = GetRetrySettings();
         var retryPolicy = new HttpRetryPolicy(retrySettings.Attempts, retrySettings.BaseDelay, retrySettings.MaxDelay);
         _wooScraper.HttpPolicy = retryPolicy;
@@ -1805,6 +1889,13 @@ public sealed class MainViewModel : INotifyPropertyChanged
         try
         {
             IsRunning = true;
+            ExecuteOnUiThread(() =>
+            {
+                _latestRunGoalsSnapshot = runGoals ?? string.Empty;
+                LatestRunSnapshotJson = string.Empty;
+                LatestRunAiNarrative = string.Empty;
+                LatestRunAiBriefPath = null;
+            });
             var baseOutputFolder = ResolveBaseOutputFolder();
             Directory.CreateDirectory(baseOutputFolder);
             IProgress<string> logger = new Progress<string>(Append);
@@ -3029,6 +3120,15 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 retrySettings.BaseDelay,
                 retrySettings.MaxDelay);
 
+            var runSnapshotJson = ManualMigrationRunSummaryFactory.CreateSnapshotJson(reportContext);
+            ExecuteOnUiThread(() =>
+            {
+                _latestRunGoalsSnapshot = runGoals ?? string.Empty;
+                LatestRunSnapshotJson = runSnapshotJson;
+                LatestRunAiNarrative = string.Empty;
+                LatestRunAiBriefPath = null;
+            });
+
             var reportBuilder = new ManualMigrationReportBuilder();
             var report = reportBuilder.Build(reportContext);
             var reportPath = Path.Combine(storeOutputFolder, "manual-migration-report.md");
@@ -3042,9 +3142,53 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 await TryAnnotateManualReportAsync(reportPath, manualBundleArchivePath);
             }
 
+            string? aiBriefPath = null;
+            if (HasChatConfiguration)
+            {
+                try
+                {
+                    var session = new ChatSessionSettings(ChatApiEndpoint, ChatApiKey, ChatModel, ChatSystemPrompt);
+                    var aiNarrative = await _chatAssistantService.SummarizeRunAsync(session, runSnapshotJson, runGoals, CancellationToken.None);
+                    if (!string.IsNullOrWhiteSpace(aiNarrative))
+                    {
+                        var trimmedNarrative = aiNarrative.Trim();
+                        aiBriefPath = Path.Combine(storeOutputFolder, "manual-migration-report.ai.md");
+                        await File.WriteAllTextAsync(aiBriefPath, trimmedNarrative, Encoding.UTF8);
+                        Append($"AI migration brief: {aiBriefPath}");
+                        var capturedPath = aiBriefPath;
+                        ExecuteOnUiThread(() =>
+                        {
+                            LatestRunAiNarrative = trimmedNarrative;
+                            LatestRunAiBriefPath = capturedPath;
+                        });
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Append($"AI migration brief failed: {ex.Message}");
+                    ExecuteOnUiThread(() =>
+                    {
+                        LatestRunAiNarrative = string.Empty;
+                        LatestRunAiBriefPath = null;
+                    });
+                }
+            }
+
             SetProvisioningContext(prods, variations, configuration, pluginBundles, themeBundles, customers, coupons, orders, subscriptions, siteContent, categoryTerms);
 
             Append("All done.");
+
+            var completionInfo = new ManualRunCompletionInfo
+            {
+                StoreIdentifier = storeId,
+                StoreUrl = targetUrl,
+                ReportPath = reportPath,
+                ManualBundlePath = manualBundleArchivePath,
+                AiBriefPath = aiBriefPath,
+                AskFollowUp = string.IsNullOrWhiteSpace(runSnapshotJson) ? null : LaunchRunFollowUpPanel
+            };
+
+            ExecuteOnUiThread(() => _dialogs.ShowRunCompletionDialog(completionInfo));
         }
         catch (Exception ex)
         {
@@ -3914,6 +4058,73 @@ public sealed class MainViewModel : INotifyPropertyChanged
         {
             // Best-effort annotation; ignore failures.
         }
+    }
+
+    private void LaunchRunFollowUpPanel()
+    {
+        var snapshot = LatestRunSnapshotJson;
+        var narrative = LatestRunAiNarrative;
+        if (string.IsNullOrWhiteSpace(snapshot) && string.IsNullOrWhiteSpace(narrative))
+        {
+            ExecuteOnUiThread(() =>
+            {
+                IsAssistantPanelExpanded = true;
+                ChatStatusMessage = "No run summary is available yet. Complete a run to ask follow-up questions.";
+            });
+            return;
+        }
+
+        PrepareAssistantForRunFollowUp(snapshot, narrative, _latestRunGoalsSnapshot, LatestRunAiBriefPath);
+    }
+
+    private void PrepareAssistantForRunFollowUp(string snapshotJson, string? narrative, string? goals, string? aiBriefPath)
+    {
+        ExecuteOnUiThread(() =>
+        {
+            IsAssistantPanelExpanded = true;
+            ChatMessages.Clear();
+
+            var contextBuilder = new StringBuilder();
+            if (!string.IsNullOrWhiteSpace(goals))
+            {
+                contextBuilder.AppendLine("Operator goals:");
+                contextBuilder.AppendLine(goals!.Trim());
+            }
+
+            if (!string.IsNullOrWhiteSpace(snapshotJson))
+            {
+                if (contextBuilder.Length > 0)
+                {
+                    contextBuilder.AppendLine();
+                }
+
+                contextBuilder.AppendLine("Run snapshot (JSON):");
+                contextBuilder.AppendLine(snapshotJson);
+            }
+
+            var contextText = contextBuilder.ToString().Trim();
+            if (contextText.Length > 0)
+            {
+                ChatMessages.Add(new ChatMessage(ChatMessageRole.System, contextText));
+            }
+
+            if (!string.IsNullOrWhiteSpace(narrative))
+            {
+                var messageBuilder = new StringBuilder(narrative.Trim());
+                if (!string.IsNullOrWhiteSpace(aiBriefPath))
+                {
+                    messageBuilder.AppendLine();
+                    messageBuilder.AppendLine();
+                    messageBuilder.Append("AI brief saved at: ");
+                    messageBuilder.Append(aiBriefPath);
+                }
+
+                ChatMessages.Add(new ChatMessage(ChatMessageRole.Assistant, messageBuilder.ToString()));
+            }
+
+            ChatInput = string.Empty;
+            ChatStatusMessage = "Assistant loaded with the latest run summary. Ask a follow-up question.";
+        });
     }
 
     private static void CopyDirectory(string sourceDirectory, string destinationDirectory)

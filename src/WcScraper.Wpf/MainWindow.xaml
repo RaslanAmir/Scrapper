@@ -310,7 +310,11 @@
             </StackPanel>
         </GroupBox>
 
-        <Expander Grid.Row="7" Grid.ColumnSpan="3" Header="AI Assistant" Margin="0,12,0,8">
+        <Expander Grid.Row="7"
+                  Grid.ColumnSpan="3"
+                  Header="AI Assistant"
+                  Margin="0,12,0,8"
+                  IsExpanded="{Binding IsAssistantPanelExpanded, Mode=TwoWay}">
             <Border Padding="8">
                 <Grid>
                     <Grid.ColumnDefinitions>
@@ -335,6 +339,15 @@
                                  AcceptsReturn="True"
                                  TextWrapping="Wrap"
                                  Height="120"
+                                 VerticalScrollBarVisibility="Auto"
+                                 Margin="0,4,0,0"/>
+                        <TextBlock Text="Run goals for AI brief (optional):"
+                                   Margin="0,12,0,0"
+                                   FontWeight="SemiBold"/>
+                        <TextBox Text="{Binding ManualRunGoals, UpdateSourceTrigger=PropertyChanged}"
+                                 AcceptsReturn="True"
+                                 TextWrapping="Wrap"
+                                 Height="80"
                                  VerticalScrollBarVisibility="Auto"
                                  Margin="0,4,0,0"/>
                     </StackPanel>

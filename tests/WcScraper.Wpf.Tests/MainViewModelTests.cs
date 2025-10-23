@@ -894,6 +894,11 @@ public class MainViewModelTests
         {
             // no-op for tests
         }
+
+        public void ShowRunCompletionDialog(ManualRunCompletionInfo info)
+        {
+            // no-op for tests
+        }
     }
 
     private sealed class StubHttpMessageHandler : HttpMessageHandler

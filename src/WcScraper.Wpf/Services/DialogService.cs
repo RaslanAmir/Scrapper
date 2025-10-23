@@ -10,6 +10,7 @@ public interface IDialogService
 {
     string? BrowseForFolder(string? initial = null);
     void ShowLogWindow(WcScraper.Wpf.ViewModels.MainViewModel viewModel);
+    void ShowRunCompletionDialog(ManualRunCompletionInfo info);
 }
 
 public sealed class DialogService : IDialogService
@@ -51,5 +52,18 @@ public sealed class DialogService : IDialogService
     {
         var window = new LogWindow();
         return window;
+    }
+
+    public void ShowRunCompletionDialog(ManualRunCompletionInfo info)
+    {
+        ArgumentNullException.ThrowIfNull(info);
+
+        var window = new ReportCompletionWindow(info);
+        if (System.Windows.Application.Current?.MainWindow is not null && window.Owner is null)
+        {
+            window.Owner = System.Windows.Application.Current.MainWindow;
+        }
+
+        window.ShowDialog();
     }
 }

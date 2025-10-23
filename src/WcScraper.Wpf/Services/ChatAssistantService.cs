@@ -199,6 +199,89 @@ public sealed class ChatAssistantService
         return new LogTriageResult(DateTimeOffset.UtcNow, parsed.Value.Overview, parsed.Value.Issues);
     }
 
+    public async Task<string?> SummarizeRunAsync(
+        ChatSessionSettings settings,
+        string runSnapshotJson,
+        string? operatorGoals,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+
+        if (string.IsNullOrWhiteSpace(runSnapshotJson))
+        {
+            return null;
+        }
+
+        if (string.IsNullOrWhiteSpace(settings.ApiKey))
+        {
+            throw new ArgumentException("An API key is required.", nameof(settings));
+        }
+
+        if (string.IsNullOrWhiteSpace(settings.Endpoint))
+        {
+            throw new ArgumentException("An endpoint is required.", nameof(settings));
+        }
+
+        if (!Uri.TryCreate(settings.Endpoint, UriKind.Absolute, out var endpoint))
+        {
+            throw new ArgumentException("The API endpoint must be an absolute URI.", nameof(settings));
+        }
+
+        if (string.IsNullOrWhiteSpace(settings.Model))
+        {
+            throw new ArgumentException("A model or deployment identifier is required.", nameof(settings));
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var client = new OpenAIClient(endpoint, new AzureKeyCredential(settings.ApiKey));
+
+        var options = new ChatCompletionsOptions
+        {
+            DeploymentName = settings.Model,
+            Temperature = 0.4f,
+        };
+
+        var systemPrompt = new StringBuilder();
+        if (!string.IsNullOrWhiteSpace(settings.SystemPrompt))
+        {
+            systemPrompt.AppendLine(settings.SystemPrompt.Trim());
+            systemPrompt.AppendLine();
+        }
+
+        systemPrompt.AppendLine("You are an AI assistant that prepares migration briefs for WooCommerce and Shopify storefront audits.");
+        systemPrompt.AppendLine("Focus on risks, manual work items, and opportunities surfaced by the run.");
+        systemPrompt.AppendLine("Respond in clear Markdown with short sections and actionable recommendations.");
+
+        options.Messages.Add(new Azure.AI.OpenAI.ChatMessage(ChatRole.System, systemPrompt.ToString()));
+
+        var userPrompt = new StringBuilder();
+        userPrompt.AppendLine("Craft a narrative summary of the latest run, highlighting what a human operator should do next.");
+        userPrompt.AppendLine("Cover noteworthy plugins, themes, public extension signals, and design considerations.");
+        userPrompt.AppendLine("Close with specific follow-up actions or questions for the operator.");
+
+        var goals = operatorGoals?.Trim();
+        if (!string.IsNullOrWhiteSpace(goals))
+        {
+            userPrompt.AppendLine();
+            userPrompt.AppendLine("Operator goals:");
+            userPrompt.AppendLine(goals);
+        }
+
+        userPrompt.AppendLine();
+        userPrompt.AppendLine("Run snapshot (JSON):");
+        userPrompt.AppendLine("```json");
+        userPrompt.AppendLine(runSnapshotJson.Trim());
+        userPrompt.AppendLine("```");
+
+        options.Messages.Add(new Azure.AI.OpenAI.ChatMessage(ChatRole.User, userPrompt.ToString()));
+
+        var response = await client.GetChatCompletionsAsync(options, cancellationToken).ConfigureAwait(false);
+        var choice = response.Value.Choices.FirstOrDefault();
+        var content = choice?.Message?.Content;
+        return string.IsNullOrWhiteSpace(content) ? null : content.Trim();
+    }
+
     public string BuildContextualPrompt(ChatSessionContext context)
     {
         var builder = new StringBuilder();
