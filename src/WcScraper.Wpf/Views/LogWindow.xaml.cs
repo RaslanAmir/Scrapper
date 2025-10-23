@@ -1,8 +1,8 @@
 using System;
-using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Text;
 using System.Windows;
+using WcScraper.Wpf.ViewModels;
 
 namespace WcScraper.Wpf.Views;
 
@@ -14,15 +14,14 @@ public partial class LogWindow : Window
         Closing += OnClosing;
     }
 
-    public ObservableCollection<string>? Logs
-    {
-        get => DataContext as ObservableCollection<string>;
-        private set => DataContext = value;
-    }
+    private MainViewModel? ViewModel { get; set; }
 
-    public void SetLogs(ObservableCollection<string> logs)
+    private System.Collections.ObjectModel.ObservableCollection<string>? Logs => ViewModel?.Logs;
+
+    public void SetLogs(MainViewModel viewModel)
     {
-        Logs = logs ?? throw new ArgumentNullException(nameof(logs));
+        ViewModel = viewModel ?? throw new ArgumentNullException(nameof(viewModel));
+        DataContext = viewModel;
     }
 
     private void OnCopyAll(object sender, RoutedEventArgs e)

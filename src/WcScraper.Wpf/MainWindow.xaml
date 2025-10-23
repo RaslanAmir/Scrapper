@@ -410,6 +410,9 @@
                 <StatusBarItem>
                     <TextBlock Text="{Binding IsRunning, StringFormat=Running: {0}}" />
                 </StatusBarItem>
+                <StatusBarItem>
+                    <TextBlock Text="{Binding LatestLogSummaryStatus}" TextTrimming="CharacterEllipsis" ToolTip="{Binding LatestLogSummaryOverview}" />
+                </StatusBarItem>
             </StatusBar>
         </Grid>
     </Grid>

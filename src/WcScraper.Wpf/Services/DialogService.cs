@@ -1,7 +1,7 @@
 using System;
-using System.Collections.ObjectModel;
 using System.Windows;
 using Forms = System.Windows.Forms;
+using WcScraper.Wpf.ViewModels;
 using WcScraper.Wpf.Views;
 
 namespace WcScraper.Wpf.Services;
@@ -9,7 +9,7 @@ namespace WcScraper.Wpf.Services;
 public interface IDialogService
 {
     string? BrowseForFolder(string? initial = null);
-    void ShowLogWindow(ObservableCollection<string> logs);
+    void ShowLogWindow(WcScraper.Wpf.ViewModels.MainViewModel viewModel);
 }
 
 public sealed class DialogService : IDialogService
@@ -25,12 +25,12 @@ public sealed class DialogService : IDialogService
         return dlg.ShowDialog() == Forms.DialogResult.OK ? dlg.SelectedPath : null;
     }
 
-    public void ShowLogWindow(ObservableCollection<string> logs)
+    public void ShowLogWindow(MainViewModel viewModel)
     {
-        ArgumentNullException.ThrowIfNull(logs);
+        ArgumentNullException.ThrowIfNull(viewModel);
 
         _logWindow ??= CreateLogWindow();
-        _logWindow.SetLogs(logs);
+        _logWindow.SetLogs(viewModel);
 
         if (!_logWindow.IsVisible)
         {

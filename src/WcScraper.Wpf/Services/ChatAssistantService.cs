@@ -1,7 +1,9 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Text;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using Azure;
@@ -98,6 +100,105 @@ public sealed class ChatAssistantService
         await streaming.CompleteAsync().ConfigureAwait(false);
     }
 
+    public async Task<LogTriageResult?> SummarizeLogsAsync(
+        ChatSessionSettings settings,
+        IReadOnlyList<string> logEntries,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+        ArgumentNullException.ThrowIfNull(logEntries);
+
+        if (logEntries.Count == 0)
+        {
+            return null;
+        }
+
+        if (string.IsNullOrWhiteSpace(settings.ApiKey))
+        {
+            throw new ArgumentException("An API key is required.", nameof(settings));
+        }
+
+        if (string.IsNullOrWhiteSpace(settings.Endpoint))
+        {
+            throw new ArgumentException("An endpoint is required.", nameof(settings));
+        }
+
+        if (!Uri.TryCreate(settings.Endpoint, UriKind.Absolute, out var endpoint))
+        {
+            throw new ArgumentException("The API endpoint must be an absolute URI.", nameof(settings));
+        }
+
+        if (string.IsNullOrWhiteSpace(settings.Model))
+        {
+            throw new ArgumentException("A model or deployment identifier is required.", nameof(settings));
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var client = new OpenAIClient(endpoint, new AzureKeyCredential(settings.ApiKey));
+
+        var snippet = logEntries
+            .Skip(Math.Max(0, logEntries.Count - 80))
+            .Select(entry => entry.TrimEnd())
+            .ToArray();
+
+        var options = new ChatCompletionsOptions
+        {
+            DeploymentName = settings.Model,
+            Temperature = 0.2f,
+        };
+
+        var systemPrompt = new StringBuilder();
+        if (!string.IsNullOrWhiteSpace(settings.SystemPrompt))
+        {
+            systemPrompt.AppendLine(settings.SystemPrompt.Trim());
+            systemPrompt.AppendLine();
+        }
+
+        systemPrompt.AppendLine("You triage diagnostic logs for WC Local Scraper users.");
+        systemPrompt.AppendLine("Highlight real issues, classify them, and suggest practical next steps.");
+        systemPrompt.AppendLine("Respond with concise and actionable guidance.");
+
+        options.Messages.Add(new Azure.AI.OpenAI.ChatMessage(ChatRole.System, systemPrompt.ToString()));
+
+        var logPayload = string.Join(Environment.NewLine, snippet);
+        var userPrompt = new StringBuilder();
+        userPrompt.AppendLine("Analyze the following log excerpt and identify anything the operator should address.");
+        userPrompt.AppendLine();
+        userPrompt.AppendLine("Return a JSON object with this shape:");
+        userPrompt.AppendLine("{");
+        userPrompt.AppendLine("  \"overallSummary\": \"short headline\",");
+        userPrompt.AppendLine("  \"issues\": [");
+        userPrompt.AppendLine("    {\"category\": \"area\", \"severity\": \"info|warning|error|critical\", \"description\": \"what happened\", \"recommendation\": \"what to do\"}");
+        userPrompt.AppendLine("  ]");
+        userPrompt.AppendLine("}");
+        userPrompt.AppendLine();
+        userPrompt.AppendLine("Only include issues that add value. If nothing is wrong, set issues to an empty array and explain that the logs look healthy.");
+        userPrompt.AppendLine();
+        userPrompt.AppendLine("Logs:");
+        userPrompt.AppendLine("```");
+        userPrompt.AppendLine(logPayload);
+        userPrompt.AppendLine("```");
+
+        options.Messages.Add(new Azure.AI.OpenAI.ChatMessage(ChatRole.User, userPrompt.ToString()));
+
+        var response = await client.GetChatCompletionsAsync(options, cancellationToken).ConfigureAwait(false);
+        var choice = response.Value.Choices.FirstOrDefault();
+        var message = choice?.Message?.Content;
+        if (string.IsNullOrWhiteSpace(message))
+        {
+            return null;
+        }
+
+        var parsed = ParseLogTriage(message);
+        if (parsed is null)
+        {
+            return new LogTriageResult(DateTimeOffset.UtcNow, message.Trim(), Array.Empty<LogTriageIssue>());
+        }
+
+        return new LogTriageResult(DateTimeOffset.UtcNow, parsed.Value.Overview, parsed.Value.Issues);
+    }
+
     public string BuildContextualPrompt(ChatSessionContext context)
     {
         var builder = new StringBuilder();
@@ -143,6 +244,104 @@ public sealed class ChatAssistantService
         }
 
         return builder.ToString();
+    }
+
+    private static (string Overview, IReadOnlyList<LogTriageIssue> Issues)? ParseLogTriage(string response)
+    {
+        if (string.IsNullOrWhiteSpace(response))
+        {
+            return null;
+        }
+
+        var jsonText = ExtractJsonPayload(response);
+        if (string.IsNullOrWhiteSpace(jsonText))
+        {
+            return null;
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(jsonText);
+            var root = document.RootElement;
+
+            var overview = root.TryGetProperty("overallSummary", out var summaryElement)
+                ? summaryElement.GetString()
+                : null;
+
+            var issues = new List<LogTriageIssue>();
+            if (root.TryGetProperty("issues", out var issuesElement) && issuesElement.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var issueElement in issuesElement.EnumerateArray())
+                {
+                    var category = issueElement.TryGetProperty("category", out var categoryElement)
+                        ? categoryElement.GetString()
+                        : null;
+                    var severity = issueElement.TryGetProperty("severity", out var severityElement)
+                        ? severityElement.GetString()
+                        : null;
+                    var description = issueElement.TryGetProperty("description", out var descriptionElement)
+                        ? descriptionElement.GetString()
+                        : null;
+                    var recommendation = issueElement.TryGetProperty("recommendation", out var recommendationElement)
+                        ? recommendationElement.GetString()
+                        : null;
+
+                    if (string.IsNullOrWhiteSpace(description) && string.IsNullOrWhiteSpace(recommendation))
+                    {
+                        continue;
+                    }
+
+                    issues.Add(new LogTriageIssue(
+                        string.IsNullOrWhiteSpace(category) ? "General" : category.Trim(),
+                        string.IsNullOrWhiteSpace(severity) ? "info" : severity.Trim(),
+                        string.IsNullOrWhiteSpace(description) ? "No additional details provided." : description.Trim(),
+                        string.IsNullOrWhiteSpace(recommendation) ? "No action recommended." : recommendation.Trim()));
+                }
+            }
+
+            overview = string.IsNullOrWhiteSpace(overview)
+                ? (issues.Count > 0 ? "Issues detected in recent logs." : "Logs appear healthy.")
+                : overview.Trim();
+
+            return (overview, issues);
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    private static string? ExtractJsonPayload(string response)
+    {
+        if (string.IsNullOrWhiteSpace(response))
+        {
+            return null;
+        }
+
+        var trimmed = response.Trim();
+        if (trimmed.StartsWith("```", StringComparison.Ordinal))
+        {
+            var newlineIndex = trimmed.IndexOf('\n');
+            if (newlineIndex >= 0)
+            {
+                trimmed = trimmed[(newlineIndex + 1)..];
+            }
+
+            var fenceIndex = trimmed.LastIndexOf("```", StringComparison.Ordinal);
+            if (fenceIndex >= 0)
+            {
+                trimmed = trimmed[..fenceIndex];
+            }
+        }
+
+        var firstBrace = trimmed.IndexOf('{');
+        var lastBrace = trimmed.LastIndexOf('}');
+        if (firstBrace < 0 || lastBrace < firstBrace)
+        {
+            return null;
+        }
+
+        return trimmed.Substring(firstBrace, lastBrace - firstBrace + 1);
     }
 
     private static ChatRole ToChatRole(ChatMessageRole role)

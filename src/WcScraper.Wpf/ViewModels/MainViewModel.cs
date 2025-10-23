@@ -2,6 +2,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.Collections.Specialized;
 using System.ComponentModel;
 using System.Globalization;
 using System.IO;
@@ -15,6 +16,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Windows.Threading;
 using WcScraper.Core;
 using WcScraper.Core.Exporters;
 using WcScraper.Core.Shopify;
@@ -88,6 +90,13 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private bool _isChatBusy;
     private string _chatInput = string.Empty;
     private string _chatStatusMessage = "Enter API endpoint, model, and API key to enable the assistant.";
+    private readonly TimeSpan _logSummaryDebounce = TimeSpan.FromSeconds(6);
+    private readonly object _logSummarySync = new();
+    private Timer? _logSummaryTimer;
+    private int _pendingLogSummaryCount;
+    private bool _isLogSummaryBusy;
+    private LogTriageResult? _latestLogSummary;
+    private string _latestLogSummaryOverview = string.Empty;
 
     public MainViewModel(IDialogService dialogs)
         : this(dialogs, new WooScraper(), new ShopifyScraper(), new HttpClient())
@@ -142,8 +151,10 @@ public sealed class MainViewModel : INotifyPropertyChanged
         ExportCollectionsCommand = new RelayCommand(OnExportCollections);
         ReplicateCommand = new RelayCommand(async () => await OnReplicateStoreAsync(), () => !IsRunning && CanReplicate);
         OpenLogCommand = new RelayCommand(OnOpenLog);
+        ExplainLogsCommand = new RelayCommand(async () => await OnExplainLatestLogsAsync(), CanExplainLogs);
         SendChatCommand = new RelayCommand(async () => await OnSendChatAsync(), CanSendChat);
         ChatMessages = new ObservableCollection<ChatMessage>();
+        Logs.CollectionChanged += OnLogsCollectionChanged;
         LoadPreferences();
         LoadChatApiKey();
         UpdateChatConfigurationStatus();
@@ -1072,6 +1083,55 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public ObservableCollection<SelectableTerm> TagChoices { get; } = new();
 
     public ObservableCollection<string> Logs { get; } = new();
+    public ObservableCollection<LogTriageIssue> LogSummaryIssues { get; } = new();
+
+    public LogTriageResult? LatestLogSummary
+    {
+        get => _latestLogSummary;
+        private set
+        {
+            if (Equals(_latestLogSummary, value))
+            {
+                return;
+            }
+
+            _latestLogSummary = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(LatestLogSummaryStatus));
+        }
+    }
+
+    public string LatestLogSummaryOverview
+    {
+        get => _latestLogSummaryOverview;
+        private set
+        {
+            if (_latestLogSummaryOverview == value)
+            {
+                return;
+            }
+
+            _latestLogSummaryOverview = value;
+            OnPropertyChanged();
+        }
+    }
+
+    public string? LatestLogSummaryStatus => BuildLogSummaryStatus(LatestLogSummary);
+
+    public bool IsLogSummaryBusy
+    {
+        get => _isLogSummaryBusy;
+        private set
+        {
+            if (_isLogSummaryBusy == value)
+            {
+                return;
+            }
+
+            _isLogSummaryBusy = value;
+            OnPropertyChanged();
+        }
+    }
 
     public RelayCommand BrowseCommand { get; }
     public RelayCommand RunCommand { get; }
@@ -1082,6 +1142,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public RelayCommand ExportCollectionsCommand { get; }
     public RelayCommand ReplicateCommand { get; }
     public RelayCommand OpenLogCommand { get; }
+    public RelayCommand ExplainLogsCommand { get; }
 
     private void OnBrowse()
     {
@@ -1092,13 +1153,18 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
     private void OnOpenLog()
     {
-        _dialogs.ShowLogWindow(Logs);
+        _dialogs.ShowLogWindow(this);
     }
 
     private bool CanSendChat()
         => !IsChatBusy
             && HasChatConfiguration
             && !string.IsNullOrWhiteSpace(ChatInput);
+
+    private bool CanExplainLogs()
+        => !IsLogSummaryBusy
+            && HasChatConfiguration
+            && Logs.Count > 0;
 
     private async Task OnSendChatAsync()
     {
@@ -1153,6 +1219,17 @@ public sealed class MainViewModel : INotifyPropertyChanged
         {
             IsChatBusy = false;
         }
+    }
+
+    private async Task OnExplainLatestLogsAsync()
+    {
+        var snapshot = CaptureRecentLogs();
+        if (snapshot.Count == 0)
+        {
+            return;
+        }
+
+        await SummarizeLogsAsync(snapshot, CancellationToken.None).ConfigureAwait(false);
     }
 
     private void OnExportCollections()
@@ -1288,6 +1365,231 @@ public sealed class MainViewModel : INotifyPropertyChanged
             // Ignore preference load failures and continue with defaults.
         }
     }
+
+    private void OnLogsCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
+    {
+        ExplainLogsCommand?.RaiseCanExecuteChanged();
+
+        if (e.Action != NotifyCollectionChangedAction.Add || e.NewItems is null || e.NewItems.Count == 0)
+        {
+            return;
+        }
+
+        lock (_logSummarySync)
+        {
+            _pendingLogSummaryCount += e.NewItems.Count;
+        }
+
+        ScheduleLogSummaryDebounced();
+    }
+
+    private void ScheduleLogSummaryDebounced()
+    {
+        lock (_logSummarySync)
+        {
+            _logSummaryTimer ??= new System.Threading.Timer(OnLogSummaryTimerElapsed, null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
+            _logSummaryTimer.Change(_logSummaryDebounce, Timeout.InfiniteTimeSpan);
+        }
+    }
+
+    private void OnLogSummaryTimerElapsed(object? state)
+    {
+        int pending;
+        lock (_logSummarySync)
+        {
+            pending = _pendingLogSummaryCount;
+            _pendingLogSummaryCount = 0;
+        }
+
+        if (pending == 0)
+        {
+            return;
+        }
+
+        if (!HasChatConfiguration)
+        {
+            return;
+        }
+
+        if (IsLogSummaryBusy)
+        {
+            lock (_logSummarySync)
+            {
+                _pendingLogSummaryCount += pending;
+            }
+
+            ScheduleLogSummaryDebounced();
+            return;
+        }
+
+        var snapshot = CaptureRecentLogs();
+        if (snapshot.Count == 0)
+        {
+            return;
+        }
+
+        _ = SummarizeLogsAsync(snapshot, CancellationToken.None);
+    }
+
+    private IReadOnlyList<string> CaptureRecentLogs(int maxEntries = 80)
+    {
+        if (Logs.Count == 0)
+        {
+            return Array.Empty<string>();
+        }
+
+        var snapshot = new List<string>();
+        ExecuteOnUiThread(() =>
+        {
+            var count = Logs.Count;
+            var start = Math.Max(0, count - maxEntries);
+            for (var i = start; i < count; i++)
+            {
+                snapshot.Add(Logs[i]);
+            }
+        });
+
+        return snapshot;
+    }
+
+    private async Task SummarizeLogsAsync(IReadOnlyList<string> logSnapshot, CancellationToken cancellationToken)
+    {
+        if (!HasChatConfiguration || logSnapshot.Count == 0)
+        {
+            return;
+        }
+
+        if (IsLogSummaryBusy)
+        {
+            return;
+        }
+
+        ExecuteOnUiThread(() => IsLogSummaryBusy = true);
+
+        try
+        {
+            var session = new ChatSessionSettings(ChatApiEndpoint, ChatApiKey, ChatModel, ChatSystemPrompt);
+            var summary = await _chatAssistantService.SummarizeLogsAsync(session, logSnapshot, cancellationToken).ConfigureAwait(false);
+            if (summary is not null)
+            {
+                PublishLogSummary(summary);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception ex)
+        {
+            var message = $"AI log triage failed: {ex.Message}";
+            ExecuteOnUiThread(() =>
+            {
+                LogSummaryIssues.Clear();
+                LatestLogSummaryOverview = message;
+                LatestLogSummary = new LogTriageResult(DateTimeOffset.UtcNow, message, Array.Empty<LogTriageIssue>());
+            });
+        }
+        finally
+        {
+            ExecuteOnUiThread(() => IsLogSummaryBusy = false);
+
+            var shouldReschedule = false;
+            lock (_logSummarySync)
+            {
+                shouldReschedule = _pendingLogSummaryCount > 0;
+            }
+
+            if (shouldReschedule)
+            {
+                ScheduleLogSummaryDebounced();
+            }
+        }
+    }
+
+    private void PublishLogSummary(LogTriageResult summary)
+    {
+        ExecuteOnUiThread(() =>
+        {
+            LogSummaryIssues.Clear();
+            if (summary.Issues is { Count: > 0 })
+            {
+                foreach (var issue in summary.Issues)
+                {
+                    LogSummaryIssues.Add(issue);
+                }
+            }
+
+            LatestLogSummaryOverview = summary.Overview;
+            LatestLogSummary = summary;
+        });
+    }
+
+    private static string? BuildLogSummaryStatus(LogTriageResult? summary)
+    {
+        if (summary is null)
+        {
+            return null;
+        }
+
+        if (summary.Issues is { Count: > 0 })
+        {
+            var topIssue = summary.Issues
+                .OrderByDescending(issue => GetSeverityRank(issue.Severity))
+                .ThenBy(issue => issue.Category, StringComparer.OrdinalIgnoreCase)
+                .First();
+
+            var severity = NormalizeSeverityLabel(topIssue.Severity);
+            return $"{severity}: {topIssue.Category} – {topIssue.Description}";
+        }
+
+        return summary.Overview;
+    }
+
+    private static int GetSeverityRank(string? severity)
+        => severity?.Trim().ToLowerInvariant() switch
+        {
+            "critical" => 4,
+            "error" => 3,
+            "warning" => 2,
+            "info" => 1,
+            _ => 0,
+        };
+
+    private static string NormalizeSeverityLabel(string? severity)
+    {
+        if (string.IsNullOrWhiteSpace(severity))
+        {
+            return "Info";
+        }
+
+        var trimmed = severity.Trim();
+        if (trimmed.Length == 0)
+        {
+            return "Info";
+        }
+
+        return trimmed.Length == 1
+            ? char.ToUpperInvariant(trimmed[0]).ToString()
+            : char.ToUpperInvariant(trimmed[0]) + trimmed[1..].ToLowerInvariant();
+    }
+
+    private static void ExecuteOnUiThread(Action action)
+    {
+        if (action is null)
+        {
+            return;
+        }
+
+        var dispatcher = App.Current?.Dispatcher;
+        if (dispatcher is null || dispatcher.CheckAccess())
+        {
+            action();
+        }
+        else
+        {
+            dispatcher.Invoke(action);
+        }
+    }
+
 
     private void SavePreferences()
     {
@@ -4328,7 +4630,14 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
     public event PropertyChangedEventHandler? PropertyChanged;
     private void OnPropertyChanged([CallerMemberName] string? name = null)
-        => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
+    {
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
+
+        if (name == nameof(HasChatConfiguration) || name == nameof(IsLogSummaryBusy))
+        {
+            ExplainLogsCommand?.RaiseCanExecuteChanged();
+        }
+    }
 
     private void OnWordPressCredentialsChanged()
     {
