@@ -38,6 +38,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private readonly HeadlessBrowserScreenshotService _designScreenshotService;
     private readonly WordPressDirectoryClient _wpDirectoryClient;
     private readonly ChatAssistantService _chatAssistantService;
+    private readonly IArtifactIndexingService _artifactIndexingService;
     private readonly string _settingsDirectory;
     private readonly string _preferencesPath;
     private readonly string _chatKeyPath;
@@ -123,6 +124,12 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private readonly ObservableCollection<string> _latestAutomationScriptWarnings = new();
     private string _latestAutomationScriptSummary = string.Empty;
     private string _latestAutomationScriptError = string.Empty;
+    private readonly IReadOnlyList<ChatModeOption> _chatModeOptions = new[]
+    {
+        new ChatModeOption(ChatInteractionMode.GeneralAssistant, "General assistant"),
+        new ChatModeOption(ChatInteractionMode.DatasetQuestion, "Ask about exported data"),
+    };
+    private ChatInteractionMode _selectedChatMode = ChatInteractionMode.GeneralAssistant;
 
     public MainViewModel(IDialogService dialogs)
         : this(dialogs, new WooScraper(), new ShopifyScraper(), new HttpClient())
@@ -145,7 +152,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
             shopifyScraper,
             httpClient,
             new HeadlessBrowserScreenshotService(),
-            new ChatAssistantService())
+            CreateDefaultArtifactIndexingService(out var artifactIndexingService),
+            new ChatAssistantService(artifactIndexingService))
     {
     }
 
@@ -155,6 +163,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         ShopifyScraper shopifyScraper,
         HttpClient httpClient,
         HeadlessBrowserScreenshotService designScreenshotService,
+        IArtifactIndexingService artifactIndexingService,
         ChatAssistantService chatAssistantService)
     {
         _dialogs = dialogs;
@@ -164,6 +173,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         _wooProvisioningService = new WooProvisioningService();
         _wpDirectoryClient = new WordPressDirectoryClient(_httpClient);
         _designScreenshotService = designScreenshotService ?? throw new ArgumentNullException(nameof(designScreenshotService));
+        _artifactIndexingService = artifactIndexingService ?? throw new ArgumentNullException(nameof(artifactIndexingService));
         _chatAssistantService = chatAssistantService ?? throw new ArgumentNullException(nameof(chatAssistantService));
         _settingsDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "WcScraper");
         _preferencesPath = Path.Combine(_settingsDirectory, "preferences.json");
@@ -189,6 +199,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         LoadPreferences();
         LoadChatApiKey();
         UpdateChatConfigurationStatus();
+        _artifactIndexingService.IndexChanged += OnArtifactIndexChanged;
 
         _assistantToggleBindings = new Dictionary<string, (Func<bool>, Action<bool>)>(StringComparer.OrdinalIgnoreCase)
         {
@@ -209,6 +220,12 @@ public sealed class MainViewModel : INotifyPropertyChanged
             [nameof(ImportStoreConfiguration)] = (() => ImportStoreConfiguration, value => ImportStoreConfiguration = value),
             [nameof(EnableHttpRetries)] = (() => EnableHttpRetries, value => EnableHttpRetries = value),
         };
+    }
+
+    private static IArtifactIndexingService CreateDefaultArtifactIndexingService(out IArtifactIndexingService service)
+    {
+        service = new ArtifactIndexingService();
+        return service;
     }
 
     // XAML-friendly default constructor + Dialogs setter
@@ -1085,6 +1102,26 @@ public sealed class MainViewModel : INotifyPropertyChanged
         && !string.IsNullOrWhiteSpace(ChatApiEndpoint)
         && !string.IsNullOrWhiteSpace(ChatModel);
 
+    public IReadOnlyList<ChatModeOption> ChatModeOptions => _chatModeOptions;
+
+    public ChatInteractionMode SelectedChatMode
+    {
+        get => _selectedChatMode;
+        set
+        {
+            if (_selectedChatMode == value)
+            {
+                return;
+            }
+
+            _selectedChatMode = value;
+            OnPropertyChanged();
+            UpdateChatConfigurationStatus();
+        }
+    }
+
+    public bool HasIndexedDatasets => _artifactIndexingService.HasAnyIndexedArtifacts;
+
     public bool IsChatBusy
     {
         get => _isChatBusy;
@@ -1447,12 +1484,23 @@ public sealed class MainViewModel : INotifyPropertyChanged
         try
         {
             var context = BuildChatContext();
-            var contextSummary = _chatAssistantService.BuildContextualPrompt(context);
             var session = new ChatSessionSettings(ChatApiEndpoint, ChatApiKey, ChatModel, ChatSystemPrompt);
 
-            await foreach (var token in _chatAssistantService.StreamChatCompletionAsync(session, history, contextSummary, CancellationToken.None))
+            if (SelectedChatMode == ChatInteractionMode.DatasetQuestion)
             {
-                assistantMessage.Append(token);
+                await foreach (var token in _chatAssistantService.StreamDatasetAnswerAsync(session, history, trimmed, CancellationToken.None))
+                {
+                    assistantMessage.Append(token);
+                }
+            }
+            else
+            {
+                var contextSummary = _chatAssistantService.BuildContextualPrompt(context);
+
+                await foreach (var token in _chatAssistantService.StreamChatCompletionAsync(session, history, contextSummary, CancellationToken.None))
+                {
+                    assistantMessage.Append(token);
+                }
             }
 
             if (string.IsNullOrWhiteSpace(assistantMessage.Content))
@@ -1460,19 +1508,24 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 assistantMessage.Content = "(No response received.)";
             }
 
-            ChatStatusMessage = "Assistant ready for another prompt.";
+            ChatStatusMessage = SelectedChatMode == ChatInteractionMode.DatasetQuestion
+                ? "Dataset Q&A ready for another question."
+                : "Assistant ready for another prompt.";
 
-            try
+            if (SelectedChatMode != ChatInteractionMode.DatasetQuestion)
             {
-                var directives = await _chatAssistantService.ParseAssistantDirectivesAsync(session, context, trimmed, CancellationToken.None);
-                if (directives is not null)
+                try
                 {
-                    ProcessAssistantDirectives(directives, confirmed: false);
+                    var directives = await _chatAssistantService.ParseAssistantDirectivesAsync(session, context, trimmed, CancellationToken.None);
+                    if (directives is not null)
+                    {
+                        ProcessAssistantDirectives(directives, confirmed: false);
+                    }
                 }
-            }
-            catch (Exception directiveEx)
-            {
-                Append($"Assistant directive processing failed: {directiveEx.Message}");
+                catch (Exception directiveEx)
+                {
+                    Append($"Assistant directive processing failed: {directiveEx.Message}");
+                }
             }
         }
         catch (Exception ex)
@@ -1905,7 +1958,11 @@ public sealed class MainViewModel : INotifyPropertyChanged
     }
 
     private ChatSessionContext BuildChatContext()
-        => new(
+    {
+        var datasets = _artifactIndexingService.GetIndexedDatasets();
+        var datasetNames = datasets.Select(d => d.Name).ToList();
+
+        return new ChatSessionContext(
             SelectedPlatform,
             ExportCsv,
             ExportShopify,
@@ -1928,7 +1985,10 @@ public sealed class MainViewModel : INotifyPropertyChanged
             EnableHttpRetries,
             HttpRetryAttempts,
             AdditionalPublicExtensionPages,
-            AdditionalDesignSnapshotPages);
+            AdditionalDesignSnapshotPages,
+            datasets.Count,
+            datasetNames);
+    }
 
     private bool HasShopifyCredentials()
         => !string.IsNullOrWhiteSpace(ShopifyAdminAccessToken)
@@ -1947,9 +2007,21 @@ public sealed class MainViewModel : INotifyPropertyChanged
             return;
         }
 
-        ChatStatusMessage = HasChatConfiguration
-            ? "Assistant ready for your next prompt."
-            : "Enter API endpoint, model, and API key to enable the assistant.";
+        if (!HasChatConfiguration)
+        {
+            ChatStatusMessage = "Enter API endpoint, model, and API key to enable the assistant.";
+            return;
+        }
+
+        if (SelectedChatMode == ChatInteractionMode.DatasetQuestion)
+        {
+            ChatStatusMessage = _artifactIndexingService.HasAnyIndexedArtifacts
+                ? "Dataset Q&A ready. Ask about the exported CSV or JSONL files."
+                : "Run a scrape with CSV or JSONL exports to enable dataset Q&A.";
+            return;
+        }
+
+        ChatStatusMessage = "Assistant ready for your next prompt.";
     }
 
     private void LoadPreferences()
@@ -2029,6 +2101,15 @@ public sealed class MainViewModel : INotifyPropertyChanged
         }
 
         ScheduleLogSummaryDebounced();
+    }
+
+    private void OnArtifactIndexChanged(object? sender, EventArgs e)
+    {
+        ExecuteOnUiThread(() =>
+        {
+            OnPropertyChanged(nameof(HasIndexedDatasets));
+            UpdateChatConfigurationStatus();
+        });
     }
 
     private void ScheduleLogSummaryDebounced()
@@ -2235,6 +2316,23 @@ public sealed class MainViewModel : INotifyPropertyChanged
         else
         {
             dispatcher.Invoke(action);
+        }
+    }
+
+    private async Task IndexArtifactIfSupportedAsync(string? filePath)
+    {
+        if (string.IsNullOrWhiteSpace(filePath))
+        {
+            return;
+        }
+
+        try
+        {
+            await _artifactIndexingService.IndexArtifactAsync(filePath, CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            Append($"Embedding index update failed for {filePath}: {ex.Message}");
         }
     }
 
@@ -2480,6 +2578,9 @@ public sealed class MainViewModel : INotifyPropertyChanged
             var storeOutputFolder = Path.Combine(baseOutputFolder, storeId);
             Directory.CreateDirectory(storeOutputFolder);
             var timestamp = DateTime.UtcNow.ToString("yyyyMMdd_HHmmss");
+
+            _artifactIndexingService.ResetForRun(storeId, timestamp);
+            UpdateChatConfigurationStatus();
 
             // Refresh filters for this store
             await LoadFiltersForStoreAsync(targetUrl, logger);
@@ -3085,6 +3186,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 var path = Path.Combine(storeOutputFolder, $"{storeId}_{timestamp}_products.csv");
                 CsvExporter.Write(path, genericDicts);
                 Append($"Wrote {path}");
+                await IndexArtifactIfSupportedAsync(path);
             }
             if (ExportXlsx)
             {
@@ -3100,6 +3202,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 var path = Path.Combine(storeOutputFolder, $"{storeId}_{timestamp}_products.jsonl");
                 JsonlExporter.Write(path, genericDicts);
                 Append($"Wrote {path}");
+                await IndexArtifactIfSupportedAsync(path);
             }
 
             if (SelectedPlatform == PlatformMode.WooCommerce && ExportPluginsCsv)
@@ -3109,6 +3212,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                     var path = Path.Combine(storeOutputFolder, $"{storeId}_{timestamp}_plugins.csv");
                     CsvExporter.WritePlugins(path, plugins);
                     Append($"Wrote {path}");
+                    await IndexArtifactIfSupportedAsync(path);
                 }
                 else if (attemptedPluginFetch)
                 {
@@ -3123,6 +3227,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                     var path = Path.Combine(storeOutputFolder, $"{storeId}_{timestamp}_plugins.jsonl");
                     JsonlExporter.WritePlugins(path, plugins);
                     Append($"Wrote {path}");
+                    await IndexArtifactIfSupportedAsync(path);
                 }
                 else if (attemptedPluginFetch)
                 {
@@ -3137,6 +3242,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                     var path = Path.Combine(storeOutputFolder, $"{storeId}_{timestamp}_themes.csv");
                     CsvExporter.WriteThemes(path, themes);
                     Append($"Wrote {path}");
+                    await IndexArtifactIfSupportedAsync(path);
                 }
                 else if (attemptedThemeFetch)
                 {
@@ -3151,6 +3257,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                     var path = Path.Combine(storeOutputFolder, $"{storeId}_{timestamp}_themes.jsonl");
                     JsonlExporter.WriteThemes(path, themes);
                     Append($"Wrote {path}");
+                    await IndexArtifactIfSupportedAsync(path);
                 }
                 else if (attemptedThemeFetch)
                 {
@@ -3184,6 +3291,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                     CsvExporter.Write(csvPath, rows);
                     var limitNote = BuildPublicExtensionLimitNote(publicExtensionDetection);
                     Append($"Wrote {csvPath} (includes asset URLs and version cues when available; manual install required).{limitNote}");
+                    await IndexArtifactIfSupportedAsync(csvPath);
 
                     var jsonPath = Path.Combine(storeOutputFolder, $"{storeId}_{timestamp}_public_extension_footprints.json");
                     var json = JsonSerializer.Serialize(publicExtensionFootprints, _artifactWriteOptions);
@@ -3239,6 +3347,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
                         await File.WriteAllTextAsync(colorsCsvPath, csvBuilder.ToString(), Encoding.UTF8);
                         Append($"Wrote {colorsCsvPath}");
+                        await IndexArtifactIfSupportedAsync(colorsCsvPath);
 
                         var colorsJsonPath = Path.Combine(designRoot, "colors.json");
                         var colorsJson = JsonSerializer.Serialize(designSnapshot.ColorSwatches, _artifactWriteOptions);
@@ -3602,6 +3711,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
                     await File.WriteAllTextAsync(manifestCsvPath, manifestCsvBuilder.ToString(), Encoding.UTF8);
                     Append($"Wrote {manifestCsvPath}");
+                    await IndexArtifactIfSupportedAsync(manifestCsvPath);
 
                     aiDesignManifestCsvPath = TryGetStoreRelativePath(storeOutputFolder, manifestCsvPath);
                 }
@@ -3619,6 +3729,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 var path = Path.Combine(storeOutputFolder, $"{storeId}_{timestamp}_shopify_products.csv");
                 CsvExporter.Write(path, rows);
                 Append($"Wrote {path}");
+                await IndexArtifactIfSupportedAsync(path);
             }
 
             if (ExportWoo)
@@ -3632,6 +3743,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 var path = Path.Combine(storeOutputFolder, $"{storeId}_{timestamp}_woocommerce_products.csv");
                 CsvExporter.Write(path, rows);
                 Append($"Wrote {path}");
+                await IndexArtifactIfSupportedAsync(path);
             }
 
             if (ExportReviews)
@@ -3653,6 +3765,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                             ["date_created"] = r.DateCreated
                         }));
                         Append($"Wrote {path} ({revs.Count} rows)");
+                        await IndexArtifactIfSupportedAsync(path);
                     }
                     else
                     {
@@ -3747,11 +3860,13 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 designInsight = new AiDesignSnapshotInsight(assetList, paletteList, aiDesignManifestJsonPath, aiDesignManifestCsvPath);
             }
 
+            var indexedDatasets = _artifactIndexingService.GetIndexedDatasets();
             var artifactPayloadCandidate = new AiArtifactIntelligencePayload(
                 targetUrl,
                 aiPublicExtensionInsights.ToList(),
                 aiCrawlContext,
-                designInsight);
+                designInsight,
+                indexedDatasets);
 
             var artifactPayload = artifactPayloadCandidate.HasContent ? artifactPayloadCandidate : null;
 

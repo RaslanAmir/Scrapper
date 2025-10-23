@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.IO;
 using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Text;
@@ -27,6 +28,18 @@ public sealed class ChatAssistantService
     {
         PropertyNameCaseInsensitive = true,
     };
+
+    private readonly IArtifactIndexingService _artifactIndexingService;
+
+    public ChatAssistantService()
+        : this(new ArtifactIndexingService())
+    {
+    }
+
+    public ChatAssistantService(IArtifactIndexingService artifactIndexingService)
+    {
+        _artifactIndexingService = artifactIndexingService ?? throw new ArgumentNullException(nameof(artifactIndexingService));
+    }
 
     public async IAsyncEnumerable<string> StreamChatCompletionAsync(
         ChatSessionSettings settings,
@@ -82,6 +95,100 @@ public sealed class ChatAssistantService
         }
 
         options.Messages.Add(new Azure.AI.OpenAI.ChatMessage(ChatRole.System, promptBuilder.ToString()));
+
+        foreach (var message in history)
+        {
+            if (string.IsNullOrWhiteSpace(message.Content))
+            {
+                continue;
+            }
+
+            options.Messages.Add(new Azure.AI.OpenAI.ChatMessage(ToChatRole(message.Role), message.Content));
+        }
+
+        var response = await client.GetChatCompletionsStreamingAsync(options, cancellationToken).ConfigureAwait(false);
+        await using var streaming = response.Value;
+
+        await foreach (var choice in streaming.GetChoicesStreaming(cancellationToken))
+        {
+            await foreach (var chatMessage in choice.GetMessageStreaming(cancellationToken))
+            {
+                foreach (var content in chatMessage.Content)
+                {
+                    if (content is ChatMessageTextContent textContent && !string.IsNullOrEmpty(textContent.Text))
+                    {
+                        yield return textContent.Text;
+                    }
+                }
+            }
+        }
+
+        await streaming.CompleteAsync().ConfigureAwait(false);
+    }
+
+    public async IAsyncEnumerable<string> StreamDatasetAnswerAsync(
+        ChatSessionSettings settings,
+        IReadOnlyList<ChatMessage> history,
+        string latestQuestion,
+        [EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+        ArgumentNullException.ThrowIfNull(history);
+
+        if (string.IsNullOrWhiteSpace(latestQuestion))
+        {
+            yield break;
+        }
+
+        if (!_artifactIndexingService.HasAnyIndexedArtifacts)
+        {
+            yield return "No indexed exports are available. Run a scrape with CSV or JSONL exports to enable this mode.";
+            yield break;
+        }
+
+        if (string.IsNullOrWhiteSpace(settings.ApiKey))
+        {
+            throw new ArgumentException("An API key is required.", nameof(settings));
+        }
+
+        if (string.IsNullOrWhiteSpace(settings.Endpoint))
+        {
+            throw new ArgumentException("An endpoint is required.", nameof(settings));
+        }
+
+        if (!Uri.TryCreate(settings.Endpoint, UriKind.Absolute, out var endpoint))
+        {
+            throw new ArgumentException("The API endpoint must be an absolute URI.", nameof(settings));
+        }
+
+        if (string.IsNullOrWhiteSpace(settings.Model))
+        {
+            throw new ArgumentException("A model or deployment identifier is required.", nameof(settings));
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var matches = await _artifactIndexingService
+            .SearchAsync(latestQuestion, take: 8, cancellationToken)
+            .ConfigureAwait(false);
+
+        if (matches.Count == 0)
+        {
+            yield return "I could not find any relevant rows in the indexed exports for that question.";
+            yield break;
+        }
+
+        var datasetInventory = _artifactIndexingService.GetIndexedDatasets();
+
+        var client = new OpenAIClient(endpoint, new AzureKeyCredential(settings.ApiKey));
+        var options = new ChatCompletionsOptions
+        {
+            DeploymentName = settings.Model,
+            Temperature = 0.1f,
+        };
+
+        var systemPrompt = BuildDatasetSystemPrompt(settings.SystemPrompt, datasetInventory, matches);
+        options.Messages.Add(new Azure.AI.OpenAI.ChatMessage(ChatRole.System, systemPrompt));
 
         foreach (var message in history)
         {
@@ -626,6 +733,16 @@ public sealed class ChatAssistantService
             builder.AppendLine(context.AdditionalDesignSnapshotPages.Trim());
         }
 
+        if (context.IndexedDatasetCount > 0)
+        {
+            builder.AppendLine();
+            builder.AppendLine($"Indexed datasets available: {context.IndexedDatasetCount}");
+            foreach (var name in context.IndexedDatasetNames)
+            {
+                builder.AppendLine($"  - {name}");
+            }
+        }
+
         return builder.ToString();
     }
 
@@ -1137,6 +1254,68 @@ public sealed class ChatAssistantService
         };
 
     private static string FormatBoolean(bool value) => value ? "yes" : "no";
+
+    private static string BuildDatasetSystemPrompt(
+        string? systemPrompt,
+        IReadOnlyList<AiIndexedDatasetReference> datasets,
+        IReadOnlyList<ArtifactSearchResult> matches)
+    {
+        var builder = new StringBuilder();
+        if (!string.IsNullOrWhiteSpace(systemPrompt))
+        {
+            builder.AppendLine(systemPrompt.Trim());
+            builder.AppendLine();
+        }
+
+        builder.AppendLine("You are a data analyst answering questions about recently exported storefront datasets.");
+        builder.AppendLine("Use the provided rows to calculate totals or list details. Mention file names when helpful and call out when data is missing.");
+        builder.AppendLine();
+
+        if (datasets.Count > 0)
+        {
+            builder.AppendLine("Indexed datasets:");
+            foreach (var dataset in datasets)
+            {
+                builder.Append("- ");
+                builder.Append(dataset.Name);
+                if (dataset.SchemaHighlights.Count > 0)
+                {
+                    builder.Append(" (columns: ");
+                    builder.Append(string.Join(", ", dataset.SchemaHighlights));
+                    builder.Append(')');
+                }
+
+                builder.Append(" [index: ");
+                builder.Append(dataset.VectorIndexIdentifier);
+                builder.AppendLine("]");
+            }
+
+            builder.AppendLine();
+        }
+
+        builder.AppendLine("Reference rows:");
+        var index = 1;
+        foreach (var match in matches)
+        {
+            builder.Append('[');
+            builder.Append(index++);
+            builder.Append("] ");
+            builder.Append(match.DatasetName);
+            builder.Append(" (file: ");
+            builder.Append(Path.GetFileName(match.FilePath));
+            builder.Append(", row: ");
+            builder.Append(match.RowNumber);
+            builder.Append(", score: ");
+            builder.Append(match.Score.ToString("0.000", CultureInfo.InvariantCulture));
+            builder.AppendLine(")");
+            builder.AppendLine(match.Snippet);
+            builder.AppendLine();
+        }
+
+        builder.AppendLine("Answer the operator using only the referenced data. If you need to estimate, explain the assumption.");
+
+        return builder.ToString();
+    }
 }
 
 public sealed record ChatSessionSettings(string Endpoint, string ApiKey, string Model, string? SystemPrompt);
@@ -1189,4 +1368,6 @@ public sealed record ChatSessionContext(
     bool EnableHttpRetries,
     int HttpRetryAttempts,
     string? AdditionalPublicExtensionPages,
-    string? AdditionalDesignSnapshotPages);
+    string? AdditionalDesignSnapshotPages,
+    int IndexedDatasetCount,
+    IReadOnlyList<string> IndexedDatasetNames);

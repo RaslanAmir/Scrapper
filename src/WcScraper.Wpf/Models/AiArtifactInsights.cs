@@ -6,12 +6,19 @@ public sealed record AiArtifactIntelligencePayload(
     string StoreUrl,
     IReadOnlyList<AiPublicExtensionInsight> PublicExtensions,
     AiPublicExtensionCrawlContext? Crawl,
-    AiDesignSnapshotInsight? Design)
+    AiDesignSnapshotInsight? Design,
+    IReadOnlyList<AiIndexedDatasetReference> IndexedDatasets)
 {
     public bool HasContent =>
         (PublicExtensions is { Count: > 0 }) ||
-        (Design?.HasContent ?? false);
+        (Design?.HasContent ?? false) ||
+        (IndexedDatasets is { Count: > 0 });
 }
+
+public sealed record AiIndexedDatasetReference(
+    string Name,
+    IReadOnlyList<string> SchemaHighlights,
+    string VectorIndexIdentifier);
 
 public sealed record AiPublicExtensionInsight(
     string Slug,
