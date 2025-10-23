@@ -397,7 +397,7 @@ internal sealed class ManualMigrationReportBuilder
         builder.AppendLine("- **Inline CSS length:** " + snapshot.InlineCss.Length.ToString("N0", CultureInfo.InvariantCulture) + " characters");
         builder.AppendLine("- **External stylesheets:** " + snapshot.Stylesheets.Count);
         builder.AppendLine("- **Font files:** " + snapshot.FontFiles.Count);
-        builder.AppendLine("- **Background images:** " + snapshot.ImageFiles.Count);
+        builder.AppendLine("- **Design images:** " + snapshot.ImageFiles.Count + " (CSS " + snapshot.CssImageFiles.Count + ", HTML " + snapshot.HtmlImageFiles.Count + ")");
         builder.AppendLine("- **Font declarations:** " + snapshot.FontUrls.Count);
         if (snapshot.Pages.Count > 0)
         {
@@ -407,7 +407,7 @@ internal sealed class ManualMigrationReportBuilder
                 var htmlLength = page.RawHtml.Length.ToString("N0", CultureInfo.InvariantCulture);
                 var inlineLength = page.InlineCss.Length.ToString("N0", CultureInfo.InvariantCulture);
                 builder.AppendLine(
-                    $"  - {MarkdownEscape(page.Url)} (HTML {htmlLength} chars, inline CSS {inlineLength} chars, stylesheets {page.Stylesheets.Count}, fonts {page.FontFiles.Count}, images {page.ImageFiles.Count})");
+                    $"  - {MarkdownEscape(page.Url)} (HTML {htmlLength} chars, inline CSS {inlineLength} chars, stylesheets {page.Stylesheets.Count}, fonts {page.FontFiles.Count}, images {page.ImageFiles.Count} — CSS {page.CssImageFiles.Count}, HTML {page.HtmlImageFiles.Count})");
             }
         }
         else if (!string.IsNullOrWhiteSpace(snapshot.HomeUrl))
@@ -418,7 +418,7 @@ internal sealed class ManualMigrationReportBuilder
         builder.AppendLine("- **Design folder:** `" + Path.Combine(context.OutputFolder, "design") + "`");
         builder.AppendLine(
             "- **Asset manifest:** `" + Path.Combine(context.OutputFolder, "design", "assets-manifest.json") +
-            "` (includes `file_size_bytes` and `sha256` for every stylesheet, font, and background image).");
+            "` (includes `file_size_bytes`, `sha256`, and CSS/HTML origin metadata for every stylesheet, font, and design image).");
     }
 
     private static void AppendTypographySummary(StringBuilder builder, ManualMigrationReportContext context)

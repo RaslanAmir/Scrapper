@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Net;
 using System.Net.Http;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -38,6 +39,10 @@ public static class FrontEndDesignSnapshot
     private static readonly Regex LinkTagRegex = new(
         "<link\\b[^>]*>",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    private static readonly Regex HtmlImageTagRegex = new(
+        "<(?<tag>img|source|picture)\\b[^>]*>",
+        RegexOptions.IgnoreCase | RegexOptions.Singleline | RegexOptions.Compiled);
 
     private static readonly Regex AttributeRegex = new(
         "(?<name>[a-zA-Z0-9:_-]+)\\s*=\\s*(\"(?<value>[^\"]*)\"|'(?<value>[^']*)'|(?<value>[^\\s\"'>]+))",
@@ -177,7 +182,13 @@ public static class FrontEndDesignSnapshot
 
                 var imageBytes = await imageResponse.Content.ReadAsByteArrayAsync(cancellationToken);
                 var contentType = imageResponse.Content.Headers.ContentType?.MediaType;
-                var imageSnapshot = new DesignImageSnapshot(request.RawUrl, request.ResolvedUrl, request.ReferencedFrom, imageBytes, contentType);
+                var imageSnapshot = new DesignImageSnapshot(
+                    request.RawUrl,
+                    request.ResolvedUrl,
+                    request.References,
+                    imageBytes,
+                    contentType,
+                    request.Origins);
                 imageSnapshotsMap[request.ResolvedUrl] = imageSnapshot;
                 imageSnapshots.Add(imageSnapshot);
             }
@@ -190,6 +201,14 @@ public static class FrontEndDesignSnapshot
                 log?.Report($"Image request failed for {request.ResolvedUrl}: {ex.Message}");
             }
         }
+
+        var cssImageSnapshots = imageSnapshots
+            .Where(snapshot => snapshot.Origins.Contains(DesignImageOrigin.Css))
+            .ToList();
+
+        var htmlImageSnapshots = imageSnapshots
+            .Where(snapshot => snapshot.Origins.Contains(DesignImageOrigin.Html))
+            .ToList();
 
         var aggregatedInlineCss = string.Join(
             Environment.NewLine + Environment.NewLine,
@@ -215,6 +234,8 @@ public static class FrontEndDesignSnapshot
             aggregatedStylesheets,
             fontSnapshots,
             imageSnapshots,
+            cssImageSnapshots,
+            htmlImageSnapshots,
             colorSwatches,
             pages,
             processedUrls);
@@ -319,9 +340,17 @@ public static class FrontEndDesignSnapshot
                     imageCandidateOrder.Add(candidate.ResolvedUrl);
                 }
 
-                builder.AddImageUrl(candidate.ResolvedUrl);
+                builder.AddImageUrl(candidate.ResolvedUrl, DesignImageOrigin.Css);
             }
         }
+
+        CollectHtmlImageReferences(
+            html,
+            pageUri,
+            pageUrl,
+            builder,
+            imageCandidates,
+            imageCandidateOrder);
 
         var stylesheetHrefs = ExtractStylesheetHrefs(html);
         if (stylesheetHrefs.Count == 0)
@@ -463,7 +492,7 @@ public static class FrontEndDesignSnapshot
                 imageCandidateOrder.Add(candidate.ResolvedUrl);
             }
 
-            builder.AddImageUrl(candidate.ResolvedUrl);
+            builder.AddImageUrl(candidate.ResolvedUrl, DesignImageOrigin.Css);
         }
 
         builder.AddCssSource(cssText);
@@ -563,6 +592,244 @@ public static class FrontEndDesignSnapshot
         }
 
         return hrefs;
+    }
+
+    private static void CollectHtmlImageReferences(
+        string html,
+        Uri? pageUri,
+        string pageUrl,
+        DesignPageSnapshotBuilder builder,
+        IDictionary<string, ImageAssetRequest> imageCandidates,
+        IList<string> imageCandidateOrder)
+    {
+        if (string.IsNullOrWhiteSpace(html))
+        {
+            return;
+        }
+
+        foreach (Match tagMatch in HtmlImageTagRegex.Matches(html))
+        {
+            if (!tagMatch.Success)
+            {
+                continue;
+            }
+
+            var tagName = tagMatch.Groups["tag"].Value;
+            if (string.IsNullOrWhiteSpace(tagName))
+            {
+                continue;
+            }
+
+            foreach (Match attribute in AttributeRegex.Matches(tagMatch.Value))
+            {
+                if (!attribute.Success)
+                {
+                    continue;
+                }
+
+                var attributeName = attribute.Groups["name"].Value;
+                var attributeValue = attribute.Groups["value"].Value;
+                if (string.IsNullOrWhiteSpace(attributeName) || string.IsNullOrWhiteSpace(attributeValue))
+                {
+                    continue;
+                }
+
+                var normalizedName = attributeName.Trim();
+                var decodedValue = DecodeHtmlAttributeValue(attributeValue);
+                if (string.IsNullOrWhiteSpace(decodedValue))
+                {
+                    continue;
+                }
+
+                var isSrcAttribute = IsHtmlSrcAttribute(normalizedName);
+                var isSrcSetAttribute = IsHtmlSrcSetAttribute(normalizedName);
+                if (!isSrcAttribute && !isSrcSetAttribute)
+                {
+                    continue;
+                }
+
+                var referencedFrom = BuildHtmlImageReference(pageUrl, tagName, normalizedName);
+
+                if (isSrcAttribute)
+                {
+                    ProcessHtmlImageCandidate(
+                        decodedValue,
+                        pageUri,
+                        tagName,
+                        referencedFrom,
+                        imageCandidates,
+                        imageCandidateOrder,
+                        builder);
+                }
+                else
+                {
+                    foreach (var candidateValue in SplitSrcSetValues(decodedValue))
+                    {
+                        ProcessHtmlImageCandidate(
+                            candidateValue,
+                            pageUri,
+                            tagName,
+                            referencedFrom,
+                            imageCandidates,
+                            imageCandidateOrder,
+                            builder);
+                    }
+                }
+            }
+        }
+    }
+
+    private static string? DecodeHtmlAttributeValue(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return null;
+        }
+
+        var decoded = WebUtility.HtmlDecode(value)?.Trim();
+        return string.IsNullOrWhiteSpace(decoded) ? null : decoded;
+    }
+
+    private static bool IsHtmlSrcAttribute(string attributeName)
+    {
+        if (string.IsNullOrWhiteSpace(attributeName))
+        {
+            return false;
+        }
+
+        if (string.Equals(attributeName, "src", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        if (attributeName.StartsWith("data-", StringComparison.OrdinalIgnoreCase)
+            && attributeName.IndexOf("src", StringComparison.OrdinalIgnoreCase) >= 0
+            && attributeName.IndexOf("srcset", StringComparison.OrdinalIgnoreCase) < 0)
+        {
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool IsHtmlSrcSetAttribute(string attributeName)
+    {
+        if (string.IsNullOrWhiteSpace(attributeName))
+        {
+            return false;
+        }
+
+        if (string.Equals(attributeName, "srcset", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        return attributeName.StartsWith("data-", StringComparison.OrdinalIgnoreCase)
+            && attributeName.IndexOf("srcset", StringComparison.OrdinalIgnoreCase) >= 0;
+    }
+
+    private static IEnumerable<string> SplitSrcSetValues(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) yield break;
+
+        foreach (var part in value.Split(','))
+        {
+            var trimmed = part?.Trim();
+            if (string.IsNullOrWhiteSpace(trimmed))
+            {
+                continue;
+            }
+
+            var separatorIndex = trimmed.IndexOf(' ');
+            var candidate = separatorIndex >= 0
+                ? trimmed[..separatorIndex].Trim()
+                : trimmed;
+
+            if (string.IsNullOrWhiteSpace(candidate))
+            {
+                continue;
+            }
+
+            yield return candidate;
+        }
+    }
+
+    private static void ProcessHtmlImageCandidate(
+        string rawValue,
+        Uri? pageUri,
+        string tagName,
+        string referencedFrom,
+        IDictionary<string, ImageAssetRequest> imageCandidates,
+        IList<string> imageCandidateOrder,
+        DesignPageSnapshotBuilder builder)
+    {
+        if (string.IsNullOrWhiteSpace(rawValue))
+        {
+            return;
+        }
+
+        var candidateValue = rawValue.Trim();
+        if (candidateValue.Length >= 2)
+        {
+            candidateValue = candidateValue.Trim('"', '\'');
+        }
+
+        if (candidateValue.StartsWith("url(", StringComparison.OrdinalIgnoreCase)
+            && candidateValue.EndsWith(")", StringComparison.Ordinal))
+        {
+            candidateValue = candidateValue.Length > 5
+                ? candidateValue.Substring(4, candidateValue.Length - 5)
+                : string.Empty;
+            candidateValue = candidateValue.Trim('"', '\'', ' ');
+        }
+
+        if (ShouldSkipImageCandidate(candidateValue))
+        {
+            return;
+        }
+
+        var resolved = ResolveAssetUrl(candidateValue, pageUri);
+        if (string.IsNullOrWhiteSpace(resolved))
+        {
+            return;
+        }
+
+        var candidate = new ImageUrlCandidate(
+            candidateValue,
+            resolved,
+            DesignImageOrigin.Html);
+
+        if (AddImageCandidate(imageCandidates, candidate, referencedFrom))
+        {
+            imageCandidateOrder.Add(candidate.ResolvedUrl);
+        }
+
+        builder.AddImageUrl(candidate.ResolvedUrl, DesignImageOrigin.Html);
+    }
+
+    private static string BuildHtmlImageReference(string pageUrl, string tagName, string attributeName)
+    {
+        var normalizedTag = string.IsNullOrWhiteSpace(tagName) ? "element" : tagName.Trim();
+        var normalizedAttribute = string.IsNullOrWhiteSpace(attributeName) ? "src" : attributeName.Trim();
+        var fragment = $"{normalizedTag.ToLowerInvariant()}[{normalizedAttribute.ToLowerInvariant()}]";
+        return string.IsNullOrWhiteSpace(pageUrl) ? fragment : pageUrl + "#" + fragment;
+    }
+
+    private static bool ShouldSkipImageCandidate(string candidateValue)
+    {
+        if (string.IsNullOrWhiteSpace(candidateValue))
+        {
+            return true;
+        }
+
+        var trimmed = candidateValue.Trim();
+        if (trimmed.StartsWith("data:", StringComparison.OrdinalIgnoreCase)) return true;
+        if (trimmed.StartsWith("#", StringComparison.Ordinal)) return true;
+        if (trimmed.StartsWith("mailto:", StringComparison.OrdinalIgnoreCase)) return true;
+        if (trimmed.StartsWith("tel:", StringComparison.OrdinalIgnoreCase)) return true;
+        if (trimmed.StartsWith("javascript:", StringComparison.OrdinalIgnoreCase)) return true;
+
+        return false;
     }
 
     private static IEnumerable<FontUrlCandidate> ExtractFontUrlCandidates(string css, Uri? baseUri)
@@ -696,7 +963,7 @@ public static class FrontEndDesignSnapshot
             if (string.IsNullOrWhiteSpace(resolved)) continue;
             if (knownFontRequests.ContainsKey(resolved)) continue;
 
-            yield return new ImageUrlCandidate(raw, resolved);
+            yield return new ImageUrlCandidate(raw, resolved, DesignImageOrigin.Css);
         }
     }
 
@@ -726,12 +993,18 @@ public static class FrontEndDesignSnapshot
         ImageUrlCandidate candidate,
         string referencedFrom)
     {
-        if (accumulator.ContainsKey(candidate.ResolvedUrl))
+        if (accumulator.TryGetValue(candidate.ResolvedUrl, out var existing))
         {
+            existing.AddOrigin(candidate.Origin);
+            existing.AddReference(referencedFrom);
             return false;
         }
 
-        accumulator[candidate.ResolvedUrl] = new ImageAssetRequest(candidate.RawUrl, candidate.ResolvedUrl, referencedFrom);
+        accumulator[candidate.ResolvedUrl] = new ImageAssetRequest(
+            candidate.RawUrl,
+            candidate.ResolvedUrl,
+            referencedFrom,
+            candidate.Origin);
         return true;
     }
 
@@ -900,10 +1173,14 @@ public static class FrontEndDesignSnapshot
         private readonly HashSet<string> _stylesheetUrls = new(StringComparer.OrdinalIgnoreCase);
         private readonly HashSet<string> _fontUrls = new(StringComparer.OrdinalIgnoreCase);
         private readonly HashSet<string> _imageUrls = new(StringComparer.OrdinalIgnoreCase);
+        private readonly HashSet<string> _cssImageUrls = new(StringComparer.OrdinalIgnoreCase);
+        private readonly HashSet<string> _htmlImageUrls = new(StringComparer.OrdinalIgnoreCase);
         private readonly List<string> _cssSources = new();
         private readonly List<StylesheetSnapshot> _stylesheets = new();
         private readonly List<string> _fontUrlList = new();
         private readonly List<string> _imageUrlList = new();
+        private readonly List<string> _cssImageUrlList = new();
+        private readonly List<string> _htmlImageUrlList = new();
 
         public DesignPageSnapshotBuilder(string url)
         {
@@ -954,16 +1231,35 @@ public static class FrontEndDesignSnapshot
             }
         }
 
-        public void AddImageUrl(string? url)
+        public void AddImageUrl(string? url, DesignImageOrigin origin = DesignImageOrigin.Css)
         {
             if (string.IsNullOrWhiteSpace(url))
             {
                 return;
             }
 
-            if (_imageUrls.Add(url))
+            var normalized = url.Trim();
+            if (_imageUrls.Add(normalized))
             {
-                _imageUrlList.Add(url);
+                _imageUrlList.Add(normalized);
+            }
+
+            switch (origin)
+            {
+                case DesignImageOrigin.Html:
+                    if (_htmlImageUrls.Add(normalized))
+                    {
+                        _htmlImageUrlList.Add(normalized);
+                    }
+
+                    break;
+                default:
+                    if (_cssImageUrls.Add(normalized))
+                    {
+                        _cssImageUrlList.Add(normalized);
+                    }
+
+                    break;
             }
         }
 
@@ -983,6 +1279,18 @@ public static class FrontEndDesignSnapshot
                 .Cast<DesignImageSnapshot>()
                 .ToList();
 
+            var cssImageFiles = _cssImageUrlList
+                .Select(url => imageSnapshots.TryGetValue(url, out var snapshot) ? snapshot : null)
+                .Where(snapshot => snapshot is not null)
+                .Cast<DesignImageSnapshot>()
+                .ToList();
+
+            var htmlImageFiles = _htmlImageUrlList
+                .Select(url => imageSnapshots.TryGetValue(url, out var snapshot) ? snapshot : null)
+                .Where(snapshot => snapshot is not null)
+                .Cast<DesignImageSnapshot>()
+                .ToList();
+
             var cssAggregate = string.Join(
                 Environment.NewLine + Environment.NewLine,
                 _cssSources.Where(s => !string.IsNullOrWhiteSpace(s)));
@@ -997,6 +1305,8 @@ public static class FrontEndDesignSnapshot
                 _stylesheets,
                 fontFiles,
                 imageFiles,
+                cssImageFiles,
+                htmlImageFiles,
                 colorSwatches);
         }
     }
@@ -1083,7 +1393,7 @@ public static class FrontEndDesignSnapshot
 
     private readonly record struct FontUrlCandidate(string RawUrl, string ResolvedUrl, string? FontFamily, string? FontStyle, string? FontWeight);
 
-    private readonly record struct ImageUrlCandidate(string RawUrl, string ResolvedUrl);
+    private readonly record struct ImageUrlCandidate(string RawUrl, string ResolvedUrl, DesignImageOrigin Origin);
 
     private sealed class FontAssetRequest
     {
@@ -1134,7 +1444,56 @@ public static class FrontEndDesignSnapshot
         }
     }
 
-    private sealed record ImageAssetRequest(string RawUrl, string ResolvedUrl, string ReferencedFrom);
+    private sealed class ImageAssetRequest
+    {
+        private readonly HashSet<DesignImageOrigin> _originSet = new();
+        private readonly List<DesignImageOrigin> _originList = new();
+        private readonly HashSet<string> _referenceSet = new(StringComparer.OrdinalIgnoreCase);
+        private readonly List<string> _references = new();
+
+        public ImageAssetRequest(
+            string rawUrl,
+            string resolvedUrl,
+            string referencedFrom,
+            DesignImageOrigin origin)
+        {
+            RawUrl = rawUrl ?? string.Empty;
+            ResolvedUrl = resolvedUrl ?? string.Empty;
+            AddOrigin(origin);
+            AddReference(referencedFrom);
+        }
+
+        public string RawUrl { get; }
+
+        public string ResolvedUrl { get; }
+
+        public string ReferencedFrom => _references.Count > 0 ? _references[0] : string.Empty;
+
+        public IReadOnlyList<string> References => _references;
+
+        public IReadOnlyList<DesignImageOrigin> Origins => _originList;
+
+        public void AddOrigin(DesignImageOrigin origin)
+        {
+            if (_originSet.Add(origin))
+            {
+                _originList.Add(origin);
+            }
+        }
+
+        public void AddReference(string? reference)
+        {
+            if (string.IsNullOrWhiteSpace(reference))
+            {
+                return;
+            }
+
+            if (_referenceSet.Add(reference))
+            {
+                _references.Add(reference);
+            }
+        }
+    }
 
     private sealed record StylesheetRequest(string SourceUrl, string ResolvedUrl, string ReferencedFrom);
 }
@@ -1149,6 +1508,8 @@ public sealed class FrontEndDesignSnapshotResult
         IReadOnlyList<StylesheetSnapshot> stylesheets,
         IReadOnlyList<FontAssetSnapshot> fontFiles,
         IReadOnlyList<DesignImageSnapshot> imageFiles,
+        IReadOnlyList<DesignImageSnapshot> cssImageFiles,
+        IReadOnlyList<DesignImageSnapshot> htmlImageFiles,
         IReadOnlyList<ColorSwatch> colorSwatches,
         IReadOnlyList<DesignPageSnapshot>? pages = null,
         IReadOnlyList<string>? processedUrls = null)
@@ -1160,6 +1521,8 @@ public sealed class FrontEndDesignSnapshotResult
         Stylesheets = stylesheets ?? Array.Empty<StylesheetSnapshot>();
         FontFiles = fontFiles ?? Array.Empty<FontAssetSnapshot>();
         ImageFiles = imageFiles ?? Array.Empty<DesignImageSnapshot>();
+        CssImageFiles = cssImageFiles ?? Array.Empty<DesignImageSnapshot>();
+        HtmlImageFiles = htmlImageFiles ?? Array.Empty<DesignImageSnapshot>();
         ColorSwatches = colorSwatches ?? Array.Empty<ColorSwatch>();
         Pages = pages ?? Array.Empty<DesignPageSnapshot>();
         ProcessedUrls = processedUrls ?? Array.Empty<string>();
@@ -1179,6 +1542,10 @@ public sealed class FrontEndDesignSnapshotResult
 
     public IReadOnlyList<DesignImageSnapshot> ImageFiles { get; }
 
+    public IReadOnlyList<DesignImageSnapshot> CssImageFiles { get; }
+
+    public IReadOnlyList<DesignImageSnapshot> HtmlImageFiles { get; }
+
     public IReadOnlyList<ColorSwatch> ColorSwatches { get; }
 
     public IReadOnlyList<DesignPageSnapshot> Pages { get; }
@@ -1196,6 +1563,8 @@ public sealed class DesignPageSnapshot
         IReadOnlyList<StylesheetSnapshot> stylesheets,
         IReadOnlyList<FontAssetSnapshot> fontFiles,
         IReadOnlyList<DesignImageSnapshot> imageFiles,
+        IReadOnlyList<DesignImageSnapshot> cssImageFiles,
+        IReadOnlyList<DesignImageSnapshot> htmlImageFiles,
         IReadOnlyList<ColorSwatch> colorSwatches)
     {
         Url = url ?? string.Empty;
@@ -1205,6 +1574,8 @@ public sealed class DesignPageSnapshot
         Stylesheets = stylesheets ?? Array.Empty<StylesheetSnapshot>();
         FontFiles = fontFiles ?? Array.Empty<FontAssetSnapshot>();
         ImageFiles = imageFiles ?? Array.Empty<DesignImageSnapshot>();
+        CssImageFiles = cssImageFiles ?? Array.Empty<DesignImageSnapshot>();
+        HtmlImageFiles = htmlImageFiles ?? Array.Empty<DesignImageSnapshot>();
         ColorSwatches = colorSwatches ?? Array.Empty<ColorSwatch>();
     }
 
@@ -1221,6 +1592,10 @@ public sealed class DesignPageSnapshot
     public IReadOnlyList<FontAssetSnapshot> FontFiles { get; }
 
     public IReadOnlyList<DesignImageSnapshot> ImageFiles { get; }
+
+    public IReadOnlyList<DesignImageSnapshot> CssImageFiles { get; }
+
+    public IReadOnlyList<DesignImageSnapshot> HtmlImageFiles { get; }
 
     public IReadOnlyList<ColorSwatch> ColorSwatches { get; }
 }
@@ -1300,15 +1675,18 @@ public sealed class DesignImageSnapshot
     public DesignImageSnapshot(
         string sourceUrl,
         string resolvedUrl,
-        string referencedFrom,
+        IReadOnlyList<string> references,
         byte[] content,
-        string? contentType)
+        string? contentType,
+        IReadOnlyList<DesignImageOrigin> origins)
     {
         SourceUrl = sourceUrl ?? string.Empty;
         ResolvedUrl = resolvedUrl ?? string.Empty;
-        ReferencedFrom = referencedFrom ?? string.Empty;
+        References = references ?? Array.Empty<string>();
+        ReferencedFrom = References.Count > 0 ? References[0] : string.Empty;
         Content = content ?? Array.Empty<byte>();
         ContentType = contentType;
+        Origins = origins ?? Array.Empty<DesignImageOrigin>();
     }
 
     public string SourceUrl { get; }
@@ -1317,9 +1695,19 @@ public sealed class DesignImageSnapshot
 
     public string ReferencedFrom { get; }
 
+    public IReadOnlyList<string> References { get; }
+
     public byte[] Content { get; }
 
     public string? ContentType { get; }
+
+    public IReadOnlyList<DesignImageOrigin> Origins { get; }
+}
+
+public enum DesignImageOrigin
+{
+    Css,
+    Html
 }
 
 public sealed record ColorSwatch(string Value, int Count);
