@@ -1675,14 +1675,16 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
                         var fileSize = content.Length;
                         var sha256 = Convert.ToHexString(SHA256.HashData(content));
-                        var references = image?.References?
+                        IReadOnlyList<string>? references = image?.References?
                             .Where(r => !string.IsNullOrWhiteSpace(r))
                             .Distinct(StringComparer.OrdinalIgnoreCase)
                             .ToList();
-                        var origins = image?.Origins?
+                        IReadOnlyList<string>? origins = image?.Origins?
                             .Select(o => o.ToString().ToLowerInvariant())
                             .Distinct(StringComparer.OrdinalIgnoreCase)
                             .ToList();
+                        var safeReferences = references ?? Array.Empty<string>();
+                        var safeOrigins = origins ?? Array.Empty<string>();
 
                         imageManifest.Add(new Dictionary<string, object?>
                         {
@@ -1690,8 +1692,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
                             ["source_url"] = image?.SourceUrl,
                             ["resolved_url"] = image?.ResolvedUrl,
                             ["referenced_from"] = image?.ReferencedFrom,
-                            ["references"] = references ?? Array.Empty<string>(),
-                            ["origins"] = origins ?? Array.Empty<string>(),
+                            ["references"] = safeReferences,
+                            ["origins"] = safeOrigins,
                             ["content_type"] = image?.ContentType,
                             ["file_size_bytes"] = fileSize,
                             ["sha256"] = sha256
@@ -1743,10 +1745,11 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
                             var fileSize = content.Length;
                             var sha256 = Convert.ToHexString(SHA256.HashData(content));
-                            var references = icon?.References?
+                            IReadOnlyList<string>? references = icon?.References?
                                 .Where(r => !string.IsNullOrWhiteSpace(r))
                                 .Distinct(StringComparer.OrdinalIgnoreCase)
                                 .ToList();
+                            var safeReferences = references ?? Array.Empty<string>();
 
                             iconManifest.Add(new Dictionary<string, object?>
                             {
@@ -1754,7 +1757,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                                 ["source_url"] = icon?.SourceUrl,
                                 ["resolved_url"] = icon?.ResolvedUrl,
                                 ["referenced_from"] = icon?.ReferencedFrom,
-                                ["references"] = references ?? Array.Empty<string>(),
+                                ["references"] = safeReferences,
                                 ["content_type"] = icon?.ContentType,
                                 ["rel"] = icon?.Rel,
                                 ["link_type"] = icon?.LinkType,
