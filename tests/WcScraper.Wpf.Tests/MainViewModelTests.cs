@@ -393,6 +393,82 @@ public class MainViewModelTests
     }
 
     [Fact]
+    [SuppressMessage("xUnit.Analyzers", "xUnit1031", Justification = "Test drives an STA thread and must block until completion.")]
+    public async Task OnRunAsync_InvalidStoreUrl_ReportsFriendlyMessage()
+    {
+        var completion = new TaskCompletionSource<object?>();
+        var thread = new Thread(() =>
+        {
+            try
+            {
+                var createdApp = false;
+                var app = Application.Current;
+                if (app is null)
+                {
+                    app = new Application
+                    {
+                        ShutdownMode = ShutdownMode.OnExplicitShutdown
+                    };
+                    createdApp = true;
+                }
+
+                using var wooHandler = new StubHttpMessageHandler(_ => throw new InvalidOperationException("HTTP should not be called for invalid URLs."));
+                using var wooHttp = new HttpClient(wooHandler);
+                using var wooScraper = new WooScraper(wooHttp);
+                using var shopifyHandler = new StubHttpMessageHandler(_ => throw new InvalidOperationException("Shopify should not be called."));
+                using var shopifyHttp = new HttpClient(shopifyHandler);
+                using var shopifyScraper = new ShopifyScraper(shopifyHttp);
+                using var httpClient = new HttpClient(new StubHttpMessageHandler(_ => throw new InvalidOperationException("HTTP should not be called.")));
+
+                var ctor = typeof(MainViewModel).GetConstructor(
+                    BindingFlags.NonPublic | BindingFlags.Instance,
+                    binder: null,
+                    new[] { typeof(IDialogService), typeof(WooScraper), typeof(ShopifyScraper), typeof(HttpClient) },
+                    modifiers: null);
+                Assert.NotNull(ctor);
+
+                var viewModel = (MainViewModel)ctor!.Invoke(new object[]
+                {
+                    new StubDialogService(),
+                    wooScraper,
+                    shopifyScraper,
+                    httpClient
+                });
+
+                viewModel.StoreUrl = "not a url";
+                viewModel.SelectedPlatform = PlatformMode.WooCommerce;
+
+                var onRun = typeof(MainViewModel)
+                    .GetMethod("OnRunAsync", BindingFlags.NonPublic | BindingFlags.Instance);
+                Assert.NotNull(onRun);
+
+                var task = (Task)onRun!.Invoke(viewModel, Array.Empty<object>())!;
+                task.GetAwaiter().GetResult();
+
+                app.Dispatcher.Invoke(() =>
+                {
+                    Assert.Contains(viewModel.Logs, message => message.Contains("Invalid store URL", StringComparison.Ordinal));
+                });
+
+                if (createdApp)
+                {
+                    app.Shutdown();
+                }
+
+                completion.SetResult(null);
+            }
+            catch (Exception ex)
+            {
+                completion.SetException(ex);
+            }
+        });
+
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+        await completion.Task.ConfigureAwait(false);
+    }
+
+    [Fact]
     public async Task OnRunAsync_WooCommerce_WritesFilesToStoreFolder()
     {
         const string productResponse = """

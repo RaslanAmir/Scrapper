@@ -807,6 +807,16 @@ public sealed class MainViewModel : INotifyPropertyChanged
             return;
         }
 
+        try
+        {
+            targetUrl = WooScraper.CleanBaseUrl(targetUrl);
+        }
+        catch (ArgumentException ex)
+        {
+            Append($"Invalid store URL: {ex.Message}");
+            return;
+        }
+
         var retrySettings = GetRetrySettings();
         var retryPolicy = new HttpRetryPolicy(retrySettings.Attempts, retrySettings.BaseDelay, retrySettings.MaxDelay);
         _wooScraper.HttpPolicy = retryPolicy;
