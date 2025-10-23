@@ -1073,4 +1073,3 @@ public sealed record PublicExtensionDetectionSummary(
     bool ByteLimitReached,
     string? WordPressVersion,
     string? WooCommerceVersion);
-}
