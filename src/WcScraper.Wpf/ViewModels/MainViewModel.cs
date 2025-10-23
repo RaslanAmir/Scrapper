@@ -18,7 +18,6 @@ using System.Threading.Tasks;
 using WcScraper.Core;
 using WcScraper.Core.Exporters;
 using WcScraper.Core.Shopify;
-using WcScraper.Core.Models;
 using WcScraper.Wpf.Reporting;
 using WcScraper.Wpf.Services;
 

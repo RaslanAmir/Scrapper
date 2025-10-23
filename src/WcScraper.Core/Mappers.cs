@@ -142,19 +142,20 @@ public static class Mappers
 
         foreach (var product in topLevelProducts)
         {
-            var hasChildren = groupedVariations.TryGetValue(product.Id, out var children) && children.Count > 0;
-            yield return BuildWooParentRow(product, hasChildren);
-
-            if (!hasChildren)
+            if (groupedVariations.TryGetValue(product.Id, out var children) && children.Count > 0)
             {
+                yield return BuildWooParentRow(product, hasChildren: true);
+
+                foreach (var child in children)
+                {
+                    emittedVariations.Add(child);
+                    yield return BuildWooVariationRow(product, child);
+                }
+
                 continue;
             }
 
-            foreach (var child in children)
-            {
-                emittedVariations.Add(child);
-                yield return BuildWooVariationRow(product, child);
-            }
+            yield return BuildWooParentRow(product, hasChildren: false);
         }
 
         foreach (var variation in variationList)
