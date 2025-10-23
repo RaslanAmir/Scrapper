@@ -306,6 +306,8 @@
                 </Grid>
             </StackPanel>
         </GroupBox>
+            </Grid>
+        </ScrollViewer>
 
         <Grid Grid.Row="1">
             <Grid.RowDefinitions>
