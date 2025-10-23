@@ -16,6 +16,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Windows;
 using System.Windows.Input;
 using System.Windows.Threading;
 using WcScraper.Core;
@@ -118,6 +119,10 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private AiArtifactAnnotation? _latestRunAiAnnotation;
     private AssistantDirectiveBatch? _pendingAssistantDirectives;
     private readonly Dictionary<string, (Func<bool> Getter, Action<bool> Setter)> _assistantToggleBindings;
+    private readonly ObservableCollection<AutomationScriptDisplay> _latestAutomationScripts = new();
+    private readonly ObservableCollection<string> _latestAutomationScriptWarnings = new();
+    private string _latestAutomationScriptSummary = string.Empty;
+    private string _latestAutomationScriptError = string.Empty;
 
     public MainViewModel(IDialogService dialogs)
         : this(dialogs, new WooScraper(), new ShopifyScraper(), new HttpClient())
@@ -175,8 +180,11 @@ public sealed class MainViewModel : INotifyPropertyChanged
         ExplainLogsCommand = new RelayCommand(async () => await OnExplainLatestLogsAsync(), CanExplainLogs);
         SendChatCommand = new RelayCommand(async () => await OnSendChatAsync(), CanSendChat);
         UseAiRecommendationCommand = new RelayCommand<string?>(OnUseAiRecommendation);
+        CopyAutomationScriptCommand = new RelayCommand<AutomationScriptDisplay>(OnCopyAutomationScript);
         ChatMessages = new ObservableCollection<ChatMessage>();
         LatestRunAiRecommendations.CollectionChanged += (_, __) => OnPropertyChanged(nameof(HasAiRecommendations));
+        _latestAutomationScripts.CollectionChanged += (_, __) => OnPropertyChanged(nameof(HasAutomationScripts));
+        _latestAutomationScriptWarnings.CollectionChanged += (_, __) => OnPropertyChanged(nameof(HasAutomationScriptWarnings));
         Logs.CollectionChanged += OnLogsCollectionChanged;
         LoadPreferences();
         LoadChatApiKey();
@@ -1262,6 +1270,50 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
     public DateTimeOffset? LatestRunAiAnnotationTimestamp => LatestRunAiAnnotation?.GeneratedAt;
 
+    public ObservableCollection<AutomationScriptDisplay> LatestAutomationScripts => _latestAutomationScripts;
+
+    public ObservableCollection<string> LatestAutomationScriptWarnings => _latestAutomationScriptWarnings;
+
+    public string LatestAutomationScriptSummary
+    {
+        get => _latestAutomationScriptSummary;
+        private set
+        {
+            if (_latestAutomationScriptSummary == value)
+            {
+                return;
+            }
+
+            _latestAutomationScriptSummary = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(HasAutomationScriptSummary));
+        }
+    }
+
+    public string LatestAutomationScriptError
+    {
+        get => _latestAutomationScriptError;
+        private set
+        {
+            if (_latestAutomationScriptError == value)
+            {
+                return;
+            }
+
+            _latestAutomationScriptError = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(HasAutomationScriptError));
+        }
+    }
+
+    public bool HasAutomationScripts => LatestAutomationScripts.Count > 0;
+
+    public bool HasAutomationScriptWarnings => LatestAutomationScriptWarnings.Count > 0;
+
+    public bool HasAutomationScriptError => !string.IsNullOrWhiteSpace(LatestAutomationScriptError);
+
+    public bool HasAutomationScriptSummary => !string.IsNullOrWhiteSpace(LatestAutomationScriptSummary);
+
     public bool IsAssistantPanelExpanded
     {
         get => _isAssistantPanelExpanded;
@@ -1305,6 +1357,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public RelayCommand OpenLogCommand { get; }
     public RelayCommand ExplainLogsCommand { get; }
     public ICommand UseAiRecommendationCommand { get; }
+    public ICommand CopyAutomationScriptCommand { get; }
 
     private void OnBrowse()
     {
@@ -1341,6 +1394,23 @@ public sealed class MainViewModel : INotifyPropertyChanged
             ChatInput = trimmed;
             IsAssistantPanelExpanded = true;
         });
+    }
+
+    private void OnCopyAutomationScript(AutomationScriptDisplay? script)
+    {
+        if (script is null || string.IsNullOrWhiteSpace(script.Content))
+        {
+            return;
+        }
+
+        try
+        {
+            Clipboard.SetText(script.Content);
+        }
+        catch (Exception ex)
+        {
+            Append($"Unable to copy script to clipboard: {ex.Message}");
+        }
     }
 
     private async Task OnSendChatAsync()
@@ -2396,6 +2466,10 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 LatestRunSnapshotJson = string.Empty;
                 LatestRunAiNarrative = string.Empty;
                 LatestRunAiBriefPath = null;
+                LatestAutomationScriptSummary = string.Empty;
+                LatestAutomationScriptError = string.Empty;
+                LatestAutomationScriptWarnings.Clear();
+                LatestAutomationScripts.Clear();
             });
             UpdateAiRecommendations(null);
             var baseOutputFolder = ResolveBaseOutputFolder();
@@ -3729,6 +3803,142 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 chatSession = new ChatSessionSettings(ChatApiEndpoint, ChatApiKey, ChatModel, ChatSystemPrompt);
             }
 
+            var automationReferences = new List<ManualMigrationAutomationScript>();
+            var automationDisplays = new List<AutomationScriptDisplay>();
+            var automationWarnings = new List<string>();
+            string? automationSummary = null;
+            string? automationError = null;
+
+            if (chatSession is null)
+            {
+                automationError = "Configure the assistant to generate automation scripts before running.";
+                Append("Automation scripts skipped: assistant configuration missing.");
+            }
+            else
+            {
+                try
+                {
+                    var scriptResult = await _chatAssistantService.GenerateMigrationScriptsAsync(
+                        chatSession,
+                        runSnapshotJson,
+                        runGoals,
+                        CancellationToken.None);
+
+                    if (!string.IsNullOrWhiteSpace(scriptResult.Summary))
+                    {
+                        automationSummary = scriptResult.Summary.Trim();
+                    }
+
+                    if (!string.IsNullOrWhiteSpace(scriptResult.Error))
+                    {
+                        automationError = scriptResult.Error.Trim();
+                    }
+
+                    foreach (var warning in scriptResult.Warnings)
+                    {
+                        if (!string.IsNullOrWhiteSpace(warning))
+                        {
+                            automationWarnings.Add(warning.Trim());
+                        }
+                    }
+
+                    if (scriptResult.Scripts.Count > 0)
+                    {
+                        var scriptsFolder = Path.Combine(storeOutputFolder, "manual-migration-scripts");
+                        Directory.CreateDirectory(scriptsFolder);
+                        Append($"Saving automation scripts to {scriptsFolder}…");
+
+                        var usedNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                        var index = 0;
+                        foreach (var script in scriptResult.Scripts)
+                        {
+                            if (string.IsNullOrWhiteSpace(script.Content))
+                            {
+                                automationWarnings.Add($"Script '{script.Name}' was skipped because it did not include any content.");
+                                continue;
+                            }
+
+                            var fileName = ResolveAutomationScriptFileName(script, index++, usedNames);
+                            var scriptPath = Path.Combine(scriptsFolder, fileName);
+                            await File.WriteAllTextAsync(scriptPath, script.Content, Encoding.UTF8);
+                            Append($"Automation script saved: {scriptPath}");
+
+                            var relativePath = TryGetStoreRelativePath(storeOutputFolder, scriptPath) ?? scriptPath;
+
+                            automationReferences.Add(new ManualMigrationAutomationScript(
+                                script.Name,
+                                script.Description,
+                                script.Language,
+                                scriptPath,
+                                fileName,
+                                script.Notes));
+
+                            automationDisplays.Add(new AutomationScriptDisplay(
+                                script.Name,
+                                script.Description,
+                                script.Language,
+                                script.Content,
+                                scriptPath,
+                                relativePath,
+                                script.Notes));
+                        }
+
+                        if (automationReferences.Count > 0)
+                        {
+                            Append($"Saved {automationReferences.Count} automation script(s).");
+                        }
+                        else if (automationWarnings.Count == 0 && string.IsNullOrWhiteSpace(automationError))
+                        {
+                            automationWarnings.Add("The assistant did not produce any automation scripts with content.");
+                        }
+                    }
+                    else if (automationWarnings.Count == 0 && string.IsNullOrWhiteSpace(automationError))
+                    {
+                        automationWarnings.Add("The assistant did not return any automation scripts for this run.");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    automationError = ex.Message;
+                    Append($"Automation script generation failed: {ex.Message}");
+                }
+            }
+
+            var distinctWarnings = automationWarnings
+                .Where(warning => !string.IsNullOrWhiteSpace(warning))
+                .Select(warning => warning.Trim())
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+
+            var automationScriptSet = new ManualMigrationAutomationScriptSet(
+                string.IsNullOrWhiteSpace(automationSummary) ? null : automationSummary,
+                automationReferences.Count > 0 ? automationReferences.ToArray() : Array.Empty<ManualMigrationAutomationScript>(),
+                distinctWarnings,
+                string.IsNullOrWhiteSpace(automationError) ? null : automationError);
+
+            reportContext = reportContext with { AutomationScripts = automationScriptSet };
+
+            var summaryForUi = automationSummary ?? string.Empty;
+            var errorForUi = automationError ?? string.Empty;
+            var scriptsForUi = automationDisplays.ToArray();
+
+            ExecuteOnUiThread(() =>
+            {
+                LatestAutomationScriptSummary = summaryForUi;
+                LatestAutomationScriptError = errorForUi;
+                LatestAutomationScriptWarnings.Clear();
+                foreach (var warning in distinctWarnings)
+                {
+                    LatestAutomationScriptWarnings.Add(warning);
+                }
+
+                LatestAutomationScripts.Clear();
+                foreach (var script in scriptsForUi)
+                {
+                    LatestAutomationScripts.Add(script);
+                }
+            });
+
             var reportBuilder = new ManualMigrationReportBuilder(_chatAssistantService);
             var reportResult = await reportBuilder.BuildAsync(reportContext, chatSession, CancellationToken.None);
             var report = reportResult.ReportMarkdown;
@@ -5058,6 +5268,87 @@ public sealed class MainViewModel : INotifyPropertyChanged
         }
     }
 
+    private static string ResolveAutomationScriptFileName(MigrationAutomationScript script, int index, HashSet<string> usedNames)
+    {
+        if (usedNames is null)
+        {
+            throw new ArgumentNullException(nameof(usedNames));
+        }
+
+        var baseStem = string.Empty;
+        var extension = GuessScriptExtension(script.Language);
+
+        if (!string.IsNullOrWhiteSpace(script.FileName))
+        {
+            var candidate = Path.GetFileName(script.FileName.Trim());
+            if (!string.IsNullOrWhiteSpace(candidate))
+            {
+                var candidateStem = Path.GetFileNameWithoutExtension(candidate);
+                if (!string.IsNullOrWhiteSpace(candidateStem))
+                {
+                    baseStem = SanitizeForPath(candidateStem);
+                }
+
+                var candidateExtension = Path.GetExtension(candidate);
+                if (!string.IsNullOrWhiteSpace(candidateExtension))
+                {
+                    extension = candidateExtension;
+                }
+            }
+        }
+
+        if (string.IsNullOrWhiteSpace(baseStem) && !string.IsNullOrWhiteSpace(script.Name))
+        {
+            baseStem = SanitizeForPath(script.Name);
+        }
+
+        if (string.IsNullOrWhiteSpace(baseStem) || baseStem.Equals("store", StringComparison.OrdinalIgnoreCase))
+        {
+            baseStem = $"script-{index + 1}";
+        }
+
+        if (string.IsNullOrWhiteSpace(extension))
+        {
+            extension = GuessScriptExtension(script.Language);
+        }
+
+        if (!extension.StartsWith('.', StringComparison.Ordinal))
+        {
+            extension = "." + extension.Trim();
+        }
+
+        var candidateName = baseStem + extension;
+        var attempt = 1;
+        while (usedNames.Contains(candidateName))
+        {
+            attempt++;
+            candidateName = $"{baseStem}-{attempt}{extension}";
+        }
+
+        usedNames.Add(candidateName);
+        return candidateName;
+    }
+
+    private static string GuessScriptExtension(string? language)
+    {
+        if (string.IsNullOrWhiteSpace(language))
+        {
+            return ".txt";
+        }
+
+        return language.Trim().ToLowerInvariant() switch
+        {
+            "shell" or "bash" or "sh" or "zsh" or "wp-cli" => ".sh",
+            "powershell" or "ps" => ".ps1",
+            "python" or "py" => ".py",
+            "rest" or "http" => ".http",
+            "json" => ".json",
+            "php" => ".php",
+            "js" or "javascript" => ".js",
+            _ => ".txt"
+        };
+    }
+
     private static string? TryGetStoreRelativePath(string root, string path)
     {
         if (string.IsNullOrWhiteSpace(root) || string.IsNullOrWhiteSpace(path))
@@ -5091,6 +5382,15 @@ public sealed class MainViewModel : INotifyPropertyChanged
         var sanitized = SanitizeForPath(value);
         return string.IsNullOrWhiteSpace(sanitized) ? "segment" : sanitized;
     }
+
+    private sealed record AutomationScriptDisplay(
+        string Name,
+        string? Description,
+        string Language,
+        string Content,
+        string FilePath,
+        string RelativePath,
+        IReadOnlyList<string> Notes);
 
     private void SetProvisioningContext(
         List<StoreProduct> products,

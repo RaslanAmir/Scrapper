@@ -23,6 +23,11 @@ public sealed class ChatAssistantService
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
     };
 
+    private static readonly JsonSerializerOptions s_scriptPayloadOptions = new()
+    {
+        PropertyNameCaseInsensitive = true,
+    };
+
     public async IAsyncEnumerable<string> StreamChatCompletionAsync(
         ChatSessionSettings settings,
         IReadOnlyList<ChatMessage> history,
@@ -379,6 +384,100 @@ public sealed class ChatAssistantService
         var choice = response.Value.Choices.FirstOrDefault();
         var content = choice?.Message?.Content;
         return string.IsNullOrWhiteSpace(content) ? null : content.Trim();
+    }
+
+    public async Task<MigrationScriptGenerationResult> GenerateMigrationScriptsAsync(
+        ChatSessionSettings settings,
+        string runSnapshotJson,
+        string? operatorGoals,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+
+        if (string.IsNullOrWhiteSpace(runSnapshotJson))
+        {
+            return MigrationScriptGenerationResult.Empty;
+        }
+
+        if (string.IsNullOrWhiteSpace(settings.ApiKey))
+        {
+            throw new ArgumentException("An API key is required.", nameof(settings));
+        }
+
+        if (string.IsNullOrWhiteSpace(settings.Endpoint))
+        {
+            throw new ArgumentException("An endpoint is required.", nameof(settings));
+        }
+
+        if (!Uri.TryCreate(settings.Endpoint, UriKind.Absolute, out var endpoint))
+        {
+            throw new ArgumentException("The API endpoint must be an absolute URI.", nameof(settings));
+        }
+
+        if (string.IsNullOrWhiteSpace(settings.Model))
+        {
+            throw new ArgumentException("A model or deployment identifier is required.", nameof(settings));
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var client = new OpenAIClient(endpoint, new AzureKeyCredential(settings.ApiKey));
+
+        var options = new ChatCompletionsOptions
+        {
+            DeploymentName = settings.Model,
+            Temperature = 0.1f,
+        };
+
+        var systemPrompt = new StringBuilder();
+        if (!string.IsNullOrWhiteSpace(settings.SystemPrompt))
+        {
+            systemPrompt.AppendLine(settings.SystemPrompt.Trim());
+            systemPrompt.AppendLine();
+        }
+
+        systemPrompt.AppendLine("You turn storefront migration run data into executable automation snippets.");
+        systemPrompt.AppendLine("Output practical WP-CLI commands, shell scripts, or REST examples that accelerate manual work.");
+        systemPrompt.AppendLine("Respond ONLY with compact JSON using this schema:");
+        systemPrompt.AppendLine("{");
+        systemPrompt.AppendLine("  \"summary\": \"high level plan\",");
+        systemPrompt.AppendLine("  \"warnings\": [\"cautionary note\"],");
+        systemPrompt.AppendLine("  \"error\": \"explain fatal issues or null\",");
+        systemPrompt.AppendLine("  \"scripts\": [");
+        systemPrompt.AppendLine("    {\"name\": \"WP-CLI install\", \"description\": \"what it does\", \"language\": \"shell|wp-cli|powershell|rest|http|python\", \"filename\": \"optional-file-name.sh\", \"content\": \"script body\", \"notes\": [\"optional tip\"]}");
+        systemPrompt.AppendLine("  ]");
+        systemPrompt.AppendLine("}");
+        systemPrompt.AppendLine("Return an empty scripts array if nothing actionable exists. Do not use markdown fences.");
+
+        options.Messages.Add(new Azure.AI.OpenAI.ChatMessage(ChatRole.System, systemPrompt.ToString()));
+
+        var userPrompt = new StringBuilder();
+        userPrompt.AppendLine("Generate 1-3 concise automation snippets that help an operator execute the migration goals.");
+        userPrompt.AppendLine("Prefer idempotent commands that can be run safely. Include WP-CLI install/activate steps when useful.");
+        userPrompt.AppendLine("Call out prerequisites (e.g., credentials, directories) in the notes field.");
+
+        var goals = operatorGoals?.Trim();
+        if (!string.IsNullOrWhiteSpace(goals))
+        {
+            userPrompt.AppendLine();
+            userPrompt.AppendLine("Operator goals:");
+            userPrompt.AppendLine(goals);
+        }
+
+        userPrompt.AppendLine();
+        userPrompt.AppendLine("Run snapshot (JSON):");
+        userPrompt.AppendLine("```json");
+        userPrompt.AppendLine(runSnapshotJson.Trim());
+        userPrompt.AppendLine("```");
+        userPrompt.AppendLine();
+        userPrompt.AppendLine("Return JSON only.");
+
+        options.Messages.Add(new Azure.AI.OpenAI.ChatMessage(ChatRole.User, userPrompt.ToString()));
+
+        var response = await client.GetChatCompletionsAsync(options, cancellationToken).ConfigureAwait(false);
+        var choice = response.Value.Choices.FirstOrDefault();
+        var content = choice?.Message?.Content;
+        return ParseAutomationScriptPayload(content);
     }
 
     public async Task<AiArtifactAnnotation?> AnnotateArtifactsAsync(
@@ -801,6 +900,85 @@ public sealed class ChatAssistantService
         }
     }
 
+    private static MigrationScriptGenerationResult ParseAutomationScriptPayload(string? response)
+    {
+        if (string.IsNullOrWhiteSpace(response))
+        {
+            return new MigrationScriptGenerationResult(
+                null,
+                Array.Empty<MigrationAutomationScript>(),
+                Array.Empty<string>(),
+                "Empty response from model.");
+        }
+
+        var jsonText = ExtractJsonPayload(response);
+        if (string.IsNullOrWhiteSpace(jsonText))
+        {
+            return new MigrationScriptGenerationResult(
+                null,
+                Array.Empty<MigrationAutomationScript>(),
+                Array.Empty<string>(),
+                "Assistant response did not contain JSON.");
+        }
+
+        try
+        {
+            var payload = JsonSerializer.Deserialize<AutomationScriptPayload>(jsonText, s_scriptPayloadOptions);
+            if (payload is null)
+            {
+                return new MigrationScriptGenerationResult(
+                    null,
+                    Array.Empty<MigrationAutomationScript>(),
+                    Array.Empty<string>(),
+                    "Assistant returned an empty payload.");
+            }
+
+            var scripts = payload.Scripts?.Select(script =>
+            {
+                if (string.IsNullOrWhiteSpace(script.Content))
+                {
+                    return null;
+                }
+
+                var language = string.IsNullOrWhiteSpace(script.Language)
+                    ? "shell"
+                    : script.Language.Trim();
+
+                var notes = script.Notes?.Where(note => !string.IsNullOrWhiteSpace(note))
+                    .Select(note => note.Trim())
+                    .ToArray() ?? Array.Empty<string>();
+
+                return new MigrationAutomationScript(
+                    string.IsNullOrWhiteSpace(script.Name) ? "Automation script" : script.Name.Trim(),
+                    string.IsNullOrWhiteSpace(script.Description) ? null : script.Description.Trim(),
+                    language,
+                    script.Content.Trim(),
+                    string.IsNullOrWhiteSpace(script.FileName) ? null : script.FileName.Trim(),
+                    notes);
+            })
+            .Where(item => item is not null)
+            .Cast<MigrationAutomationScript>()
+            .ToArray() ?? Array.Empty<MigrationAutomationScript>();
+
+            var warnings = payload.Warnings?.Where(warning => !string.IsNullOrWhiteSpace(warning))
+                .Select(warning => warning.Trim())
+                .ToArray() ?? Array.Empty<string>();
+
+            var summary = string.IsNullOrWhiteSpace(payload.Summary) ? null : payload.Summary.Trim();
+            var error = string.IsNullOrWhiteSpace(payload.Error) ? null : payload.Error.Trim();
+
+            return new MigrationScriptGenerationResult(summary, scripts, warnings, error);
+        }
+        catch (JsonException ex)
+        {
+            return new MigrationScriptGenerationResult(
+                null,
+                Array.Empty<MigrationAutomationScript>(),
+                Array.Empty<string>(),
+                $"Failed to parse automation script payload: {ex.Message}");
+        }
+    }
+
     private static AiArtifactAnnotation? ParseArtifactAnnotation(string response)
     {
         if (string.IsNullOrWhiteSpace(response))
@@ -929,6 +1107,24 @@ public sealed class ChatAssistantService
         }
 
         return trimmed.Substring(firstBrace, lastBrace - firstBrace + 1);
+    }
+
+    private sealed class AutomationScriptPayload
+    {
+        public string? Summary { get; set; }
+        public List<string>? Warnings { get; set; }
+        public string? Error { get; set; }
+        public List<AutomationScriptPayloadItem>? Scripts { get; set; }
+    }
+
+    private sealed class AutomationScriptPayloadItem
+    {
+        public string? Name { get; set; }
+        public string? Description { get; set; }
+        public string? Language { get; set; }
+        public string? FileName { get; set; }
+        public string? Content { get; set; }
+        public List<string>? Notes { get; set; }
     }
 
     private static ChatRole ToChatRole(ChatMessageRole role)

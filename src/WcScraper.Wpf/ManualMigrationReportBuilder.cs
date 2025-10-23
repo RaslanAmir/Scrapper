@@ -64,6 +64,8 @@ internal sealed class ManualMigrationReportBuilder
         builder.AppendLine();
         AppendDesignSection(builder, context);
         builder.AppendLine();
+        AppendAutomationScriptsSection(builder, context);
+        builder.AppendLine();
 
         var (annotation, annotationError) = await TryAnnotateArtifactsAsync(context, chatSession, cancellationToken).ConfigureAwait(false);
         if (annotation is not null)
@@ -397,6 +399,78 @@ internal sealed class ManualMigrationReportBuilder
         AppendDesignScreenshots(builder, context);
     }
 
+    private static void AppendAutomationScriptsSection(StringBuilder builder, ManualMigrationReportContext context)
+    {
+        builder.AppendLine("## Automation scripts");
+
+        var scripts = context.AutomationScripts;
+        if (scripts is null)
+        {
+            builder.AppendLine("Automation scripts were not generated for this run.");
+            return;
+        }
+
+        if (!string.IsNullOrWhiteSpace(scripts.Error))
+        {
+            builder.AppendLine($"> ⚠️ {MarkdownEscape(scripts.Error)}");
+            builder.AppendLine();
+        }
+
+        if (!string.IsNullOrWhiteSpace(scripts.Summary))
+        {
+            builder.AppendLine(MarkdownEscape(scripts.Summary));
+            builder.AppendLine();
+        }
+
+        if (scripts.Warnings.Count > 0)
+        {
+            builder.AppendLine("Warnings:");
+            foreach (var warning in scripts.Warnings)
+            {
+                if (string.IsNullOrWhiteSpace(warning))
+                {
+                    continue;
+                }
+
+                builder.AppendLine($"- {MarkdownEscape(warning)}");
+            }
+
+            builder.AppendLine();
+        }
+
+        if (scripts.Scripts.Count == 0)
+        {
+            builder.AppendLine("No automation scripts were saved for this run.");
+            return;
+        }
+
+        builder.AppendLine("Saved files:");
+        foreach (var script in scripts.Scripts)
+        {
+            var relativePath = TryGetRelativePath(context.OutputFolder, script.FilePath) ?? script.FileName ?? script.FilePath;
+            builder.AppendLine($"- **{MarkdownEscape(script.Name)}** ({MarkdownEscape(script.Language)})");
+            if (!string.IsNullOrWhiteSpace(script.Description))
+            {
+                builder.AppendLine($"  - {MarkdownEscape(script.Description)}");
+            }
+
+            builder.AppendLine($"  - Saved to `{MarkdownEscape(relativePath)}`.");
+
+            if (script.Notes.Count > 0)
+            {
+                foreach (var note in script.Notes)
+                {
+                    if (string.IsNullOrWhiteSpace(note))
+                    {
+                        continue;
+                    }
+
+                    builder.AppendLine($"  - {MarkdownEscape(note)}");
+                }
+            }
+        }
+    }
+
     private static void AppendDesignSnapshotSummary(StringBuilder builder, ManualMigrationReportContext context)
     {
         builder.AppendLine("### Snapshot summary");
@@ -628,6 +702,36 @@ internal sealed class ManualMigrationReportBuilder
             builder.AppendLine($"- {MarkdownEscape(screenshot.Label)} ({screenshot.Width}×{screenshot.Height}): `{screenshot.FilePath}`");
         }
     }
+
+    private static string? TryGetRelativePath(string? root, string? target)
+    {
+        if (string.IsNullOrWhiteSpace(target))
+        {
+            return null;
+        }
+
+        if (string.IsNullOrWhiteSpace(root))
+        {
+            return NormalizePathSeparators(target);
+        }
+
+        try
+        {
+            var relative = Path.GetRelativePath(root, target);
+            if (string.IsNullOrWhiteSpace(relative))
+            {
+                return NormalizePathSeparators(target);
+            }
+
+            return NormalizePathSeparators(relative);
+        }
+        catch
+        {
+            return NormalizePathSeparators(target);
+        }
+    }
+
+    private static string NormalizePathSeparators(string path) => path.Replace("\\", "/");
 
     private static string? ExtractPrimaryFontFamily(string? fontFamilyValue)
     {
@@ -962,7 +1066,22 @@ internal sealed record ManualMigrationReportContext(
     int HttpRetryAttempts,
     TimeSpan HttpRetryBaseDelay,
     TimeSpan HttpRetryMaxDelay,
-    AiArtifactIntelligencePayload? ArtifactIntelligence);
+    AiArtifactIntelligencePayload? ArtifactIntelligence,
+    ManualMigrationAutomationScriptSet? AutomationScripts = null);
+
+internal sealed record ManualMigrationAutomationScriptSet(
+    string? Summary,
+    IReadOnlyList<ManualMigrationAutomationScript> Scripts,
+    IReadOnlyList<string> Warnings,
+    string? Error);
+
+internal sealed record ManualMigrationAutomationScript(
+    string Name,
+    string? Description,
+    string Language,
+    string FilePath,
+    string FileName,
+    IReadOnlyList<string> Notes);
 
 internal sealed record ManualMigrationReportBuildResult(
     string ReportMarkdown,
