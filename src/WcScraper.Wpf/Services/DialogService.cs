@@ -1,7 +1,7 @@
 using System;
 using System.Collections.ObjectModel;
 using System.Windows;
-using System.Windows.Forms;
+using Forms = System.Windows.Forms;
 using WcScraper.Wpf.Views;
 
 namespace WcScraper.Wpf.Services;
@@ -18,11 +18,11 @@ public sealed class DialogService : IDialogService
 
     public string? BrowseForFolder(string? initial = null)
     {
-        using var dlg = new FolderBrowserDialog();
+        using var dlg = new Forms.FolderBrowserDialog();
         if (!string.IsNullOrWhiteSpace(initial))
             dlg.SelectedPath = initial;
         dlg.ShowNewFolderButton = true;
-        return dlg.ShowDialog() == DialogResult.OK ? dlg.SelectedPath : null;
+        return dlg.ShowDialog() == Forms.DialogResult.OK ? dlg.SelectedPath : null;
     }
 
     public void ShowLogWindow(ObservableCollection<string> logs)
@@ -34,9 +34,9 @@ public sealed class DialogService : IDialogService
 
         if (!_logWindow.IsVisible)
         {
-            if (Application.Current?.MainWindow is not null)
+            if (System.Windows.Application.Current?.MainWindow is not null)
             {
-                _logWindow.Owner = Application.Current.MainWindow;
+                _logWindow.Owner = System.Windows.Application.Current.MainWindow;
             }
 
             _logWindow.Show();

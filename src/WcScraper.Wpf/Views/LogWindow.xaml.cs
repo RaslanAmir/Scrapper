@@ -43,7 +43,7 @@ public partial class LogWindow : Window
             builder.Append(entry);
         }
 
-        Clipboard.SetText(builder.ToString());
+        System.Windows.Clipboard.SetText(builder.ToString());
     }
 
     private void OnClear(object sender, RoutedEventArgs e)
