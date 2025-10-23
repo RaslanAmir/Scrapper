@@ -122,10 +122,10 @@ public sealed class HttpRetryPolicy
 
             if (retryAfter.Date is { } date)
             {
-                var delta = date - DateTimeOffset.UtcNow;
-                if (delta > TimeSpan.Zero)
+                var dateDelta = date - DateTimeOffset.UtcNow;
+                if (dateDelta > TimeSpan.Zero)
                 {
-                    return ApplyMaxDelay(delta);
+                    return ApplyMaxDelay(dateDelta);
                 }
             }
         }
