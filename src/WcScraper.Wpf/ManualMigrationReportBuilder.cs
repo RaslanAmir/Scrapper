@@ -223,7 +223,7 @@ internal sealed class ManualMigrationReportBuilder
 
     private static void AppendPublicExtensionFootprints(StringBuilder builder, ManualMigrationReportContext context)
     {
-        builder.AppendLine("### Public plugin/theme slugs");
+        builder.AppendLine("### Public plugin/theme/mu-plugin slugs");
         var detection = context.PublicExtensionDetection;
         if (detection is not null && (detection.PageLimitReached || detection.ByteLimitReached))
         {
@@ -240,7 +240,7 @@ internal sealed class ManualMigrationReportBuilder
         if (context.PublicExtensions.Count == 0)
         {
             var message = context.AttemptedPublicExtensionFootprintFetch
-                ? "No public plugin/theme slugs were detected."
+                ? "No public plugin/theme/mu-plugin slugs were detected."
                 : "Slug detection runs when authenticated exports are unavailable.";
             builder.AppendLine(message);
             return;
