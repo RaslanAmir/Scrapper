@@ -153,6 +153,24 @@ public sealed class WooScraper : IDisposable
             return await _http.SendAsync(request, completionOption, cancellationToken).ConfigureAwait(false);
         }, cancellationToken, onRetry);
 
+    private static Action<HttpRetryAttempt>? CreateRetryReporter(IProgress<string>? log, string target)
+        => log is null ? null : attempt => ReportRetry(log, target, attempt);
+
+    private static void ReportRetry(IProgress<string> log, string target, HttpRetryAttempt attempt)
+    {
+        string delay;
+        if (attempt.Delay.TotalSeconds >= 1)
+        {
+            delay = $"{attempt.Delay.TotalSeconds:F1}s";
+        }
+        else
+        {
+            delay = $"{Math.Max(1, attempt.Delay.TotalMilliseconds):F0}ms";
+        }
+
+        log.Report($"Retrying {target} in {delay} (attempt {attempt.AttemptNumber}): {attempt.Reason}");
+    }
+
     public async Task<List<StoreProduct>> FetchStoreProductsAsync(
         string baseUrl,
         int perPage = 100,
@@ -172,7 +190,7 @@ public sealed class WooScraper : IDisposable
             try
             {
                 log?.Report($"GET {url}");
-                using var resp = await GetWithRetryAsync(url);
+                using var resp = await GetWithRetryAsync(url, default, CreateRetryReporter(log, url));
                 if (!resp.IsSuccessStatusCode)
                 {
                     if ((int)resp.StatusCode == 404) break;
@@ -271,7 +289,7 @@ public sealed class WooScraper : IDisposable
             try
             {
                 log?.Report($"GET {url}");
-                using var resp = await GetWithRetryAsync(url);
+                using var resp = await GetWithRetryAsync(url, default, CreateRetryReporter(log, url));
                 if (!resp.IsSuccessStatusCode)
                 {
                     if ((int)resp.StatusCode == 404)
@@ -676,7 +694,7 @@ public sealed class WooScraper : IDisposable
                     var request = new HttpRequestMessage(HttpMethod.Get, url);
                     request.Headers.Authorization = CreateBasicAuthHeader(username, applicationPassword);
                     return request;
-                });
+                }, default, CreateRetryReporter(log, url));
                 if (!resp.IsSuccessStatusCode)
                 {
                     if ((int)resp.StatusCode == 404)
@@ -778,7 +796,7 @@ public sealed class WooScraper : IDisposable
                     var request = new HttpRequestMessage(HttpMethod.Get, url);
                     request.Headers.Authorization = CreateBasicAuthHeader(username, applicationPassword);
                     return request;
-                });
+                }, default, CreateRetryReporter(log, url));
                 if (!resp.IsSuccessStatusCode)
                 {
                     if ((int)resp.StatusCode == 404)
@@ -1118,7 +1136,7 @@ public sealed class WooScraper : IDisposable
             try
             {
                 log?.Report($"GET {url}");
-                using var resp = await GetWithRetryAsync(url);
+                using var resp = await GetWithRetryAsync(url, default, CreateRetryReporter(log, url));
                 if (!resp.IsSuccessStatusCode) continue;
 
                 var text = await resp.Content.ReadAsStringAsync();
@@ -1270,7 +1288,7 @@ public sealed class WooScraper : IDisposable
                     var request = new HttpRequestMessage(HttpMethod.Get, url);
                     request.Headers.Authorization = CreateBasicAuthHeader(username, applicationPassword);
                     return request;
-                });
+                }, default, CreateRetryReporter(log, url));
                 if (!resp.IsSuccessStatusCode)
                 {
                     if (resp.StatusCode == HttpStatusCode.NotFound)
@@ -1355,7 +1373,7 @@ public sealed class WooScraper : IDisposable
                     var request = new HttpRequestMessage(HttpMethod.Get, url);
                     request.Headers.Authorization = CreateBasicAuthHeader(username, applicationPassword);
                     return request;
-                });
+                }, default, CreateRetryReporter(log, url));
                 if (!resp.IsSuccessStatusCode)
                 {
                     if (resp.StatusCode == HttpStatusCode.NotFound)
@@ -1440,7 +1458,7 @@ public sealed class WooScraper : IDisposable
                     var request = new HttpRequestMessage(HttpMethod.Get, url);
                     request.Headers.Authorization = CreateBasicAuthHeader(username, applicationPassword);
                     return request;
-                });
+                }, default, CreateRetryReporter(log, url));
                 if (!resp.IsSuccessStatusCode)
                 {
                     if (resp.StatusCode == HttpStatusCode.NotFound)
@@ -1525,7 +1543,7 @@ public sealed class WooScraper : IDisposable
                     var request = new HttpRequestMessage(HttpMethod.Get, url);
                     request.Headers.Authorization = CreateBasicAuthHeader(username, applicationPassword);
                     return request;
-                });
+                }, default, CreateRetryReporter(log, url));
                 if (!resp.IsSuccessStatusCode)
                 {
                     if (resp.StatusCode == HttpStatusCode.NotFound)
@@ -1597,7 +1615,7 @@ public sealed class WooScraper : IDisposable
             try
             {
                 log?.Report($"GET {url}");
-                using var resp = await GetWithRetryAsync(url);
+                using var resp = await GetWithRetryAsync(url, default, CreateRetryReporter(log, url));
                 if (!resp.IsSuccessStatusCode)
                 {
                     if ((int)resp.StatusCode == 404) break;
@@ -1706,7 +1724,7 @@ public sealed class WooScraper : IDisposable
         try
         {
             log?.Report($"GET {url}");
-            using var resp = await GetWithRetryAsync(url);
+            using var resp = await GetWithRetryAsync(url, default, CreateRetryReporter(log, url));
             if (!resp.IsSuccessStatusCode) return new();
 
             var text = await resp.Content.ReadAsStringAsync();
@@ -1747,7 +1765,7 @@ public sealed class WooScraper : IDisposable
         try
         {
             log?.Report($"GET {url}");
-            using var resp = await GetWithRetryAsync(url);
+            using var resp = await GetWithRetryAsync(url, default, CreateRetryReporter(log, url));
             if (!resp.IsSuccessStatusCode) return new();
 
             var text = await resp.Content.ReadAsStringAsync();
@@ -1782,7 +1800,7 @@ public sealed class WooScraper : IDisposable
         try
         {
             log?.Report($"GET {url}");
-            using var resp = await GetWithRetryAsync(url);
+            using var resp = await GetWithRetryAsync(url, default, CreateRetryReporter(log, url));
             if (!resp.IsSuccessStatusCode) return new();
 
             var text = await resp.Content.ReadAsStringAsync();
@@ -1833,7 +1851,7 @@ public sealed class WooScraper : IDisposable
                 try
                 {
                     log?.Report($"GET {url}");
-                    using var resp = await GetWithRetryAsync(url);
+                    using var resp = await GetWithRetryAsync(url, default, CreateRetryReporter(log, url));
                     if (!resp.IsSuccessStatusCode) break;
 
                     var text = await resp.Content.ReadAsStringAsync();
@@ -1911,7 +1929,7 @@ public sealed class WooScraper : IDisposable
             try
             {
                 log?.Report($"GET {url} (SEO fallback)");
-                using var resp = await GetWithRetryAsync(url);
+                using var resp = await GetWithRetryAsync(url, default, CreateRetryReporter(log, url));
                 if (!resp.IsSuccessStatusCode)
                 {
                     continue;
@@ -2378,7 +2396,7 @@ public sealed class WooScraper : IDisposable
             try
             {
                 log?.Report($"GET {url}");
-                using var resp = await GetWithRetryAsync(url);
+                using var resp = await GetWithRetryAsync(url, default, CreateRetryReporter(log, url));
                 if (!resp.IsSuccessStatusCode)
                 {
                     if ((int)resp.StatusCode == 404)
@@ -2445,7 +2463,7 @@ public sealed class WooScraper : IDisposable
         try
         {
             log?.Report($"GET {url}");
-            using var resp = await GetWithRetryAsync(url);
+            using var resp = await GetWithRetryAsync(url, default, CreateRetryReporter(log, url));
             if (!resp.IsSuccessStatusCode)
             {
                 if ((int)resp.StatusCode == 404)
@@ -2597,7 +2615,7 @@ public sealed class WooScraper : IDisposable
         try
         {
             log?.Report($"GET {url}");
-            using var resp = await GetWithRetryAsync(url);
+            using var resp = await GetWithRetryAsync(url, default, CreateRetryReporter(log, url));
             if (!resp.IsSuccessStatusCode)
             {
                 if ((int)resp.StatusCode == 404)
@@ -2695,7 +2713,7 @@ public sealed class WooScraper : IDisposable
                 try
                 {
                     log?.Report($"GET {url}");
-                    using var resp = await GetWithRetryAsync(url);
+                    using var resp = await GetWithRetryAsync(url, default, CreateRetryReporter(log, url));
                     if (!resp.IsSuccessStatusCode)
                     {
                         if ((int)resp.StatusCode is 400 or 404)
@@ -2837,7 +2855,7 @@ public sealed class WooScraper : IDisposable
         try
         {
             log?.Report($"GET {url}");
-            using var resp = await GetWithRetryAsync(url);
+            using var resp = await GetWithRetryAsync(url, default, CreateRetryReporter(log, url));
             if (!resp.IsSuccessStatusCode)
             {
                 if ((int)resp.StatusCode == 404)
@@ -3066,7 +3084,7 @@ public sealed class WooScraper : IDisposable
                 var request = new HttpRequestMessage(HttpMethod.Get, url);
                 request.Headers.Authorization = CreateBasicAuthHeader(username, applicationPassword);
                 return request;
-            }, HttpCompletionOption.ResponseHeadersRead);
+            }, HttpCompletionOption.ResponseHeadersRead, default, CreateRetryReporter(log, url));
             if (!resp.IsSuccessStatusCode)
             {
                 if ((int)resp.StatusCode != 404)
@@ -3160,7 +3178,7 @@ public sealed class WooScraper : IDisposable
                 var request = new HttpRequestMessage(HttpMethod.Get, url);
                 request.Headers.Authorization = CreateBasicAuthHeader(username, applicationPassword);
                 return request;
-            }, HttpCompletionOption.ResponseHeadersRead);
+            }, HttpCompletionOption.ResponseHeadersRead, default, CreateRetryReporter(log, url));
             if (!resp.IsSuccessStatusCode)
             {
                 if ((int)resp.StatusCode != 404)
@@ -3592,7 +3610,7 @@ public sealed class WooScraper : IDisposable
                 var request = new HttpRequestMessage(HttpMethod.Get, url);
                 request.Headers.Authorization = CreateBasicAuthHeader(username, applicationPassword);
                 return request;
-            });
+            }, default, CreateRetryReporter(log, url));
             if (!resp.IsSuccessStatusCode)
             {
                 log?.Report($"Plugins admin page returned {(int)resp.StatusCode} ({resp.ReasonPhrase}).");
@@ -3650,7 +3668,7 @@ public sealed class WooScraper : IDisposable
                 var request = new HttpRequestMessage(HttpMethod.Get, url);
                 request.Headers.Authorization = CreateBasicAuthHeader(username, applicationPassword);
                 return request;
-            });
+            }, default, CreateRetryReporter(log, url));
             if (!resp.IsSuccessStatusCode)
             {
                 log?.Report($"Themes admin page returned {(int)resp.StatusCode} ({resp.ReasonPhrase}).");
@@ -3708,7 +3726,7 @@ public sealed class WooScraper : IDisposable
                 var request = new HttpRequestMessage(HttpMethod.Get, url);
                 request.Headers.Authorization = CreateBasicAuthHeader(username, applicationPassword);
                 return request;
-            });
+            }, default, CreateRetryReporter(log, url));
             if (!resp.IsSuccessStatusCode)
             {
                 if ((int)resp.StatusCode == 404)
