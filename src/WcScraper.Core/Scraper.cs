@@ -75,9 +75,55 @@ public sealed class WooScraper : IDisposable
 
     public static string CleanBaseUrl(string baseUrl)
     {
-        baseUrl = baseUrl.Trim();
-        if (baseUrl.EndsWith("/")) baseUrl = baseUrl[..^1];
-        return baseUrl;
+        if (baseUrl is null)
+        {
+            throw new ArgumentNullException(nameof(baseUrl));
+        }
+
+        var trimmed = baseUrl.Trim();
+        if (trimmed.Length == 0)
+        {
+            throw new ArgumentException("Base URL is required.", nameof(baseUrl));
+        }
+
+        Uri? uri = null;
+        if (Uri.TryCreate(trimmed, UriKind.Absolute, out var parsed))
+        {
+            uri = parsed;
+        }
+        else if (trimmed.StartsWith("//", StringComparison.Ordinal))
+        {
+            Uri.TryCreate($"https:{trimmed}", UriKind.Absolute, out uri);
+        }
+        else
+        {
+            Uri.TryCreate($"https://{trimmed}", UriKind.Absolute, out uri);
+        }
+
+        if (uri is null || string.IsNullOrWhiteSpace(uri.Host))
+        {
+            throw new ArgumentException("Base URL must be a valid absolute URI (e.g., https://example.com).", nameof(baseUrl));
+        }
+
+        if (!string.Equals(uri.Scheme, Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(uri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new ArgumentException("Base URL must use HTTP or HTTPS (e.g., https://example.com).", nameof(baseUrl));
+        }
+
+        var path = uri.AbsolutePath;
+        var query = uri.Query;
+
+        if (path.Length > 1 && path.EndsWith("/", StringComparison.Ordinal))
+        {
+            path = path.TrimEnd('/');
+        }
+        else if (path == "/" && string.IsNullOrEmpty(query))
+        {
+            path = string.Empty;
+        }
+
+        return $"{uri.Scheme}://{uri.Authority}{path}{query}";
     }
 
     private Task<HttpResponseMessage> GetWithRetryAsync(
