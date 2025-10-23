@@ -111,13 +111,19 @@ public sealed class WooScraper : IDisposable
             throw new ArgumentException("Base URL must use HTTP or HTTPS (e.g., https://example.com).", nameof(baseUrl));
         }
 
-        var normalized = uri.GetComponents(UriComponents.SchemeAndServer | UriComponents.Path, UriFormat.UriEscaped);
-        if (normalized.EndsWith("/", StringComparison.Ordinal))
+        var path = uri.AbsolutePath;
+        var query = uri.Query;
+
+        if (path.Length > 1 && path.EndsWith("/", StringComparison.Ordinal))
         {
-            normalized = normalized[..^1];
+            path = path.TrimEnd('/');
+        }
+        else if (path == "/" && string.IsNullOrEmpty(query))
+        {
+            path = string.Empty;
         }
 
-        return normalized;
+        return $"{uri.Scheme}://{uri.Authority}{path}{query}";
     }
 
     private Task<HttpResponseMessage> GetWithRetryAsync(

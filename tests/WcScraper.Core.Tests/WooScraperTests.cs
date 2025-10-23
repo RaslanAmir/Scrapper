@@ -17,6 +17,7 @@ public sealed class WooScraperTests
     [InlineData("example.com", "https://example.com")]
     [InlineData("example.com/store/", "https://example.com/store")]
     [InlineData(" //example.com/path ", "https://example.com/path")]
+    [InlineData("https://example.com/?rest_route=/", "https://example.com/?rest_route=/")]
     public void CleanBaseUrl_NormalizesAndValidatesAbsoluteUrls(string input, string expected)
     {
         var normalized = WooScraper.CleanBaseUrl(input);
