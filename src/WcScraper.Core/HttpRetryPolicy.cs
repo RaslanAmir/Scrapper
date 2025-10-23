@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Net;
 using System.Net.Http;
@@ -12,8 +13,24 @@ public sealed class HttpRetryPolicy
     private readonly int _maxRetries;
     private readonly TimeSpan _baseDelay;
     private readonly TimeSpan? _maxDelay;
+    private readonly ISet<HttpStatusCode> _retryableStatusCodes;
 
-    public HttpRetryPolicy(int maxRetries = 3, TimeSpan? baseDelay = null, TimeSpan? maxDelay = null)
+    private static readonly HttpStatusCode[] DefaultRetryableStatusCodes =
+    {
+        HttpStatusCode.TooManyRequests,
+        HttpStatusCode.ServiceUnavailable,
+        HttpStatusCode.InternalServerError,
+        HttpStatusCode.BadGateway,
+        HttpStatusCode.GatewayTimeout,
+        HttpStatusCode.RequestTimeout,
+        (HttpStatusCode)522, // Connection timed out (Cloudflare)
+    };
+
+    public HttpRetryPolicy(
+        int maxRetries = 3,
+        TimeSpan? baseDelay = null,
+        TimeSpan? maxDelay = null,
+        IEnumerable<HttpStatusCode>? retryableStatusCodes = null)
     {
         if (maxRetries < 0)
         {
@@ -33,6 +50,7 @@ public sealed class HttpRetryPolicy
         }
 
         _maxDelay = maxDelay;
+        _retryableStatusCodes = new HashSet<HttpStatusCode>(retryableStatusCodes ?? DefaultRetryableStatusCodes);
     }
 
     public Task<HttpResponseMessage> SendAsync(
@@ -101,10 +119,13 @@ public sealed class HttpRetryPolicy
             return false;
         }
 
-        if (response.StatusCode is HttpStatusCode.TooManyRequests or HttpStatusCode.ServiceUnavailable)
+        if (_retryableStatusCodes.Contains(response.StatusCode))
         {
             delay = DetermineRetryDelay(response, attempt + 1);
-            reason = $"HTTP {(int)response.StatusCode} {response.ReasonPhrase}".TrimEnd();
+            var reasonPhrase = string.IsNullOrWhiteSpace(response.ReasonPhrase)
+                ? response.StatusCode.ToString()
+                : response.ReasonPhrase;
+            reason = $"Retryable HTTP {(int)response.StatusCode} {reasonPhrase}".TrimEnd();
             return true;
         }
 
