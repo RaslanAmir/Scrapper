@@ -310,19 +310,11 @@
         </ScrollViewer>
 
         <Grid Grid.Row="1">
-            <Grid.RowDefinitions>
-                <RowDefinition Height="Auto"/>
-                <RowDefinition Height="Auto"/>
-            </Grid.RowDefinitions>
-
-            <!-- Log -->
-            <GroupBox Grid.Row="0" Header="Log" Margin="0,12,0,0">
-                <ListBox ItemsSource="{Binding Logs}" />
-            </GroupBox>
-
-            <!-- Status -->
-            <StatusBar Grid.Row="1" Margin="0,8,0,0">
+            <StatusBar Margin="0,12,0,0">
                 <StatusBarItem Content="{Binding Path=Logs.Count, StringFormat=Messages: {0}}" />
+                <StatusBarItem>
+                    <Button Content="Open Logs" Command="{Binding OpenLogCommand}" Padding="12,4" />
+                </StatusBarItem>
                 <StatusBarItem>
                     <TextBlock Text="{Binding IsRunning, StringFormat=Running: {0}}" />
                 </StatusBarItem>

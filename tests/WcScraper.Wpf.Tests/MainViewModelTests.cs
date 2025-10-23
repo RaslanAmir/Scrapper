@@ -889,6 +889,11 @@ public class MainViewModelTests
     private sealed class StubDialogService : IDialogService
     {
         public string? BrowseForFolder(string? initial = null) => null;
+
+        public void ShowLogWindow(System.Collections.ObjectModel.ObservableCollection<string> logs)
+        {
+            // no-op for tests
+        }
     }
 
     private sealed class StubHttpMessageHandler : HttpMessageHandler

@@ -116,6 +116,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         ClearTagsCommand = new RelayCommand(() => SetSelection(TagChoices, false));
         ExportCollectionsCommand = new RelayCommand(OnExportCollections);
         ReplicateCommand = new RelayCommand(async () => await OnReplicateStoreAsync(), () => !IsRunning && CanReplicate);
+        OpenLogCommand = new RelayCommand(OnOpenLog);
     }
 
     // XAML-friendly default constructor + Dialogs setter
@@ -670,12 +671,18 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public RelayCommand ClearTagsCommand { get; }
     public RelayCommand ExportCollectionsCommand { get; }
     public RelayCommand ReplicateCommand { get; }
+    public RelayCommand OpenLogCommand { get; }
 
     private void OnBrowse()
     {
         var chosen = _dialogs.BrowseForFolder(OutputFolder);
         if (!string.IsNullOrWhiteSpace(chosen))
             OutputFolder = chosen;
+    }
+
+    private void OnOpenLog()
+    {
+        _dialogs.ShowLogWindow(Logs);
     }
 
     private void OnExportCollections()
