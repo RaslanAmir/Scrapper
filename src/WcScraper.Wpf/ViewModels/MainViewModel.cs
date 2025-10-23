@@ -41,6 +41,16 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private readonly string _preferencesPath;
     private readonly string _chatKeyPath;
     private static readonly TimeSpan DirectoryLookupDelay = TimeSpan.FromMilliseconds(400);
+    private const string ApplyAssistantDirectivesCommand = "/apply-directives";
+    private const string DiscardAssistantDirectivesCommand = "/discard-directives";
+    private static readonly HashSet<string> s_riskyAssistantOptions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        nameof(ExportPublicExtensionFootprints),
+        nameof(ExportPublicDesignSnapshot),
+        nameof(ExportPublicDesignScreenshots),
+        nameof(ExportStoreConfiguration),
+        nameof(ImportStoreConfiguration),
+    };
     private bool _isRunning;
     private string _storeUrl = "";
     private string _outputFolder = Path.GetFullPath("output");
@@ -106,6 +116,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private bool _isAssistantPanelExpanded;
     private string _latestRunAiRecommendationSummary = string.Empty;
     private AiArtifactAnnotation? _latestRunAiAnnotation;
+    private AssistantDirectiveBatch? _pendingAssistantDirectives;
+    private readonly Dictionary<string, (Func<bool> Getter, Action<bool> Setter)> _assistantToggleBindings;
 
     public MainViewModel(IDialogService dialogs)
         : this(dialogs, new WooScraper(), new ShopifyScraper(), new HttpClient())
@@ -169,6 +181,26 @@ public sealed class MainViewModel : INotifyPropertyChanged
         LoadPreferences();
         LoadChatApiKey();
         UpdateChatConfigurationStatus();
+
+        _assistantToggleBindings = new Dictionary<string, (Func<bool>, Action<bool>)>(StringComparer.OrdinalIgnoreCase)
+        {
+            [nameof(ExportCsv)] = (() => ExportCsv, value => ExportCsv = value),
+            [nameof(ExportShopify)] = (() => ExportShopify, value => ExportShopify = value),
+            [nameof(ExportWoo)] = (() => ExportWoo, value => ExportWoo = value),
+            [nameof(ExportReviews)] = (() => ExportReviews, value => ExportReviews = value),
+            [nameof(ExportXlsx)] = (() => ExportXlsx, value => ExportXlsx = value),
+            [nameof(ExportJsonl)] = (() => ExportJsonl, value => ExportJsonl = value),
+            [nameof(ExportPluginsCsv)] = (() => ExportPluginsCsv, value => ExportPluginsCsv = value),
+            [nameof(ExportPluginsJsonl)] = (() => ExportPluginsJsonl, value => ExportPluginsJsonl = value),
+            [nameof(ExportThemesCsv)] = (() => ExportThemesCsv, value => ExportThemesCsv = value),
+            [nameof(ExportThemesJsonl)] = (() => ExportThemesJsonl, value => ExportThemesJsonl = value),
+            [nameof(ExportPublicExtensionFootprints)] = (() => ExportPublicExtensionFootprints, value => ExportPublicExtensionFootprints = value),
+            [nameof(ExportPublicDesignSnapshot)] = (() => ExportPublicDesignSnapshot, value => ExportPublicDesignSnapshot = value),
+            [nameof(ExportPublicDesignScreenshots)] = (() => ExportPublicDesignScreenshots, value => ExportPublicDesignScreenshots = value),
+            [nameof(ExportStoreConfiguration)] = (() => ExportStoreConfiguration, value => ExportStoreConfiguration = value),
+            [nameof(ImportStoreConfiguration)] = (() => ImportStoreConfiguration, value => ImportStoreConfiguration = value),
+            [nameof(EnableHttpRetries)] = (() => EnableHttpRetries, value => EnableHttpRetries = value),
+        };
     }
 
     // XAML-friendly default constructor + Dialogs setter
@@ -1320,6 +1352,11 @@ public sealed class MainViewModel : INotifyPropertyChanged
             return;
         }
 
+        if (TryHandleAssistantDirectiveCommand(trimmed))
+        {
+            return;
+        }
+
         if (!HasChatConfiguration)
         {
             UpdateChatConfigurationStatus();
@@ -1354,6 +1391,19 @@ public sealed class MainViewModel : INotifyPropertyChanged
             }
 
             ChatStatusMessage = "Assistant ready for another prompt.";
+
+            try
+            {
+                var directives = await _chatAssistantService.ParseAssistantDirectivesAsync(session, context, trimmed, CancellationToken.None);
+                if (directives is not null)
+                {
+                    ProcessAssistantDirectives(directives, confirmed: false);
+                }
+            }
+            catch (Exception directiveEx)
+            {
+                Append($"Assistant directive processing failed: {directiveEx.Message}");
+            }
         }
         catch (Exception ex)
         {
@@ -1365,6 +1415,356 @@ public sealed class MainViewModel : INotifyPropertyChanged
             IsChatBusy = false;
         }
     }
+
+    private bool TryHandleAssistantDirectiveCommand(string? input)
+    {
+        if (string.IsNullOrWhiteSpace(input))
+        {
+            return false;
+        }
+
+        if (string.Equals(input, ApplyAssistantDirectivesCommand, StringComparison.OrdinalIgnoreCase))
+        {
+            ChatInput = string.Empty;
+            if (_pendingAssistantDirectives is null)
+            {
+                Append("No pending assistant directives to apply.");
+                ChatStatusMessage = "Assistant ready for another prompt.";
+                return true;
+            }
+
+            var pending = _pendingAssistantDirectives;
+            _pendingAssistantDirectives = null;
+            ProcessAssistantDirectives(pending, confirmed: true);
+            return true;
+        }
+
+        if (string.Equals(input, DiscardAssistantDirectivesCommand, StringComparison.OrdinalIgnoreCase))
+        {
+            ChatInput = string.Empty;
+            if (_pendingAssistantDirectives is null)
+            {
+                Append("No pending assistant directives to discard.");
+            }
+            else
+            {
+                _pendingAssistantDirectives = null;
+                Append("Pending assistant directives discarded.");
+            }
+
+            ChatStatusMessage = "Assistant ready for another prompt.";
+            return true;
+        }
+
+        return false;
+    }
+
+    private void ProcessAssistantDirectives(AssistantDirectiveBatch directives, bool confirmed)
+    {
+        if (directives is null)
+        {
+            return;
+        }
+
+        Append($"Assistant directive summary: {directives.Summary}");
+
+        if (!string.IsNullOrWhiteSpace(directives.RiskNote))
+        {
+            Append($"Risk note: {directives.RiskNote}");
+        }
+
+        foreach (var reminder in directives.CredentialReminders)
+        {
+            Append($"Assistant credential reminder ({reminder.Credential}): {reminder.Message}");
+        }
+
+        var requiresConfirmation = !confirmed && ShouldDeferAssistantDirective(directives);
+        if (requiresConfirmation)
+        {
+            _pendingAssistantDirectives = directives;
+            Append("Assistant directives require confirmation before applying.");
+            foreach (var toggle in directives.Toggles)
+            {
+                Append($"  Preview toggle {toggle.Name} -> {(toggle.Value ? "enabled" : "disabled")} ({FormatTogglePreviewMetadata(toggle)})");
+                if (!string.IsNullOrWhiteSpace(toggle.Justification))
+                {
+                    Append($"    Reason: {toggle.Justification}");
+                }
+            }
+
+            if (directives.Retry is not null)
+            {
+                Append($"  Preview retry: {DescribeRetryDirective(directives.Retry)}");
+                if (!string.IsNullOrWhiteSpace(directives.Retry.Justification))
+                {
+                    Append($"    Reason: {directives.Retry.Justification}");
+                }
+            }
+
+            Append($"Type {ApplyAssistantDirectivesCommand} to apply or {DiscardAssistantDirectivesCommand} to cancel.");
+            ChatStatusMessage = "Assistant directives pending confirmation.";
+            return;
+        }
+
+        _pendingAssistantDirectives = null;
+
+        foreach (var toggle in directives.Toggles)
+        {
+            ApplyAssistantToggle(toggle);
+        }
+
+        if (directives.Retry is not null)
+        {
+            ApplyAssistantRetryDirective(directives.Retry);
+        }
+
+        if (directives.Toggles.Count == 0 && directives.Retry is null && directives.CredentialReminders.Count > 0)
+        {
+            Append("No configuration changes were applied.");
+        }
+
+        ChatStatusMessage = confirmed ? "Assistant directives applied." : "Assistant ready for another prompt.";
+    }
+
+    private static bool ShouldDeferAssistantDirective(AssistantDirectiveBatch directives)
+    {
+        if (directives.RequiresConfirmation)
+        {
+            return true;
+        }
+
+        if (!string.IsNullOrWhiteSpace(directives.RiskNote))
+        {
+            return true;
+        }
+
+        if (directives.Toggles.Any(IsRiskyToggle))
+        {
+            return true;
+        }
+
+        if (directives.Retry is not null && IsRiskyRetry(directives.Retry))
+        {
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool IsRiskyToggle(AssistantToggleDirective toggle)
+    {
+        if (toggle.RequiresConfirmation)
+        {
+            return true;
+        }
+
+        if (!string.IsNullOrWhiteSpace(toggle.RiskLevel) && string.Equals(toggle.RiskLevel, "high", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        return toggle.Value && s_riskyAssistantOptions.Contains(toggle.Name);
+    }
+
+    private static bool IsRiskyRetry(AssistantRetryDirective directive)
+    {
+        if (directive.Attempts is int attempts && attempts > 6)
+        {
+            return true;
+        }
+
+        if (directive.BaseDelaySeconds is double baseDelay && baseDelay > 30)
+        {
+            return true;
+        }
+
+        if (directive.MaxDelaySeconds is double maxDelay && maxDelay > 300)
+        {
+            return true;
+        }
+
+        return false;
+    }
+
+    private static string FormatTogglePreviewMetadata(AssistantToggleDirective toggle)
+    {
+        var parts = new List<string>();
+        if (!string.IsNullOrWhiteSpace(toggle.RiskLevel))
+        {
+            parts.Add($"risk {toggle.RiskLevel}");
+        }
+
+        if (toggle.Confidence is double confidence)
+        {
+            parts.Add($"confidence {confidence:0.##}");
+        }
+
+        if (toggle.RequiresConfirmation)
+        {
+            parts.Add("confirmation requested");
+        }
+
+        if (parts.Count == 0)
+        {
+            return "risk unspecified";
+        }
+
+        return string.Join(", ", parts);
+    }
+
+    private static string DescribeRetryDirective(AssistantRetryDirective directive)
+    {
+        var parts = new List<string>();
+        if (directive.Enable is bool enable)
+        {
+            parts.Add($"enable={enable.ToString().ToLowerInvariant()}");
+        }
+
+        if (directive.Attempts is int attempts)
+        {
+            parts.Add($"attempts={attempts}");
+        }
+
+        if (directive.BaseDelaySeconds is double baseDelay)
+        {
+            parts.Add($"base_delay={FormatSeconds(baseDelay)}");
+        }
+
+        if (directive.MaxDelaySeconds is double maxDelay)
+        {
+            parts.Add($"max_delay={FormatSeconds(maxDelay)}");
+        }
+
+        return parts.Count == 0 ? "no retry changes" : string.Join(", ", parts);
+    }
+
+    private void ApplyAssistantToggle(AssistantToggleDirective toggle)
+    {
+        if (!_assistantToggleBindings.TryGetValue(toggle.Name, out var binding))
+        {
+            Append($"Assistant directive skipped unknown toggle \"{toggle.Name}\".");
+            return;
+        }
+
+        var desired = toggle.Value;
+        var current = binding.Getter();
+        var label = desired ? "enabled" : "disabled";
+
+        if (current == desired)
+        {
+            Append($"Assistant directive left {toggle.Name} unchanged (already {label}).");
+            return;
+        }
+
+        binding.Setter(desired);
+
+        var messageBuilder = new StringBuilder($"Assistant {label} {toggle.Name}.");
+        if (toggle.Confidence is double confidence)
+        {
+            messageBuilder.Append($" (confidence {confidence:0.##})");
+        }
+
+        if (!string.IsNullOrWhiteSpace(toggle.RiskLevel))
+        {
+            messageBuilder.Append($" [risk {toggle.RiskLevel}]");
+        }
+
+        Append(messageBuilder.ToString());
+
+        if (!string.IsNullOrWhiteSpace(toggle.Justification))
+        {
+            Append($"Reason: {toggle.Justification}");
+        }
+    }
+
+    private void ApplyAssistantRetryDirective(AssistantRetryDirective directive)
+    {
+        var updates = new List<string>();
+
+        if (directive.Enable is bool enable)
+        {
+            if (EnableHttpRetries != enable)
+            {
+                EnableHttpRetries = enable;
+                updates.Add($"enable={enable.ToString().ToLowerInvariant()}");
+            }
+            else
+            {
+                Append($"Assistant directive left HTTP retries {(enable ? "enabled" : "disabled")} (already set).");
+            }
+        }
+
+        if (directive.Attempts is int attempts)
+        {
+            if (attempts < 0 || attempts > 10)
+            {
+                Append($"Assistant directive skipped invalid retry attempt count ({attempts}). Expected 0-10.");
+            }
+            else if (HttpRetryAttempts != attempts)
+            {
+                HttpRetryAttempts = attempts;
+                updates.Add($"attempts={attempts}");
+            }
+            else
+            {
+                Append($"Assistant directive left HTTP retry attempts at {attempts} (already set).");
+            }
+        }
+
+        if (directive.BaseDelaySeconds is double baseDelay)
+        {
+            if (!IsDelayWithinRange(baseDelay))
+            {
+                Append($"Assistant directive skipped invalid retry base delay ({FormatSeconds(baseDelay)}). Expected between 0 and 600 seconds.");
+            }
+            else if (Math.Abs(HttpRetryBaseDelaySeconds - baseDelay) > 0.0001)
+            {
+                HttpRetryBaseDelaySeconds = baseDelay;
+                updates.Add($"base_delay={FormatSeconds(baseDelay)}");
+            }
+            else
+            {
+                Append($"Assistant directive left HTTP retry base delay at {FormatSeconds(baseDelay)} (already set).");
+            }
+        }
+
+        if (directive.MaxDelaySeconds is double maxDelay)
+        {
+            if (!IsDelayWithinRange(maxDelay))
+            {
+                Append($"Assistant directive skipped invalid retry max delay ({FormatSeconds(maxDelay)}). Expected between 0 and 600 seconds.");
+            }
+            else if (directive.BaseDelaySeconds is double baseDelay && maxDelay < baseDelay)
+            {
+                Append($"Assistant directive skipped retry max delay ({FormatSeconds(maxDelay)}) because it is less than the base delay ({FormatSeconds(baseDelay)}).");
+            }
+            else if (Math.Abs(HttpRetryMaxDelaySeconds - maxDelay) > 0.0001)
+            {
+                HttpRetryMaxDelaySeconds = maxDelay;
+                updates.Add($"max_delay={FormatSeconds(maxDelay)}");
+            }
+            else
+            {
+                Append($"Assistant directive left HTTP retry max delay at {FormatSeconds(maxDelay)} (already set).");
+            }
+        }
+
+        if (updates.Count > 0)
+        {
+            Append("Assistant updated HTTP retry settings: " + string.Join(", ", updates));
+        }
+
+        if (!string.IsNullOrWhiteSpace(directive.Justification))
+        {
+            Append("Retry directive justification: " + directive.Justification);
+        }
+    }
+
+    private static bool IsDelayWithinRange(double value)
+        => value >= 0 && value <= 600;
+
+    private static string FormatSeconds(double value)
+        => value.ToString("0.###", CultureInfo.InvariantCulture) + "s";
 
     private void UpdateAiRecommendations(AiArtifactAnnotation? annotation)
     {
