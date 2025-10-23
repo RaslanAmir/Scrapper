@@ -3,14 +3,99 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="Logs"
         Height="450"
-        Width="600"
-        MinHeight="300"
-        MinWidth="400">
+        Width="760"
+        MinHeight="320"
+        MinWidth="520">
+    <Window.Resources>
+        <BooleanToVisibilityConverter x:Key="BoolToVisibility" />
+    </Window.Resources>
     <DockPanel Margin="8">
         <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,8">
             <Button Content="Copy All" Padding="12,4" Margin="0,0,8,0" Click="OnCopyAll" />
-            <Button Content="Clear" Padding="12,4" Click="OnClear" />
+            <Button Content="Clear" Padding="12,4" Margin="0,0,8,0" Click="OnClear" />
+            <Button Content="Explain latest logs"
+                    Padding="12,4"
+                    Command="{Binding ExplainLogsCommand}" />
+            <TextBlock Text="Summarizing…"
+                       Margin="12,0,0,0"
+                       FontStyle="Italic"
+                       Visibility="{Binding IsLogSummaryBusy, Converter={StaticResource BoolToVisibility}}" />
         </StackPanel>
-        <ListBox x:Name="LogsList" ItemsSource="{Binding}" FontFamily="Consolas" />
+        <Grid>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="280" />
+            </Grid.ColumnDefinitions>
+            <Border Grid.Column="0" BorderBrush="#FFE0E0E0" BorderThickness="0,0,1,0" Padding="0,0,8,0">
+                <ListBox x:Name="LogsList"
+                         ItemsSource="{Binding Logs}"
+                         FontFamily="Consolas"
+                         Margin="0" />
+            </Border>
+            <Border Grid.Column="1" Padding="12,0,0,0">
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <StackPanel>
+                        <TextBlock Text="AI Triage"
+                                   FontWeight="Bold"
+                                   FontSize="14" />
+                        <TextBlock Text="{Binding LatestLogSummaryOverview}"
+                                   Margin="0,8,0,12"
+                                   TextWrapping="Wrap"
+                                   Foreground="Gray" />
+                        <ItemsControl ItemsSource="{Binding LogSummaryIssues}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Border BorderBrush="#FFDDDDDD" BorderThickness="1" CornerRadius="4" Padding="8" Margin="0,0,0,8">
+                                        <StackPanel>
+                                            <TextBlock Text="{Binding Category}" FontWeight="Bold" />
+                                            <TextBlock Text="{Binding Severity}" FontStyle="Italic" Foreground="#FF555555" Margin="0,2,0,0" />
+                                            <TextBlock Text="{Binding Description}" TextWrapping="Wrap" Margin="0,6,0,0" />
+                                            <TextBlock Text="{Binding Recommendation}"
+                                                       TextWrapping="Wrap"
+                                                       FontWeight="SemiBold"
+                                                       Margin="0,6,0,0" />
+                                        </StackPanel>
+                                    </Border>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                            <ItemsControl.Style>
+                                <Style TargetType="ItemsControl">
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding LogSummaryIssues.Count}" Value="0">
+                                            <Setter Property="Visibility" Value="Collapsed" />
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </ItemsControl.Style>
+                        </ItemsControl>
+                        <TextBlock Text="No AI summary yet. Click 'Explain latest logs' to request one."
+                                   TextWrapping="Wrap"
+                                   Foreground="#FF777777">
+                            <TextBlock.Style>
+                                <Style TargetType="TextBlock">
+                                    <Setter Property="Visibility" Value="Collapsed" />
+                                    <Style.Triggers>
+                                        <MultiDataTrigger>
+                                            <MultiDataTrigger.Conditions>
+                                                <Condition Binding="{Binding LogSummaryIssues.Count}" Value="0" />
+                                                <Condition Binding="{Binding LatestLogSummaryOverview}" Value="" />
+                                            </MultiDataTrigger.Conditions>
+                                            <Setter Property="Visibility" Value="Visible" />
+                                        </MultiDataTrigger>
+                                        <MultiDataTrigger>
+                                            <MultiDataTrigger.Conditions>
+                                                <Condition Binding="{Binding LogSummaryIssues.Count}" Value="0" />
+                                                <Condition Binding="{Binding LatestLogSummaryOverview}" Value="{x:Null}" />
+                                            </MultiDataTrigger.Conditions>
+                                            <Setter Property="Visibility" Value="Visible" />
+                                        </MultiDataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </TextBlock.Style>
+                        </TextBlock>
+                    </StackPanel>
+                </ScrollViewer>
+            </Border>
+        </Grid>
     </DockPanel>
 </Window>

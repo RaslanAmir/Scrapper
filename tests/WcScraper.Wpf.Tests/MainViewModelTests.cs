@@ -890,7 +890,7 @@ public class MainViewModelTests
     {
         public string? BrowseForFolder(string? initial = null) => null;
 
-        public void ShowLogWindow(System.Collections.ObjectModel.ObservableCollection<string> logs)
+        public void ShowLogWindow(MainViewModel viewModel)
         {
             // no-op for tests
         }
