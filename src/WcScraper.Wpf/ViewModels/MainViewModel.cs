@@ -1633,6 +1633,14 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
                         var fileSize = content.Length;
                         var sha256 = Convert.ToHexString(SHA256.HashData(content));
+                        var references = image?.References?
+                            .Where(r => !string.IsNullOrWhiteSpace(r))
+                            .Distinct(StringComparer.OrdinalIgnoreCase)
+                            .ToList();
+                        var origins = image?.Origins?
+                            .Select(o => o.ToString().ToLowerInvariant())
+                            .Distinct(StringComparer.OrdinalIgnoreCase)
+                            .ToList();
 
                         imageManifest.Add(new Dictionary<string, object?>
                         {
@@ -1640,19 +1648,33 @@ public sealed class MainViewModel : INotifyPropertyChanged
                             ["source_url"] = image?.SourceUrl,
                             ["resolved_url"] = image?.ResolvedUrl,
                             ["referenced_from"] = image?.ReferencedFrom,
+                            ["references"] = references ?? Array.Empty<string>(),
+                            ["origins"] = origins ?? Array.Empty<string>(),
                             ["content_type"] = image?.ContentType,
                             ["file_size_bytes"] = fileSize,
                             ["sha256"] = sha256
                         });
                     }
 
+                    var cssImageCount = designSnapshot.CssImageFiles
+                        .Select(img => img?.ResolvedUrl)
+                        .Where(url => !string.IsNullOrWhiteSpace(url))
+                        .Distinct(StringComparer.OrdinalIgnoreCase)
+                        .Count();
+
+                    var htmlImageCount = designSnapshot.HtmlImageFiles
+                        .Select(img => img?.ResolvedUrl)
+                        .Where(url => !string.IsNullOrWhiteSpace(url))
+                        .Distinct(StringComparer.OrdinalIgnoreCase)
+                        .Count();
+
                     if (designSnapshot.ImageFiles.Count > 0)
                     {
-                        Append($"Captured {designSnapshot.ImageFiles.Count} CSS background image(s); assets saved under {assetsRoot}.");
+                        Append($"Captured {designSnapshot.ImageFiles.Count} design image(s) (CSS {cssImageCount}, HTML {htmlImageCount}); assets saved under {assetsRoot}.");
                     }
                     else
                     {
-                        Append("No CSS background images were captured.");
+                        Append("No design images were captured from CSS or HTML markup.");
                     }
 
                     var manifest = new Dictionary<string, object?>
@@ -1660,6 +1682,12 @@ public sealed class MainViewModel : INotifyPropertyChanged
                         ["stylesheets"] = stylesheetManifest,
                         ["fonts"] = fontManifest,
                         ["images"] = imageManifest,
+                        ["image_summary"] = new Dictionary<string, object?>
+                        {
+                            ["total"] = designSnapshot.ImageFiles.Count,
+                            ["css"] = cssImageCount,
+                            ["html"] = htmlImageCount
+                        },
                         ["colors"] = designSnapshot.ColorSwatches
                     };
 
