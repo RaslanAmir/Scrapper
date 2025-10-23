@@ -18,6 +18,7 @@ using System.Threading.Tasks;
 using WcScraper.Core;
 using WcScraper.Core.Exporters;
 using WcScraper.Core.Shopify;
+using WcScraper.Wpf.Models;
 using WcScraper.Wpf.Reporting;
 using WcScraper.Wpf.Services;
 
@@ -32,6 +33,10 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private readonly WooProvisioningService _wooProvisioningService;
     private readonly HeadlessBrowserScreenshotService _designScreenshotService;
     private readonly WordPressDirectoryClient _wpDirectoryClient;
+    private readonly ChatAssistantService _chatAssistantService;
+    private readonly string _settingsDirectory;
+    private readonly string _preferencesPath;
+    private readonly string _chatKeyPath;
     private static readonly TimeSpan DirectoryLookupDelay = TimeSpan.FromMilliseconds(400);
     private bool _isRunning;
     private string _storeUrl = "";
@@ -74,6 +79,15 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private ProvisioningContext? _lastProvisioningContext;
     private readonly JsonSerializerOptions _configurationWriteOptions = new() { WriteIndented = true };
     private readonly JsonSerializerOptions _artifactWriteOptions = new() { WriteIndented = true };
+    private readonly JsonSerializerOptions _preferencesWriteOptions = new() { WriteIndented = true };
+    private string _chatApiEndpoint = string.Empty;
+    private string _chatModel = string.Empty;
+    private string _chatSystemPrompt = "You are a helpful assistant for WC Local Scraper exports.";
+    private string _chatApiKey = string.Empty;
+    private bool _hasChatApiKey;
+    private bool _isChatBusy;
+    private string _chatInput = string.Empty;
+    private string _chatStatusMessage = "Enter API endpoint, model, and API key to enable the assistant.";
 
     public MainViewModel(IDialogService dialogs)
         : this(dialogs, new WooScraper(), new ShopifyScraper(), new HttpClient())
@@ -90,7 +104,13 @@ public sealed class MainViewModel : INotifyPropertyChanged
         WooScraper wooScraper,
         ShopifyScraper shopifyScraper,
         HttpClient httpClient)
-        : this(dialogs, wooScraper, shopifyScraper, httpClient, new HeadlessBrowserScreenshotService())
+        : this(
+            dialogs,
+            wooScraper,
+            shopifyScraper,
+            httpClient,
+            new HeadlessBrowserScreenshotService(),
+            new ChatAssistantService())
     {
     }
 
@@ -99,7 +119,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
         WooScraper wooScraper,
         ShopifyScraper shopifyScraper,
         HttpClient httpClient,
-        HeadlessBrowserScreenshotService designScreenshotService)
+        HeadlessBrowserScreenshotService designScreenshotService,
+        ChatAssistantService chatAssistantService)
     {
         _dialogs = dialogs;
         _wooScraper = wooScraper;
@@ -108,6 +129,10 @@ public sealed class MainViewModel : INotifyPropertyChanged
         _wooProvisioningService = new WooProvisioningService();
         _wpDirectoryClient = new WordPressDirectoryClient(_httpClient);
         _designScreenshotService = designScreenshotService ?? throw new ArgumentNullException(nameof(designScreenshotService));
+        _chatAssistantService = chatAssistantService ?? throw new ArgumentNullException(nameof(chatAssistantService));
+        _settingsDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "WcScraper");
+        _preferencesPath = Path.Combine(_settingsDirectory, "preferences.json");
+        _chatKeyPath = Path.Combine(_settingsDirectory, "chat.key");
         BrowseCommand = new RelayCommand(OnBrowse);
         RunCommand = new RelayCommand(async () => await OnRunAsync(), () => !IsRunning);
         SelectAllCategoriesCommand = new RelayCommand(() => SetSelection(CategoryChoices, true));
@@ -117,6 +142,11 @@ public sealed class MainViewModel : INotifyPropertyChanged
         ExportCollectionsCommand = new RelayCommand(OnExportCollections);
         ReplicateCommand = new RelayCommand(async () => await OnReplicateStoreAsync(), () => !IsRunning && CanReplicate);
         OpenLogCommand = new RelayCommand(OnOpenLog);
+        SendChatCommand = new RelayCommand(async () => await OnSendChatAsync(), CanSendChat);
+        ChatMessages = new ObservableCollection<ChatMessage>();
+        LoadPreferences();
+        LoadChatApiKey();
+        UpdateChatConfigurationStatus();
     }
 
     // XAML-friendly default constructor + Dialogs setter
@@ -125,17 +155,181 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
     public string StoreUrl { get => _storeUrl; set { _storeUrl = value; OnPropertyChanged(); } }
     public string OutputFolder { get => _outputFolder; set { _outputFolder = value; OnPropertyChanged(); } }
-    public bool ExportCsv { get => _expCsv; set { _expCsv = value; OnPropertyChanged(); } }
-    public bool ExportShopify { get => _expShopify; set { _expShopify = value; OnPropertyChanged(); } }
-    public bool ExportWoo { get => _expWoo; set { _expWoo = value; OnPropertyChanged(); } }
-    public bool ExportReviews { get => _expReviews; set { _expReviews = value; OnPropertyChanged(); } }
-    public bool ExportXlsx { get => _expXlsx; set { _expXlsx = value; OnPropertyChanged(); } }
-    public bool ExportJsonl { get => _expJsonl; set { _expJsonl = value; OnPropertyChanged(); } }
-    public bool ExportPluginsCsv { get => _expPluginsCsv; set { _expPluginsCsv = value; OnPropertyChanged(); } }
-    public bool ExportPluginsJsonl { get => _expPluginsJsonl; set { _expPluginsJsonl = value; OnPropertyChanged(); } }
-    public bool ExportThemesCsv { get => _expThemesCsv; set { _expThemesCsv = value; OnPropertyChanged(); } }
-    public bool ExportThemesJsonl { get => _expThemesJsonl; set { _expThemesJsonl = value; OnPropertyChanged(); } }
-    public bool ExportPublicExtensionFootprints { get => _expPublicExtensionFootprints; set { _expPublicExtensionFootprints = value; OnPropertyChanged(); } }
+    public bool ExportCsv
+    {
+        get => _expCsv;
+        set
+        {
+            if (_expCsv == value)
+            {
+                return;
+            }
+
+            _expCsv = value;
+            OnPropertyChanged();
+            SavePreferences();
+        }
+    }
+
+    public bool ExportShopify
+    {
+        get => _expShopify;
+        set
+        {
+            if (_expShopify == value)
+            {
+                return;
+            }
+
+            _expShopify = value;
+            OnPropertyChanged();
+            SavePreferences();
+        }
+    }
+
+    public bool ExportWoo
+    {
+        get => _expWoo;
+        set
+        {
+            if (_expWoo == value)
+            {
+                return;
+            }
+
+            _expWoo = value;
+            OnPropertyChanged();
+            SavePreferences();
+        }
+    }
+
+    public bool ExportReviews
+    {
+        get => _expReviews;
+        set
+        {
+            if (_expReviews == value)
+            {
+                return;
+            }
+
+            _expReviews = value;
+            OnPropertyChanged();
+            SavePreferences();
+        }
+    }
+
+    public bool ExportXlsx
+    {
+        get => _expXlsx;
+        set
+        {
+            if (_expXlsx == value)
+            {
+                return;
+            }
+
+            _expXlsx = value;
+            OnPropertyChanged();
+            SavePreferences();
+        }
+    }
+
+    public bool ExportJsonl
+    {
+        get => _expJsonl;
+        set
+        {
+            if (_expJsonl == value)
+            {
+                return;
+            }
+
+            _expJsonl = value;
+            OnPropertyChanged();
+            SavePreferences();
+        }
+    }
+
+    public bool ExportPluginsCsv
+    {
+        get => _expPluginsCsv;
+        set
+        {
+            if (_expPluginsCsv == value)
+            {
+                return;
+            }
+
+            _expPluginsCsv = value;
+            OnPropertyChanged();
+            SavePreferences();
+        }
+    }
+
+    public bool ExportPluginsJsonl
+    {
+        get => _expPluginsJsonl;
+        set
+        {
+            if (_expPluginsJsonl == value)
+            {
+                return;
+            }
+
+            _expPluginsJsonl = value;
+            OnPropertyChanged();
+            SavePreferences();
+        }
+    }
+
+    public bool ExportThemesCsv
+    {
+        get => _expThemesCsv;
+        set
+        {
+            if (_expThemesCsv == value)
+            {
+                return;
+            }
+
+            _expThemesCsv = value;
+            OnPropertyChanged();
+            SavePreferences();
+        }
+    }
+
+    public bool ExportThemesJsonl
+    {
+        get => _expThemesJsonl;
+        set
+        {
+            if (_expThemesJsonl == value)
+            {
+                return;
+            }
+
+            _expThemesJsonl = value;
+            OnPropertyChanged();
+            SavePreferences();
+        }
+    }
+
+    public bool ExportPublicExtensionFootprints
+    {
+        get => _expPublicExtensionFootprints;
+        set
+        {
+            if (_expPublicExtensionFootprints == value)
+            {
+                return;
+            }
+
+            _expPublicExtensionFootprints = value;
+            OnPropertyChanged();
+            SavePreferences();
+        }
+    }
     public string AdditionalPublicExtensionPages
     {
         get => _additionalPublicExtensionPages;
@@ -148,6 +342,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
             _additionalPublicExtensionPages = value ?? string.Empty;
             OnPropertyChanged();
+            SavePreferences();
         }
     }
     public string PublicExtensionMaxPages
@@ -163,6 +358,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
             _publicExtensionMaxPages = newValue;
             OnPropertyChanged();
+            SavePreferences();
         }
     }
 
@@ -179,6 +375,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
             _publicExtensionMaxBytes = newValue;
             OnPropertyChanged();
+            SavePreferences();
         }
     }
     public string AdditionalDesignSnapshotPages
@@ -193,6 +390,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
             _additionalDesignSnapshotPages = value ?? string.Empty;
             OnPropertyChanged();
+            SavePreferences();
         }
     }
     public string DesignScreenshotBreakpointsText
@@ -207,11 +405,56 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
             _designScreenshotBreakpointsText = value ?? string.Empty;
             OnPropertyChanged();
+            SavePreferences();
         }
     }
-    public bool ExportPublicDesignSnapshot { get => _expPublicDesignSnapshot; set { _expPublicDesignSnapshot = value; OnPropertyChanged(); } }
-    public bool ExportPublicDesignScreenshots { get => _expPublicDesignScreenshots; set { _expPublicDesignScreenshots = value; OnPropertyChanged(); } }
-    public bool ExportStoreConfiguration { get => _expStoreConfiguration; set { _expStoreConfiguration = value; OnPropertyChanged(); } }
+    public bool ExportPublicDesignSnapshot
+    {
+        get => _expPublicDesignSnapshot;
+        set
+        {
+            if (_expPublicDesignSnapshot == value)
+            {
+                return;
+            }
+
+            _expPublicDesignSnapshot = value;
+            OnPropertyChanged();
+            SavePreferences();
+        }
+    }
+
+    public bool ExportPublicDesignScreenshots
+    {
+        get => _expPublicDesignScreenshots;
+        set
+        {
+            if (_expPublicDesignScreenshots == value)
+            {
+                return;
+            }
+
+            _expPublicDesignScreenshots = value;
+            OnPropertyChanged();
+            SavePreferences();
+        }
+    }
+
+    public bool ExportStoreConfiguration
+    {
+        get => _expStoreConfiguration;
+        set
+        {
+            if (_expStoreConfiguration == value)
+            {
+                return;
+            }
+
+            _expStoreConfiguration = value;
+            OnPropertyChanged();
+            SavePreferences();
+        }
+    }
     public bool IsRunning
     {
         get => _isRunning;
@@ -654,8 +897,175 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public string TargetStoreUrl { get => _targetStoreUrl; set { _targetStoreUrl = value; OnPropertyChanged(); } }
     public string TargetConsumerKey { get => _targetConsumerKey; set { _targetConsumerKey = value; OnPropertyChanged(); } }
     public string TargetConsumerSecret { get => _targetConsumerSecret; set { _targetConsumerSecret = value; OnPropertyChanged(); } }
-    public bool ImportStoreConfiguration { get => _importStoreConfiguration; set { _importStoreConfiguration = value; OnPropertyChanged(); } }
+    public bool ImportStoreConfiguration
+    {
+        get => _importStoreConfiguration;
+        set
+        {
+            if (_importStoreConfiguration == value)
+            {
+                return;
+            }
+
+            _importStoreConfiguration = value;
+            OnPropertyChanged();
+            SavePreferences();
+        }
+    }
     public bool CanReplicate => _lastProvisioningContext is { Products.Count: > 0 };
+
+    public ObservableCollection<ChatMessage> ChatMessages { get; }
+
+    public RelayCommand SendChatCommand { get; }
+
+    public string ChatApiEndpoint
+    {
+        get => _chatApiEndpoint;
+        set
+        {
+            var newValue = value?.Trim() ?? string.Empty;
+            if (_chatApiEndpoint == newValue)
+            {
+                return;
+            }
+
+            _chatApiEndpoint = newValue;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(HasChatConfiguration));
+            SavePreferences();
+            SendChatCommand.RaiseCanExecuteChanged();
+            UpdateChatConfigurationStatus();
+        }
+    }
+
+    public string ChatModel
+    {
+        get => _chatModel;
+        set
+        {
+            var newValue = value?.Trim() ?? string.Empty;
+            if (_chatModel == newValue)
+            {
+                return;
+            }
+
+            _chatModel = newValue;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(HasChatConfiguration));
+            SavePreferences();
+            SendChatCommand.RaiseCanExecuteChanged();
+            UpdateChatConfigurationStatus();
+        }
+    }
+
+    public string ChatSystemPrompt
+    {
+        get => _chatSystemPrompt;
+        set
+        {
+            var newValue = value ?? string.Empty;
+            if (_chatSystemPrompt == newValue)
+            {
+                return;
+            }
+
+            _chatSystemPrompt = newValue;
+            OnPropertyChanged();
+            SavePreferences();
+        }
+    }
+
+    public string ChatApiKey
+    {
+        get => _chatApiKey;
+        set
+        {
+            var newValue = value?.Trim() ?? string.Empty;
+            if (_chatApiKey == newValue)
+            {
+                return;
+            }
+
+            _chatApiKey = newValue;
+            OnPropertyChanged();
+            if (!TryPersistChatApiKey(newValue) && !string.IsNullOrWhiteSpace(newValue))
+            {
+                ChatStatusMessage = "Unable to persist API key securely. The key will be kept for this session only.";
+            }
+
+            HasChatApiKey = !string.IsNullOrWhiteSpace(newValue);
+        }
+    }
+
+    public bool HasChatApiKey
+    {
+        get => _hasChatApiKey;
+        private set
+        {
+            if (_hasChatApiKey == value)
+            {
+                return;
+            }
+
+            _hasChatApiKey = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(HasChatConfiguration));
+            SendChatCommand.RaiseCanExecuteChanged();
+            UpdateChatConfigurationStatus();
+        }
+    }
+
+    public bool HasChatConfiguration => HasChatApiKey
+        && !string.IsNullOrWhiteSpace(ChatApiEndpoint)
+        && !string.IsNullOrWhiteSpace(ChatModel);
+
+    public bool IsChatBusy
+    {
+        get => _isChatBusy;
+        private set
+        {
+            if (_isChatBusy == value)
+            {
+                return;
+            }
+
+            _isChatBusy = value;
+            OnPropertyChanged();
+            SendChatCommand.RaiseCanExecuteChanged();
+        }
+    }
+
+    public string ChatInput
+    {
+        get => _chatInput;
+        set
+        {
+            var newValue = value ?? string.Empty;
+            if (_chatInput == newValue)
+            {
+                return;
+            }
+
+            _chatInput = newValue;
+            OnPropertyChanged();
+            SendChatCommand.RaiseCanExecuteChanged();
+        }
+    }
+
+    public string ChatStatusMessage
+    {
+        get => _chatStatusMessage;
+        private set
+        {
+            if (_chatStatusMessage == value)
+            {
+                return;
+            }
+
+            _chatStatusMessage = value;
+            OnPropertyChanged();
+        }
+    }
 
     // Selectable terms for filters
     public ObservableCollection<SelectableTerm> CategoryChoices { get; } = new();
@@ -683,6 +1093,66 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private void OnOpenLog()
     {
         _dialogs.ShowLogWindow(Logs);
+    }
+
+    private bool CanSendChat()
+        => !IsChatBusy
+            && HasChatConfiguration
+            && !string.IsNullOrWhiteSpace(ChatInput);
+
+    private async Task OnSendChatAsync()
+    {
+        var trimmed = ChatInput?.Trim();
+        if (string.IsNullOrWhiteSpace(trimmed))
+        {
+            ChatStatusMessage = "Enter a prompt before sending.";
+            return;
+        }
+
+        if (!HasChatConfiguration)
+        {
+            UpdateChatConfigurationStatus();
+            return;
+        }
+
+        var userMessage = new ChatMessage(ChatMessageRole.User, trimmed);
+        ChatMessages.Add(userMessage);
+        ChatInput = string.Empty;
+
+        var history = ChatMessages.ToList();
+        var assistantMessage = new ChatMessage(ChatMessageRole.Assistant, string.Empty);
+        ChatMessages.Add(assistantMessage);
+
+        IsChatBusy = true;
+        ChatStatusMessage = "Requesting assistant response…";
+
+        try
+        {
+            var context = BuildChatContext();
+            var contextSummary = _chatAssistantService.BuildContextualPrompt(context);
+            var session = new ChatSessionSettings(ChatApiEndpoint, ChatApiKey, ChatModel, ChatSystemPrompt);
+
+            await foreach (var token in _chatAssistantService.StreamChatCompletionAsync(session, history, contextSummary, CancellationToken.None))
+            {
+                assistantMessage.Append(token);
+            }
+
+            if (string.IsNullOrWhiteSpace(assistantMessage.Content))
+            {
+                assistantMessage.Content = "(No response received.)";
+            }
+
+            ChatStatusMessage = "Assistant ready for another prompt.";
+        }
+        catch (Exception ex)
+        {
+            assistantMessage.Content = $"Error: {ex.Message}";
+            ChatStatusMessage = "Assistant encountered an error. Review the latest response.";
+        }
+        finally
+        {
+            IsChatBusy = false;
+        }
     }
 
     private void OnExportCollections()
@@ -719,6 +1189,206 @@ public sealed class MainViewModel : INotifyPropertyChanged
             var tagsPath = Path.Combine(storeFolder, $"{storeId}_{timestamp}_tags.xlsx");
             XlsxExporter.Write(tagsPath, tagDicts);
             Append($"Wrote {tagsPath}");
+        }
+    }
+
+    private ChatSessionContext BuildChatContext()
+        => new(
+            SelectedPlatform,
+            ExportCsv,
+            ExportShopify,
+            ExportWoo,
+            ExportReviews,
+            ExportXlsx,
+            ExportJsonl,
+            ExportPluginsCsv,
+            ExportPluginsJsonl,
+            ExportThemesCsv,
+            ExportThemesJsonl,
+            ExportPublicExtensionFootprints,
+            ExportPublicDesignSnapshot,
+            ExportPublicDesignScreenshots,
+            ExportStoreConfiguration,
+            ImportStoreConfiguration,
+            HasWordPressCredentials,
+            HasShopifyCredentials(),
+            HasTargetCredentials(),
+            EnableHttpRetries,
+            HttpRetryAttempts,
+            AdditionalPublicExtensionPages,
+            AdditionalDesignSnapshotPages);
+
+    private bool HasShopifyCredentials()
+        => !string.IsNullOrWhiteSpace(ShopifyAdminAccessToken)
+            || !string.IsNullOrWhiteSpace(ShopifyStorefrontAccessToken)
+            || !string.IsNullOrWhiteSpace(ShopifyApiKey)
+            || !string.IsNullOrWhiteSpace(ShopifyApiSecret);
+
+    private bool HasTargetCredentials()
+        => !string.IsNullOrWhiteSpace(TargetConsumerKey)
+            && !string.IsNullOrWhiteSpace(TargetConsumerSecret);
+
+    private void UpdateChatConfigurationStatus()
+    {
+        if (IsChatBusy)
+        {
+            return;
+        }
+
+        ChatStatusMessage = HasChatConfiguration
+            ? "Assistant ready for your next prompt."
+            : "Enter API endpoint, model, and API key to enable the assistant.";
+    }
+
+    private void LoadPreferences()
+    {
+        try
+        {
+            if (!File.Exists(_preferencesPath))
+            {
+                return;
+            }
+
+            var json = File.ReadAllText(_preferencesPath);
+            var snapshot = JsonSerializer.Deserialize<UserPreferences>(json);
+            if (snapshot is null)
+            {
+                return;
+            }
+
+            _expCsv = snapshot.ExportCsv;
+            _expShopify = snapshot.ExportShopify;
+            _expWoo = snapshot.ExportWoo;
+            _expReviews = snapshot.ExportReviews;
+            _expXlsx = snapshot.ExportXlsx;
+            _expJsonl = snapshot.ExportJsonl;
+            _expPluginsCsv = snapshot.ExportPluginsCsv;
+            _expPluginsJsonl = snapshot.ExportPluginsJsonl;
+            _expThemesCsv = snapshot.ExportThemesCsv;
+            _expThemesJsonl = snapshot.ExportThemesJsonl;
+            _expPublicExtensionFootprints = snapshot.ExportPublicExtensionFootprints;
+            _additionalPublicExtensionPages = snapshot.AdditionalPublicExtensionPages ?? string.Empty;
+            _publicExtensionMaxPages = snapshot.PublicExtensionMaxPages ?? _publicExtensionMaxPages;
+            _publicExtensionMaxBytes = snapshot.PublicExtensionMaxBytes ?? _publicExtensionMaxBytes;
+            _additionalDesignSnapshotPages = snapshot.AdditionalDesignSnapshotPages ?? string.Empty;
+            _designScreenshotBreakpointsText = snapshot.DesignScreenshotBreakpointsText ?? string.Empty;
+            _expPublicDesignSnapshot = snapshot.ExportPublicDesignSnapshot;
+            _expPublicDesignScreenshots = snapshot.ExportPublicDesignScreenshots;
+            _expStoreConfiguration = snapshot.ExportStoreConfiguration;
+            _importStoreConfiguration = snapshot.ImportStoreConfiguration;
+            _chatApiEndpoint = snapshot.ChatApiEndpoint ?? string.Empty;
+            _chatModel = snapshot.ChatModel ?? string.Empty;
+            if (!string.IsNullOrWhiteSpace(snapshot.ChatSystemPrompt))
+            {
+                _chatSystemPrompt = snapshot.ChatSystemPrompt!;
+            }
+        }
+        catch
+        {
+            // Ignore preference load failures and continue with defaults.
+        }
+    }
+
+    private void SavePreferences()
+    {
+        try
+        {
+            Directory.CreateDirectory(_settingsDirectory);
+            var snapshot = new UserPreferences
+            {
+                ExportCsv = ExportCsv,
+                ExportShopify = ExportShopify,
+                ExportWoo = ExportWoo,
+                ExportReviews = ExportReviews,
+                ExportXlsx = ExportXlsx,
+                ExportJsonl = ExportJsonl,
+                ExportPluginsCsv = ExportPluginsCsv,
+                ExportPluginsJsonl = ExportPluginsJsonl,
+                ExportThemesCsv = ExportThemesCsv,
+                ExportThemesJsonl = ExportThemesJsonl,
+                ExportPublicExtensionFootprints = ExportPublicExtensionFootprints,
+                AdditionalPublicExtensionPages = AdditionalPublicExtensionPages,
+                PublicExtensionMaxPages = PublicExtensionMaxPages,
+                PublicExtensionMaxBytes = PublicExtensionMaxBytes,
+                AdditionalDesignSnapshotPages = AdditionalDesignSnapshotPages,
+                DesignScreenshotBreakpointsText = DesignScreenshotBreakpointsText,
+                ExportPublicDesignSnapshot = ExportPublicDesignSnapshot,
+                ExportPublicDesignScreenshots = ExportPublicDesignScreenshots,
+                ExportStoreConfiguration = ExportStoreConfiguration,
+                ImportStoreConfiguration = ImportStoreConfiguration,
+                ChatApiEndpoint = ChatApiEndpoint,
+                ChatModel = ChatModel,
+                ChatSystemPrompt = ChatSystemPrompt,
+            };
+
+            var json = JsonSerializer.Serialize(snapshot, _preferencesWriteOptions);
+            File.WriteAllText(_preferencesPath, json);
+        }
+        catch
+        {
+            // Ignore persistence issues to avoid disrupting the UI workflow.
+        }
+    }
+
+    private void LoadChatApiKey()
+    {
+        try
+        {
+            if (!File.Exists(_chatKeyPath))
+            {
+                _chatApiKey = string.Empty;
+                OnPropertyChanged(nameof(ChatApiKey));
+                HasChatApiKey = false;
+                return;
+            }
+
+            var encrypted = File.ReadAllBytes(_chatKeyPath);
+            if (encrypted.Length == 0)
+            {
+                _chatApiKey = string.Empty;
+                OnPropertyChanged(nameof(ChatApiKey));
+                HasChatApiKey = false;
+                return;
+            }
+
+            var decrypted = ProtectedData.Unprotect(encrypted, null, DataProtectionScope.CurrentUser);
+            var key = Encoding.UTF8.GetString(decrypted);
+            _chatApiKey = key;
+            OnPropertyChanged(nameof(ChatApiKey));
+            HasChatApiKey = !string.IsNullOrWhiteSpace(key);
+        }
+        catch
+        {
+            _chatApiKey = string.Empty;
+            OnPropertyChanged(nameof(ChatApiKey));
+            HasChatApiKey = false;
+        }
+    }
+
+    private bool TryPersistChatApiKey(string value)
+    {
+        try
+        {
+            Directory.CreateDirectory(_settingsDirectory);
+
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                if (File.Exists(_chatKeyPath))
+                {
+                    File.Delete(_chatKeyPath);
+                }
+
+                return true;
+            }
+
+            var bytes = Encoding.UTF8.GetBytes(value);
+            var encrypted = ProtectedData.Protect(bytes, null, DataProtectionScope.CurrentUser);
+            File.WriteAllBytes(_chatKeyPath, encrypted);
+            return true;
+        }
+        catch
+        {
+            return false;
         }
     }
 
@@ -3627,6 +4297,33 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
         var sanitized = builder.ToString().Trim('-');
         return string.IsNullOrWhiteSpace(sanitized) ? "store" : sanitized;
+    }
+
+    private sealed class UserPreferences
+    {
+        public bool ExportCsv { get; set; }
+        public bool ExportShopify { get; set; }
+        public bool ExportWoo { get; set; }
+        public bool ExportReviews { get; set; }
+        public bool ExportXlsx { get; set; }
+        public bool ExportJsonl { get; set; }
+        public bool ExportPluginsCsv { get; set; }
+        public bool ExportPluginsJsonl { get; set; }
+        public bool ExportThemesCsv { get; set; }
+        public bool ExportThemesJsonl { get; set; }
+        public bool ExportPublicExtensionFootprints { get; set; }
+        public string? AdditionalPublicExtensionPages { get; set; }
+        public string? PublicExtensionMaxPages { get; set; }
+        public string? PublicExtensionMaxBytes { get; set; }
+        public string? AdditionalDesignSnapshotPages { get; set; }
+        public string? DesignScreenshotBreakpointsText { get; set; }
+        public bool ExportPublicDesignSnapshot { get; set; }
+        public bool ExportPublicDesignScreenshots { get; set; }
+        public bool ExportStoreConfiguration { get; set; }
+        public bool ImportStoreConfiguration { get; set; }
+        public string? ChatApiEndpoint { get; set; }
+        public string? ChatModel { get; set; }
+        public string? ChatSystemPrompt { get; set; }
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;
