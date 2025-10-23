@@ -16,6 +16,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Windows.Input;
 using System.Windows.Threading;
 using WcScraper.Core;
 using WcScraper.Core.Exporters;
@@ -103,6 +104,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private string _latestRunAiNarrative = string.Empty;
     private string? _latestRunAiBriefPath;
     private bool _isAssistantPanelExpanded;
+    private string _latestRunAiRecommendationSummary = string.Empty;
+    private AiArtifactAnnotation? _latestRunAiAnnotation;
 
     public MainViewModel(IDialogService dialogs)
         : this(dialogs, new WooScraper(), new ShopifyScraper(), new HttpClient())
@@ -159,7 +162,9 @@ public sealed class MainViewModel : INotifyPropertyChanged
         OpenLogCommand = new RelayCommand(OnOpenLog);
         ExplainLogsCommand = new RelayCommand(async () => await OnExplainLatestLogsAsync(), CanExplainLogs);
         SendChatCommand = new RelayCommand(async () => await OnSendChatAsync(), CanSendChat);
+        UseAiRecommendationCommand = new RelayCommand<string?>(OnUseAiRecommendation);
         ChatMessages = new ObservableCollection<ChatMessage>();
+        LatestRunAiRecommendations.CollectionChanged += (_, __) => OnPropertyChanged(nameof(HasAiRecommendations));
         Logs.CollectionChanged += OnLogsCollectionChanged;
         LoadPreferences();
         LoadChatApiKey();
@@ -1183,6 +1188,44 @@ public sealed class MainViewModel : INotifyPropertyChanged
         }
     }
 
+    public string LatestRunAiRecommendationSummary
+    {
+        get => _latestRunAiRecommendationSummary;
+        private set
+        {
+            if (_latestRunAiRecommendationSummary == value)
+            {
+                return;
+            }
+
+            _latestRunAiRecommendationSummary = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(HasAiRecommendations));
+        }
+    }
+
+    public ObservableCollection<AiRecommendation> LatestRunAiRecommendations { get; } = new();
+
+    public bool HasAiRecommendations => LatestRunAiRecommendations.Count > 0 || !string.IsNullOrWhiteSpace(LatestRunAiRecommendationSummary);
+
+    public AiArtifactAnnotation? LatestRunAiAnnotation
+    {
+        get => _latestRunAiAnnotation;
+        private set
+        {
+            if (Equals(_latestRunAiAnnotation, value))
+            {
+                return;
+            }
+
+            _latestRunAiAnnotation = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(LatestRunAiAnnotationTimestamp));
+        }
+    }
+
+    public DateTimeOffset? LatestRunAiAnnotationTimestamp => LatestRunAiAnnotation?.GeneratedAt;
+
     public bool IsAssistantPanelExpanded
     {
         get => _isAssistantPanelExpanded;
@@ -1225,6 +1268,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public RelayCommand ReplicateCommand { get; }
     public RelayCommand OpenLogCommand { get; }
     public RelayCommand ExplainLogsCommand { get; }
+    public ICommand UseAiRecommendationCommand { get; }
 
     private void OnBrowse()
     {
@@ -1247,6 +1291,21 @@ public sealed class MainViewModel : INotifyPropertyChanged
         => !IsLogSummaryBusy
             && HasChatConfiguration
             && Logs.Count > 0;
+
+    private void OnUseAiRecommendation(string? prompt)
+    {
+        var trimmed = prompt?.Trim();
+        if (string.IsNullOrWhiteSpace(trimmed))
+        {
+            return;
+        }
+
+        ExecuteOnUiThread(() =>
+        {
+            ChatInput = trimmed;
+            IsAssistantPanelExpanded = true;
+        });
+    }
 
     private async Task OnSendChatAsync()
     {
@@ -1301,6 +1360,26 @@ public sealed class MainViewModel : INotifyPropertyChanged
         {
             IsChatBusy = false;
         }
+    }
+
+    private void UpdateAiRecommendations(AiArtifactAnnotation? annotation)
+    {
+        ExecuteOnUiThread(() =>
+        {
+            LatestRunAiAnnotation = annotation;
+            LatestRunAiRecommendationSummary = annotation?.MarkdownSummary?.Trim() ?? string.Empty;
+            LatestRunAiRecommendations.Clear();
+
+            if (annotation?.Recommendations is { Count: > 0 })
+            {
+                foreach (var recommendation in annotation.Recommendations)
+                {
+                    LatestRunAiRecommendations.Add(recommendation);
+                }
+            }
+
+            OnPropertyChanged(nameof(HasAiRecommendations));
+        });
     }
 
     private async Task OnExplainLatestLogsAsync()
@@ -1896,6 +1975,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 LatestRunAiNarrative = string.Empty;
                 LatestRunAiBriefPath = null;
             });
+            UpdateAiRecommendations(null);
             var baseOutputFolder = ResolveBaseOutputFolder();
             Directory.CreateDirectory(baseOutputFolder);
             IProgress<string> logger = new Progress<string>(Append);
@@ -1957,6 +2037,15 @@ public sealed class MainViewModel : INotifyPropertyChanged
             WordPressSiteContent? siteContent = null;
             var missingCredentialExports = new List<string>();
             var designScreenshots = new List<DesignScreenshot>();
+            var aiPublicExtensionInsights = new List<AiPublicExtensionInsight>();
+            AiPublicExtensionCrawlContext? aiCrawlContext = null;
+            var aiDesignAssets = new List<AiDesignAssetReference>();
+            var aiColorPalette = new List<AiColorSwatch>();
+            string? aiDesignManifestJsonPath = null;
+            string? aiDesignManifestCsvPath = null;
+            var aiAdditionalExtensionPages = new List<string>();
+            int? aiPublicExtensionPageLimit = null;
+            long? aiPublicExtensionByteLimit = null;
 
             if (SelectedPlatform == PlatformMode.WooCommerce)
             {
@@ -2097,6 +2186,9 @@ public sealed class MainViewModel : INotifyPropertyChanged
                     }
 
                     var (pageLimit, byteLimit) = GetPublicExtensionLimits(logger);
+                    aiAdditionalExtensionPages = additionalEntryUrls.ToList();
+                    aiPublicExtensionPageLimit = pageLimit;
+                    aiPublicExtensionByteLimit = byteLimit;
                     publicExtensionFootprints = await _wooScraper.FetchPublicExtensionFootprintsAsync(
                         targetUrl,
                         includeLinkedAssets: true,
@@ -2109,11 +2201,52 @@ public sealed class MainViewModel : INotifyPropertyChanged
                     {
                         Append($"Detected {publicExtensionFootprints.Count} plugin/theme slug(s) from public assets (manual install required).");
                         await EnrichPublicExtensionFootprintsAsync(publicExtensionFootprints, logger);
+                        aiPublicExtensionInsights.AddRange(publicExtensionFootprints.Select(footprint =>
+                        {
+                            var sources = footprint.SourceUrls?.Where(url => !string.IsNullOrWhiteSpace(url))
+                                .Select(url => url.Trim())
+                                .Distinct(StringComparer.OrdinalIgnoreCase)
+                                .ToList() ?? new List<string>();
+
+                            if (!string.IsNullOrWhiteSpace(footprint.SourceUrl) && !sources.Contains(footprint.SourceUrl, StringComparer.OrdinalIgnoreCase))
+                            {
+                                sources.Add(footprint.SourceUrl.Trim());
+                            }
+
+                            var slug = string.IsNullOrWhiteSpace(footprint.Slug) ? string.Empty : footprint.Slug.Trim();
+                            var type = string.IsNullOrWhiteSpace(footprint.Type) ? string.Empty : footprint.Type.Trim();
+
+                            return new AiPublicExtensionInsight(
+                                slug,
+                                type,
+                                string.IsNullOrWhiteSpace(footprint.VersionHint) ? null : footprint.VersionHint!.Trim(),
+                                string.IsNullOrWhiteSpace(footprint.WordPressVersion) ? null : footprint.WordPressVersion!.Trim(),
+                                string.IsNullOrWhiteSpace(footprint.WooCommerceVersion) ? null : footprint.WooCommerceVersion!.Trim(),
+                                sources,
+                                string.IsNullOrWhiteSpace(footprint.AssetUrl) ? null : footprint.AssetUrl!.Trim(),
+                                string.IsNullOrWhiteSpace(footprint.DirectoryTitle) ? null : footprint.DirectoryTitle!.Trim(),
+                                string.IsNullOrWhiteSpace(footprint.DirectoryAuthor) ? null : footprint.DirectoryAuthor!.Trim(),
+                                string.IsNullOrWhiteSpace(footprint.DirectoryVersion) ? null : footprint.DirectoryVersion!.Trim(),
+                                string.IsNullOrWhiteSpace(footprint.DirectoryDownloadUrl) ? null : footprint.DirectoryDownloadUrl!.Trim(),
+                                string.IsNullOrWhiteSpace(footprint.DirectoryStatus) ? null : footprint.DirectoryStatus!.Trim());
+                        }));
                     }
                     else
                     {
                         Append("No public plugin/theme slugs were detected.");
                     }
+
+                    aiCrawlContext = new AiPublicExtensionCrawlContext(
+                        aiPublicExtensionPageLimit,
+                        aiPublicExtensionByteLimit,
+                        publicExtensionDetection?.ScheduledPageCount ?? 0,
+                        publicExtensionDetection?.ProcessedPageCount ?? 0,
+                        publicExtensionDetection?.TotalBytesDownloaded ?? 0,
+                        publicExtensionDetection?.PageLimitReached ?? false,
+                        publicExtensionDetection?.ByteLimitReached ?? false,
+                        aiAdditionalExtensionPages,
+                        publicExtensionDetection?.WordPressVersion,
+                        publicExtensionDetection?.WooCommerceVersion);
                 }
             }
 
@@ -2615,6 +2748,9 @@ public sealed class MainViewModel : INotifyPropertyChanged
                         var colorsJson = JsonSerializer.Serialize(designSnapshot.ColorSwatches, _artifactWriteOptions);
                         await File.WriteAllTextAsync(colorsJsonPath, colorsJson, Encoding.UTF8);
                         Append($"Wrote {colorsJsonPath}");
+
+                        aiColorPalette.AddRange(designSnapshot.ColorSwatches.Select(swatch =>
+                            new AiColorSwatch(swatch.Value ?? string.Empty, swatch.Count)));
                     }
                     else
                     {
@@ -2916,10 +3052,27 @@ public sealed class MainViewModel : INotifyPropertyChanged
                         ["colors"] = designSnapshot.ColorSwatches
                     };
 
+                    if (manifestCsvRows.Count > 0)
+                    {
+                        aiDesignAssets.AddRange(manifestCsvRows.Select(row => new AiDesignAssetReference(
+                            row.Type,
+                            row.File,
+                            row.Sha256,
+                            string.IsNullOrWhiteSpace(row.SourceUrl) ? null : row.SourceUrl,
+                            string.IsNullOrWhiteSpace(row.ResolvedUrl) ? null : row.ResolvedUrl,
+                            string.IsNullOrWhiteSpace(row.ReferencedFrom) ? null : row.ReferencedFrom,
+                            string.IsNullOrWhiteSpace(row.ContentType) ? null : row.ContentType,
+                            row.FileSizeBytes,
+                            row.Origins is { Count: > 0 } ? row.Origins.ToList() : null,
+                            row.References is { Count: > 0 } ? row.References.ToList() : null)));
+                    }
+
                     var manifestPath = Path.Combine(designRoot, "assets-manifest.json");
                     var manifestJson = JsonSerializer.Serialize(manifest, _artifactWriteOptions);
                     await File.WriteAllTextAsync(manifestPath, manifestJson, Encoding.UTF8);
                     Append($"Wrote {manifestPath}");
+
+                    aiDesignManifestJsonPath = TryGetStoreRelativePath(storeOutputFolder, manifestPath);
 
                     var manifestCsvPath = Path.Combine(designRoot, "assets-manifest.csv");
                     var manifestCsvBuilder = new StringBuilder();
@@ -2953,6 +3106,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
                     await File.WriteAllTextAsync(manifestCsvPath, manifestCsvBuilder.ToString(), Encoding.UTF8);
                     Append($"Wrote {manifestCsvPath}");
+
+                    aiDesignManifestCsvPath = TryGetStoreRelativePath(storeOutputFolder, manifestCsvPath);
                 }
                 else if (attemptedDesignSnapshot && !designSnapshotFailed)
                 {
@@ -3088,6 +3243,22 @@ public sealed class MainViewModel : INotifyPropertyChanged
                     .Select(f => f.WooCommerceVersion)
                     .FirstOrDefault(v => !string.IsNullOrWhiteSpace(v));
 
+            AiDesignSnapshotInsight? designInsight = null;
+            if (aiDesignAssets.Count > 0 || aiColorPalette.Count > 0 || !string.IsNullOrWhiteSpace(aiDesignManifestJsonPath) || !string.IsNullOrWhiteSpace(aiDesignManifestCsvPath))
+            {
+                var assetList = aiDesignAssets.Count > 0 ? aiDesignAssets.ToList() : new List<AiDesignAssetReference>();
+                var paletteList = aiColorPalette.Count > 0 ? aiColorPalette.ToList() : new List<AiColorSwatch>();
+                designInsight = new AiDesignSnapshotInsight(assetList, paletteList, aiDesignManifestJsonPath, aiDesignManifestCsvPath);
+            }
+
+            var artifactPayloadCandidate = new AiArtifactIntelligencePayload(
+                targetUrl,
+                aiPublicExtensionInsights.ToList(),
+                aiCrawlContext,
+                designInsight);
+
+            var artifactPayload = artifactPayloadCandidate.HasContent ? artifactPayloadCandidate : null;
+
             var reportContext = new ManualMigrationReportContext(
                 targetUrl,
                 storeId,
@@ -3118,7 +3289,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 EnableHttpRetries,
                 retrySettings.Attempts,
                 retrySettings.BaseDelay,
-                retrySettings.MaxDelay);
+                retrySettings.MaxDelay,
+                artifactPayload);
 
             var runSnapshotJson = ManualMigrationRunSummaryFactory.CreateSnapshotJson(reportContext);
             ExecuteOnUiThread(() =>
@@ -3129,11 +3301,24 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 LatestRunAiBriefPath = null;
             });
 
-            var reportBuilder = new ManualMigrationReportBuilder();
-            var report = reportBuilder.Build(reportContext);
+            ChatSessionSettings? chatSession = null;
+            if (HasChatConfiguration)
+            {
+                chatSession = new ChatSessionSettings(ChatApiEndpoint, ChatApiKey, ChatModel, ChatSystemPrompt);
+            }
+
+            var reportBuilder = new ManualMigrationReportBuilder(_chatAssistantService);
+            var reportResult = await reportBuilder.BuildAsync(reportContext, chatSession, CancellationToken.None);
+            var report = reportResult.ReportMarkdown;
             var reportPath = Path.Combine(storeOutputFolder, "manual-migration-report.md");
             await File.WriteAllTextAsync(reportPath, report, Encoding.UTF8);
             Append($"Manual migration report: {reportPath}");
+
+            UpdateAiRecommendations(reportResult.Annotation);
+            if (!string.IsNullOrWhiteSpace(reportResult.AnnotationError))
+            {
+                Append($"AI recommendations unavailable: {reportResult.AnnotationError}");
+            }
 
             var manualBundleArchivePath = TryCreateManualBundle(storeOutputFolder, baseOutputFolder, storeId, timestamp, reportPath);
             if (!string.IsNullOrWhiteSpace(manualBundleArchivePath))
@@ -3143,12 +3328,11 @@ public sealed class MainViewModel : INotifyPropertyChanged
             }
 
             string? aiBriefPath = null;
-            if (HasChatConfiguration)
+            if (chatSession is not null)
             {
                 try
                 {
-                    var session = new ChatSessionSettings(ChatApiEndpoint, ChatApiKey, ChatModel, ChatSystemPrompt);
-                    var aiNarrative = await _chatAssistantService.SummarizeRunAsync(session, runSnapshotJson, runGoals, CancellationToken.None);
+                    var aiNarrative = await _chatAssistantService.SummarizeRunAsync(chatSession, runSnapshotJson, runGoals, CancellationToken.None);
                     if (!string.IsNullOrWhiteSpace(aiNarrative))
                     {
                         var trimmedNarrative = aiNarrative.Trim();
@@ -4447,6 +4631,24 @@ public sealed class MainViewModel : INotifyPropertyChanged
             return JsonNode.Parse(json);
         }
         catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    private static string? TryGetStoreRelativePath(string root, string path)
+    {
+        if (string.IsNullOrWhiteSpace(root) || string.IsNullOrWhiteSpace(path))
+        {
+            return null;
+        }
+
+        try
+        {
+            var relative = Path.GetRelativePath(root, path);
+            return NormalizeRelativePath(relative);
+        }
+        catch
         {
             return null;
         }

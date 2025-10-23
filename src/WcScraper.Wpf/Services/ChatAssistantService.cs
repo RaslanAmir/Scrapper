@@ -4,6 +4,7 @@ using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Threading;
 using System.Threading.Tasks;
 using Azure;
@@ -15,6 +16,12 @@ namespace WcScraper.Wpf.Services;
 
 public sealed class ChatAssistantService
 {
+    private static readonly JsonSerializerOptions s_artifactPayloadOptions = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
+    };
+
     public async IAsyncEnumerable<string> StreamChatCompletionAsync(
         ChatSessionSettings settings,
         IReadOnlyList<ChatMessage> history,
@@ -282,6 +289,108 @@ public sealed class ChatAssistantService
         return string.IsNullOrWhiteSpace(content) ? null : content.Trim();
     }
 
+    public async Task<AiArtifactAnnotation?> AnnotateArtifactsAsync(
+        ChatSessionSettings settings,
+        AiArtifactIntelligencePayload payload,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+        ArgumentNullException.ThrowIfNull(payload);
+
+        if (!payload.HasContent)
+        {
+            return null;
+        }
+
+        if (string.IsNullOrWhiteSpace(settings.ApiKey))
+        {
+            throw new ArgumentException("An API key is required.", nameof(settings));
+        }
+
+        if (string.IsNullOrWhiteSpace(settings.Endpoint))
+        {
+            throw new ArgumentException("An endpoint is required.", nameof(settings));
+        }
+
+        if (!Uri.TryCreate(settings.Endpoint, UriKind.Absolute, out var endpoint))
+        {
+            throw new ArgumentException("The API endpoint must be an absolute URI.", nameof(settings));
+        }
+
+        if (string.IsNullOrWhiteSpace(settings.Model))
+        {
+            throw new ArgumentException("A model or deployment identifier is required.", nameof(settings));
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var client = new OpenAIClient(endpoint, new AzureKeyCredential(settings.ApiKey));
+
+        var options = new ChatCompletionsOptions
+        {
+            DeploymentName = settings.Model,
+            Temperature = 0.3f,
+        };
+
+        var systemPrompt = new StringBuilder();
+        if (!string.IsNullOrWhiteSpace(settings.SystemPrompt))
+        {
+            systemPrompt.AppendLine(settings.SystemPrompt.Trim());
+            systemPrompt.AppendLine();
+        }
+
+        systemPrompt.AppendLine("You review WooCommerce storefront artifacts and highlight migration considerations.");
+        systemPrompt.AppendLine("Call out public plugin clues, likely extension purposes, and design rebuild notes.");
+        systemPrompt.AppendLine("Respond with concise, actionable guidance that references concrete files or slugs when possible.");
+
+        options.Messages.Add(new Azure.AI.OpenAI.ChatMessage(ChatRole.System, systemPrompt.ToString()));
+
+        var payloadJson = JsonSerializer.Serialize(payload, s_artifactPayloadOptions);
+
+        var userPrompt = new StringBuilder();
+        userPrompt.AppendLine("Analyze the storefront artifacts payload and propose migration recommendations.");
+        userPrompt.AppendLine("Respond ONLY with JSON matching this schema:");
+        userPrompt.AppendLine("{");
+        userPrompt.AppendLine("  \"markdown_summary\": \"overview in markdown\",");
+        userPrompt.AppendLine("  \"recommendations\": [");
+        userPrompt.AppendLine("    {\"title\": \"short label\", \"summary\": \"actionable details\", \"suggested_prompts\": [\"follow-up prompt\"], \"related_assets\": [\"slug or file\"]}");
+        userPrompt.AppendLine("  ]");
+        userPrompt.AppendLine("}");
+        userPrompt.AppendLine("If there are no recommendations, return an empty array for recommendations.");
+        userPrompt.AppendLine();
+        userPrompt.AppendLine("Artifacts payload:");
+        userPrompt.AppendLine("```json");
+        userPrompt.AppendLine(payloadJson);
+        userPrompt.AppendLine("```");
+
+        options.Messages.Add(new Azure.AI.OpenAI.ChatMessage(ChatRole.User, userPrompt.ToString()));
+
+        var response = await client.GetChatCompletionsAsync(options, cancellationToken).ConfigureAwait(false);
+        var choice = response.Value.Choices.FirstOrDefault();
+        var content = choice?.Message?.Content;
+        if (string.IsNullOrWhiteSpace(content))
+        {
+            return null;
+        }
+
+        var annotation = ParseArtifactAnnotation(content);
+        if (annotation is null)
+        {
+            return null;
+        }
+
+        var summary = string.IsNullOrWhiteSpace(annotation.MarkdownSummary)
+            ? string.Empty
+            : annotation.MarkdownSummary.Trim();
+
+        if (string.IsNullOrWhiteSpace(summary) && !annotation.HasRecommendations)
+        {
+            return null;
+        }
+
+        return annotation with { MarkdownSummary = summary };
+    }
+
     public string BuildContextualPrompt(ChatSessionContext context)
     {
         var builder = new StringBuilder();
@@ -392,6 +501,103 @@ public sealed class ChatAssistantService
         {
             return null;
         }
+    }
+
+    private static AiArtifactAnnotation? ParseArtifactAnnotation(string response)
+    {
+        if (string.IsNullOrWhiteSpace(response))
+        {
+            return null;
+        }
+
+        var jsonText = ExtractJsonPayload(response);
+        if (string.IsNullOrWhiteSpace(jsonText))
+        {
+            return null;
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(jsonText);
+            var root = document.RootElement;
+
+            var summary = root.TryGetProperty("markdown_summary", out var summaryElement)
+                ? summaryElement.GetString()
+                : root.TryGetProperty("summary", out var fallbackSummary)
+                    ? fallbackSummary.GetString()
+                    : null;
+
+            var recommendations = new List<AiRecommendation>();
+            if (root.TryGetProperty("recommendations", out var recsElement) && recsElement.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var recElement in recsElement.EnumerateArray())
+                {
+                    var title = recElement.TryGetProperty("title", out var titleElement)
+                        ? titleElement.GetString()
+                        : null;
+                    var detail = recElement.TryGetProperty("summary", out var detailElement)
+                        ? detailElement.GetString()
+                        : null;
+                    var prompts = ReadStringArray(recElement, "suggested_prompts");
+                    if (prompts.Count == 0)
+                    {
+                        prompts = ReadStringArray(recElement, "prompts");
+                    }
+
+                    var assets = ReadStringArray(recElement, "related_assets");
+                    if (assets.Count == 0)
+                    {
+                        assets = ReadStringArray(recElement, "assets");
+                    }
+
+                    var normalizedTitle = string.IsNullOrWhiteSpace(title) ? "Recommendation" : title.Trim();
+                    var normalizedDetail = string.IsNullOrWhiteSpace(detail) ? string.Empty : detail.Trim();
+                    var normalizedPrompts = prompts.Count > 0 ? prompts : new List<string>();
+                    var normalizedAssets = assets.Count > 0 ? assets : null;
+
+                    recommendations.Add(new AiRecommendation(
+                        normalizedTitle,
+                        normalizedDetail,
+                        normalizedPrompts.Count > 0 ? normalizedPrompts : Array.Empty<string>(),
+                        normalizedAssets));
+                }
+            }
+
+            var materialRecommendations = recommendations.Count > 0
+                ? recommendations.ToArray()
+                : Array.Empty<AiRecommendation>();
+
+            var normalizedSummary = string.IsNullOrWhiteSpace(summary) ? string.Empty : summary.Trim();
+
+            if (string.IsNullOrWhiteSpace(normalizedSummary) && materialRecommendations.Length == 0)
+            {
+                return null;
+            }
+
+            return new AiArtifactAnnotation(DateTimeOffset.UtcNow, normalizedSummary, materialRecommendations);
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    private static List<string> ReadStringArray(JsonElement element, string propertyName)
+    {
+        var results = new List<string>();
+        if (element.TryGetProperty(propertyName, out var arrayElement) && arrayElement.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in arrayElement.EnumerateArray())
+            {
+                var value = item.GetString();
+                if (!string.IsNullOrWhiteSpace(value))
+                {
+                    results.Add(value.Trim());
+                }
+            }
+        }
+
+        return results;
     }
 
     private static string? ExtractJsonPayload(string response)
