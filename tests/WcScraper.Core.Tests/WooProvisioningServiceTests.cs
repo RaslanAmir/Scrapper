@@ -121,7 +121,8 @@ public class WooProvisioningServiceTests
         Assert.Contains(logs, message => message.Contains("Creating variation 'PARENT-SKU-BLU'", StringComparison.Ordinal));
 
         var productCall = handler.Calls.Single(call => call.Method == HttpMethod.Post && call.Path == "/wp-json/wc/v3/products");
-        using (var doc = JsonDocument.Parse(productCall.Content))
+        Assert.NotNull(productCall.Content);
+        using (var doc = JsonDocument.Parse(productCall.Content!))
         {
             var root = doc.RootElement;
             Assert.Equal("variable", root.GetProperty("type").GetString());
@@ -134,7 +135,8 @@ public class WooProvisioningServiceTests
         }
 
         var variationCall = handler.Calls.Single(call => call.Method == HttpMethod.Post && call.Path == "/wp-json/wc/v3/products/200/variations");
-        using (var doc = JsonDocument.Parse(variationCall.Content))
+        Assert.NotNull(variationCall.Content);
+        using (var doc = JsonDocument.Parse(variationCall.Content!))
         {
             var root = doc.RootElement;
             Assert.Equal("PARENT-SKU-BLU", root.GetProperty("sku").GetString());
@@ -294,13 +296,15 @@ public class WooProvisioningServiceTests
         Assert.Contains(logs, message => message.Contains("Creating variation 'PARENT-SKU-LRG'", StringComparison.Ordinal));
 
         var productCall = handler.Calls.Single(call => call.Method == HttpMethod.Post && call.Path == "/wp-json/wc/v3/products");
-        using (var doc = JsonDocument.Parse(productCall.Content))
+        Assert.NotNull(productCall.Content);
+        using (var doc = JsonDocument.Parse(productCall.Content!))
         {
             Assert.Equal("variable", doc.RootElement.GetProperty("type").GetString());
         }
 
         var variationCall = handler.Calls.Single(call => call.Method == HttpMethod.Post && call.Path == "/wp-json/wc/v3/products/200/variations");
-        using (var doc = JsonDocument.Parse(variationCall.Content))
+        Assert.NotNull(variationCall.Content);
+        using (var doc = JsonDocument.Parse(variationCall.Content!))
         {
             var root = doc.RootElement;
             Assert.Equal("PARENT-SKU-LRG", root.GetProperty("sku").GetString());
@@ -342,14 +346,16 @@ public class WooProvisioningServiceTests
 
         Assert.Equal(2, categoryPosts.Count);
 
-        using (var parentDoc = JsonDocument.Parse(categoryPosts[0].Content))
+        Assert.NotNull(categoryPosts[0].Content);
+        using (var parentDoc = JsonDocument.Parse(categoryPosts[0].Content!))
         {
             var root = parentDoc.RootElement;
             Assert.Equal("parent", root.GetProperty("slug").GetString());
             Assert.False(root.TryGetProperty("parent", out _));
         }
 
-        using (var childDoc = JsonDocument.Parse(categoryPosts[1].Content))
+        Assert.NotNull(categoryPosts[1].Content);
+        using (var childDoc = JsonDocument.Parse(categoryPosts[1].Content!))
         {
             var root = childDoc.RootElement;
             Assert.Equal("child", root.GetProperty("slug").GetString());

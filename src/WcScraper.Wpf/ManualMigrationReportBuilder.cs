@@ -5,7 +5,6 @@ using System.IO;
 using System.Linq;
 using System.Text;
 using WcScraper.Core;
-using WcScraper.Core.Models;
 
 namespace WcScraper.Wpf.Reporting;
 
