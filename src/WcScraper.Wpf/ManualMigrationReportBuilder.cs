@@ -397,8 +397,63 @@ internal sealed class ManualMigrationReportBuilder
         builder.AppendLine("- **Inline CSS length:** " + snapshot.InlineCss.Length.ToString("N0", CultureInfo.InvariantCulture) + " characters");
         builder.AppendLine("- **External stylesheets:** " + snapshot.Stylesheets.Count);
         builder.AppendLine("- **Font files:** " + snapshot.FontFiles.Count);
+        builder.AppendLine("- **Favicons/icons:** " + snapshot.IconFiles.Count);
         builder.AppendLine("- **Design images:** " + snapshot.ImageFiles.Count + " (CSS " + snapshot.CssImageFiles.Count + ", HTML " + snapshot.HtmlImageFiles.Count + ")");
         builder.AppendLine("- **Font declarations:** " + snapshot.FontUrls.Count);
+        if (snapshot.IconFiles.Count > 0)
+        {
+            builder.AppendLine("- **Captured icon sources:**");
+            foreach (var icon in snapshot.IconFiles)
+            {
+                var url = icon.ResolvedUrl;
+                if (string.IsNullOrWhiteSpace(url))
+                {
+                    url = icon.SourceUrl;
+                }
+
+                if (string.IsNullOrWhiteSpace(url))
+                {
+                    url = "(unknown icon)";
+                }
+
+                var detailParts = new List<string>();
+                if (!string.IsNullOrWhiteSpace(icon.ContentType))
+                {
+                    detailParts.Add("content-type=" + icon.ContentType);
+                }
+
+                if (!string.IsNullOrWhiteSpace(icon.Rel))
+                {
+                    detailParts.Add("rel=" + icon.Rel);
+                }
+
+                if (!string.IsNullOrWhiteSpace(icon.LinkType))
+                {
+                    detailParts.Add("link-type=" + icon.LinkType);
+                }
+
+                if (!string.IsNullOrWhiteSpace(icon.Sizes))
+                {
+                    detailParts.Add("sizes=" + icon.Sizes);
+                }
+
+                if (!string.IsNullOrWhiteSpace(icon.Color))
+                {
+                    detailParts.Add("color=" + icon.Color);
+                }
+
+                if (!string.IsNullOrWhiteSpace(icon.Media))
+                {
+                    detailParts.Add("media=" + icon.Media);
+                }
+
+                var detailsText = detailParts.Count > 0
+                    ? " (" + string.Join(", ", detailParts.Select(MarkdownEscape)) + ")"
+                    : string.Empty;
+
+                builder.AppendLine($"  - {MarkdownEscape(url)}{detailsText}");
+            }
+        }
         if (snapshot.Pages.Count > 0)
         {
             builder.AppendLine("- **Captured pages:**");
@@ -415,10 +470,17 @@ internal sealed class ManualMigrationReportBuilder
             builder.AppendLine("- **Captured pages:**");
             builder.AppendLine($"  - {MarkdownEscape(snapshot.HomeUrl)}");
         }
-        builder.AppendLine("- **Design folder:** `" + Path.Combine(context.OutputFolder, "design") + "`");
+        var designFolder = Path.Combine(context.OutputFolder, "design");
+        var manifestJsonPath = Path.Combine(designFolder, "assets-manifest.json");
+        var manifestCsvPath = Path.Combine(designFolder, "assets-manifest.csv");
+        builder.AppendLine("- **Design folder:** `" + designFolder + "`");
+        if (snapshot.IconFiles.Count > 0)
+        {
+            builder.AppendLine("- **Design icons folder:** `" + Path.Combine(designFolder, "icons") + "`");
+        }
         builder.AppendLine(
-            "- **Asset manifest:** `" + Path.Combine(context.OutputFolder, "design", "assets-manifest.json") +
-            "` (includes `file_size_bytes`, `sha256`, and CSS/HTML origin metadata for every stylesheet, font, and design image).");
+            "- **Asset manifests:** `" + manifestJsonPath + "` and `" + manifestCsvPath +
+            "` (includes `file_size_bytes`, `sha256`, and origin metadata for every stylesheet, font, design image, and icon).");
     }
 
     private static void AppendTypographySummary(StringBuilder builder, ManualMigrationReportContext context)
