@@ -6,8 +6,10 @@
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:vm="clr-namespace:WcScraper.Wpf.ViewModels"
         xmlns:svc="clr-namespace:WcScraper.Wpf.Services"
+        xmlns:models="clr-namespace:WcScraper.Wpf.Models"
         mc:Ignorable="d"
-        Title="WC Local Scraper (WPF)" Height="580" Width="900">
+        Title="WC Local Scraper (WPF)" Height="580" Width="900"
+        DataContextChanged="OnMainWindowDataContextChanged">
     <Window.Resources>
         <BooleanToVisibilityConverter x:Key="BoolToVisibility" />
         <Style x:Key="CredentialDependentCheckBoxStyle" TargetType="CheckBox">
@@ -34,15 +36,16 @@
 
         <ScrollViewer Grid.Row="0" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
             <Grid Margin="0,0,0,12">
-                <Grid.RowDefinitions>
-                    <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="Auto"/>
-                </Grid.RowDefinitions>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="*"/>
@@ -306,6 +309,95 @@
                 </Grid>
             </StackPanel>
         </GroupBox>
+
+        <Expander Grid.Row="7" Grid.ColumnSpan="3" Header="AI Assistant" Margin="0,12,0,8">
+            <Border Padding="8">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="280"/>
+                        <ColumnDefinition Width="12"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <StackPanel Grid.Column="0">
+                        <TextBlock Text="API endpoint:" FontWeight="SemiBold"/>
+                        <TextBox Text="{Binding ChatApiEndpoint, UpdateSourceTrigger=PropertyChanged}" Margin="0,4,0,0"/>
+                        <TextBlock Text="Model / deployment:" Margin="0,12,0,0" FontWeight="SemiBold"/>
+                        <TextBox Text="{Binding ChatModel, UpdateSourceTrigger=PropertyChanged}" Margin="0,4,0,0"/>
+                        <TextBlock Text="API key:" Margin="0,12,0,0" FontWeight="SemiBold"/>
+                        <PasswordBox x:Name="ChatApiKeyBox"
+                                     Margin="0,4,0,0"
+                                     PasswordChanged="OnChatApiKeyChanged"/>
+                        <TextBlock Text="{Binding HasChatApiKey, StringFormat=Key stored: {0}}"
+                                   Foreground="Gray"
+                                   Margin="0,4,0,0"/>
+                        <TextBlock Text="System prompt (optional):" Margin="0,12,0,0" FontWeight="SemiBold"/>
+                        <TextBox Text="{Binding ChatSystemPrompt, UpdateSourceTrigger=PropertyChanged}"
+                                 AcceptsReturn="True"
+                                 TextWrapping="Wrap"
+                                 Height="120"
+                                 VerticalScrollBarVisibility="Auto"
+                                 Margin="0,4,0,0"/>
+                    </StackPanel>
+                    <Grid Grid.Column="2">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+                        <TextBlock Grid.Row="0"
+                                   Text="{Binding ChatStatusMessage}"
+                                   FontWeight="SemiBold"
+                                   TextWrapping="Wrap"/>
+                        <Border Grid.Row="1" BorderBrush="#FFD9D9D9" BorderThickness="1" Padding="8" Margin="0,8,0,8">
+                            <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                                <ItemsControl ItemsSource="{Binding ChatMessages}">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate DataType="{x:Type models:ChatMessage}">
+                                            <Border Margin="0,4,0,4" Padding="8">
+                                                <Border.Style>
+                                                    <Style TargetType="Border">
+                                                        <Setter Property="Background" Value="#FFF7F7F9"/>
+                                                        <Setter Property="CornerRadius" Value="6"/>
+                                                        <Setter Property="HorizontalAlignment" Value="Stretch"/>
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding Role}" Value="{x:Static models:ChatMessageRole.User}">
+                                                                <Setter Property="Background" Value="#FFE6F7FF"/>
+                                                                <Setter Property="HorizontalAlignment" Value="Right"/>
+                                                            </DataTrigger>
+                                                            <DataTrigger Binding="{Binding Role}" Value="{x:Static models:ChatMessageRole.Assistant}">
+                                                                <Setter Property="Background" Value="#FFF3F0FF"/>
+                                                                <Setter Property="HorizontalAlignment" Value="Left"/>
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </Border.Style>
+                                                <StackPanel>
+                                                    <TextBlock Text="{Binding Role}" FontWeight="Bold"/>
+                                                    <TextBlock Text="{Binding Content}" TextWrapping="Wrap" Margin="0,4,0,0"/>
+                                                </StackPanel>
+                                            </Border>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </ScrollViewer>
+                        </Border>
+                        <TextBox Grid.Row="2"
+                                 Text="{Binding ChatInput, UpdateSourceTrigger=PropertyChanged}"
+                                 AcceptsReturn="True"
+                                 Height="80"
+                                 TextWrapping="Wrap"
+                                 VerticalScrollBarVisibility="Auto"
+                                 Margin="0,0,0,8"/>
+                        <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right">
+                            <Button Content="Send"
+                                    Command="{Binding SendChatCommand}"
+                                    Padding="16,6"/>
+                        </StackPanel>
+                    </Grid>
+                </Grid>
+            </Border>
+        </Expander>
             </Grid>
         </ScrollViewer>
 
