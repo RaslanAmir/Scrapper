@@ -1,0 +1,16 @@
+<Window x:Class="WcScraper.Wpf.Views.LogWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Logs"
+        Height="450"
+        Width="600"
+        MinHeight="300"
+        MinWidth="400">
+    <DockPanel Margin="8">
+        <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,8">
+            <Button Content="Copy All" Padding="12,4" Margin="0,0,8,0" Click="OnCopyAll" />
+            <Button Content="Clear" Padding="12,4" Click="OnClear" />
+        </StackPanel>
+        <ListBox x:Name="LogsList" ItemsSource="{Binding}" FontFamily="Consolas" />
+    </DockPanel>
+</Window>
