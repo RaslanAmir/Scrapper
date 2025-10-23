@@ -4,13 +4,32 @@ using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Text;
+using System.Threading;
+using System.Threading.Tasks;
 using WcScraper.Core;
+using WcScraper.Wpf.Models;
+using WcScraper.Wpf.Services;
 
 namespace WcScraper.Wpf.Reporting;
 
 internal sealed class ManualMigrationReportBuilder
 {
-    public string Build(ManualMigrationReportContext context)
+    private readonly ChatAssistantService? _chatAssistantService;
+
+    public ManualMigrationReportBuilder()
+        : this(null)
+    {
+    }
+
+    public ManualMigrationReportBuilder(ChatAssistantService? chatAssistantService)
+    {
+        _chatAssistantService = chatAssistantService;
+    }
+
+    public async Task<ManualMigrationReportBuildResult> BuildAsync(
+        ManualMigrationReportContext context,
+        ChatSessionSettings? chatSession,
+        CancellationToken cancellationToken = default)
     {
         if (context is null)
         {
@@ -45,11 +64,19 @@ internal sealed class ManualMigrationReportBuilder
         builder.AppendLine();
         AppendDesignSection(builder, context);
         builder.AppendLine();
+
+        var (annotation, annotationError) = await TryAnnotateArtifactsAsync(context, chatSession, cancellationToken).ConfigureAwait(false);
+        if (annotation is not null)
+        {
+            AppendAiRecommendationsSection(builder, annotation);
+            builder.AppendLine();
+        }
+
         AppendCredentialNotes(builder, context);
         builder.AppendLine();
         AppendLogHighlights(builder, context);
 
-        return builder.ToString();
+        return new ManualMigrationReportBuildResult(builder.ToString(), annotation, annotationError);
     }
 
     private static string FormatRetrySummary(ManualMigrationReportContext context)
@@ -700,6 +727,88 @@ internal sealed class ManualMigrationReportBuilder
         }
     }
 
+    private static void AppendAiRecommendationsSection(StringBuilder builder, AiArtifactAnnotation annotation)
+    {
+        builder.AppendLine("## AI recommendations");
+        builder.AppendLine();
+
+        if (!string.IsNullOrWhiteSpace(annotation.MarkdownSummary))
+        {
+            builder.AppendLine(annotation.MarkdownSummary.Trim());
+            builder.AppendLine();
+        }
+
+        if (!annotation.HasRecommendations)
+        {
+            builder.AppendLine("No additional recommendations were generated for this run.");
+            return;
+        }
+
+        foreach (var recommendation in annotation.Recommendations)
+        {
+            builder.AppendLine($"### {MarkdownEscape(recommendation.Title)}");
+            if (!string.IsNullOrWhiteSpace(recommendation.Summary))
+            {
+                builder.AppendLine(recommendation.Summary.Trim());
+                builder.AppendLine();
+            }
+
+            if (recommendation.HasRelatedAssets && recommendation.RelatedAssets is { } assets && assets.Count > 0)
+            {
+                builder.AppendLine("**Related assets:**");
+                foreach (var asset in assets)
+                {
+                    builder.AppendLine($"- {MarkdownEscape(asset)}");
+                }
+
+                builder.AppendLine();
+            }
+
+            if (recommendation.HasSuggestedPrompts && recommendation.SuggestedPrompts is { } prompts && prompts.Count > 0)
+            {
+                builder.AppendLine("**Suggested follow-ups:**");
+                foreach (var prompt in prompts)
+                {
+                    builder.AppendLine($"- {MarkdownEscape(prompt)}");
+                }
+
+                builder.AppendLine();
+            }
+        }
+    }
+
+    private async Task<(AiArtifactAnnotation? Annotation, string? Error)> TryAnnotateArtifactsAsync(
+        ManualMigrationReportContext context,
+        ChatSessionSettings? chatSession,
+        CancellationToken cancellationToken)
+    {
+        if (_chatAssistantService is null || chatSession is null)
+        {
+            return (null, null);
+        }
+
+        if (context.ArtifactIntelligence is not { HasContent: true })
+        {
+            return (null, null);
+        }
+
+        try
+        {
+            var annotation = await _chatAssistantService
+                .AnnotateArtifactsAsync(chatSession, context.ArtifactIntelligence!, cancellationToken)
+                .ConfigureAwait(false);
+            return (annotation, null);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            return (null, ex.Message);
+        }
+    }
+
     private static string DescribeDetectionLimit(PublicExtensionDetectionSummary detection)
     {
         var parts = new List<string>();
@@ -852,4 +961,10 @@ internal sealed record ManualMigrationReportContext(
     bool HttpRetriesEnabled,
     int HttpRetryAttempts,
     TimeSpan HttpRetryBaseDelay,
-    TimeSpan HttpRetryMaxDelay);
+    TimeSpan HttpRetryMaxDelay,
+    AiArtifactIntelligencePayload? ArtifactIntelligence);
+
+internal sealed record ManualMigrationReportBuildResult(
+    string ReportMarkdown,
+    AiArtifactAnnotation? Annotation,
+    string? AnnotationError);

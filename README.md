@@ -14,6 +14,19 @@ The export bundle contains:
 
 Supply a WordPress username and application password before running the export if you want authenticated-only data (widgets, draft content) to be included.
 
+## AI artifact insights
+
+Runs that capture public extension footprints or front-end design snapshots now generate an aggregated payload for the chat assistant. The payload bundles:
+
+- Plugin and theme slugs detected from public assets, including any directory metadata and version hints.
+- Crawl boundary details (page/byte limits plus the additional URLs that were scanned).
+- Design manifest rows with file paths, SHA-256 hashes, asset types, and any referenced origins so AI replies can cite specific artifacts.
+- Captured color palettes from the front-end snapshot.
+
+When chat credentials are configured, the report builder forwards this payload to `ChatAssistantService.AnnotateArtifactsAsync`. The resulting guidance is embedded in the "AI recommendations" tab within the assistant panel and appended to the generated manual migration report.
+
+Operators can click suggested follow-up prompts in the recommendations tab to prefill the assistant textbox and request deeper analysis for a plugin, theme, or captured asset.
+
 ## Provisioning WordPress content
 
 During replication the WPF app now asks `WooProvisioningService` to seed WordPress content _before_ products are created. Provide the same WordPress credentials that were used during export so the provisioning pipeline can:

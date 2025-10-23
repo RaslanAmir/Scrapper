@@ -351,63 +351,218 @@
                                  VerticalScrollBarVisibility="Auto"
                                  Margin="0,4,0,0"/>
                     </StackPanel>
-                    <Grid Grid.Column="2">
-                        <Grid.RowDefinitions>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="*"/>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                        </Grid.RowDefinitions>
-                        <TextBlock Grid.Row="0"
-                                   Text="{Binding ChatStatusMessage}"
-                                   FontWeight="SemiBold"
-                                   TextWrapping="Wrap"/>
-                        <Border Grid.Row="1" BorderBrush="#FFD9D9D9" BorderThickness="1" Padding="8" Margin="0,8,0,8">
-                            <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-                                <ItemsControl ItemsSource="{Binding ChatMessages}">
-                                    <ItemsControl.ItemTemplate>
-                                        <DataTemplate DataType="{x:Type models:ChatMessage}">
-                                            <Border Margin="0,4,0,4" Padding="8">
-                                                <Border.Style>
-                                                    <Style TargetType="Border">
-                                                        <Setter Property="Background" Value="#FFF7F7F9"/>
-                                                        <Setter Property="CornerRadius" Value="6"/>
-                                                        <Setter Property="HorizontalAlignment" Value="Stretch"/>
+                    <TabControl Grid.Column="2">
+                        <TabItem Header="Chat">
+                            <Grid>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="*"/>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                </Grid.RowDefinitions>
+                                <TextBlock Grid.Row="0"
+                                           Text="{Binding ChatStatusMessage}"
+                                           FontWeight="SemiBold"
+                                           TextWrapping="Wrap"/>
+                                <Border Grid.Row="1" BorderBrush="#FFD9D9D9" BorderThickness="1" Padding="8" Margin="0,8,0,8">
+                                    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                                        <ItemsControl ItemsSource="{Binding ChatMessages}">
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate DataType="{x:Type models:ChatMessage}">
+                                                    <Border Margin="0,4,0,4" Padding="8">
+                                                        <Border.Style>
+                                                            <Style TargetType="Border">
+                                                                <Setter Property="Background" Value="#FFF7F7F9"/>
+                                                                <Setter Property="CornerRadius" Value="6"/>
+                                                                <Setter Property="HorizontalAlignment" Value="Stretch"/>
+                                                                <Style.Triggers>
+                                                                    <DataTrigger Binding="{Binding Role}" Value="{x:Static models:ChatMessageRole.User}">
+                                                                        <Setter Property="Background" Value="#FFE6F7FF"/>
+                                                                        <Setter Property="HorizontalAlignment" Value="Right"/>
+                                                                    </DataTrigger>
+                                                                    <DataTrigger Binding="{Binding Role}" Value="{x:Static models:ChatMessageRole.Assistant}">
+                                                                        <Setter Property="Background" Value="#FFF3F0FF"/>
+                                                                        <Setter Property="HorizontalAlignment" Value="Left"/>
+                                                                    </DataTrigger>
+                                                                </Style.Triggers>
+                                                            </Style>
+                                                        </Border.Style>
+                                                        <StackPanel>
+                                                            <TextBlock Text="{Binding Role}" FontWeight="Bold"/>
+                                                            <TextBlock Text="{Binding Content}" TextWrapping="Wrap" Margin="0,4,0,0"/>
+                                                        </StackPanel>
+                                                    </Border>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+                                    </ScrollViewer>
+                                </Border>
+                                <TextBox Grid.Row="2"
+                                         Text="{Binding ChatInput, UpdateSourceTrigger=PropertyChanged}"
+                                         AcceptsReturn="True"
+                                         Height="80"
+                                         TextWrapping="Wrap"
+                                         VerticalScrollBarVisibility="Auto"
+                                         Margin="0,0,0,8"/>
+                                <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right">
+                                    <Button Content="Send"
+                                            Command="{Binding SendChatCommand}"
+                                            Padding="16,6"/>
+                                </StackPanel>
+                            </Grid>
+                        </TabItem>
+                        <TabItem Header="AI recommendations">
+                            <Grid Margin="0,8,0,0">
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="*"/>
+                                </Grid.RowDefinitions>
+                                <TextBlock Grid.Row="0"
+                                           Text="Recommendations appear after a run when AI annotations are available."
+                                           TextWrapping="Wrap"
+                                           Foreground="Gray"/>
+                                <Border Grid.Row="1" BorderBrush="#FFD9D9D9" BorderThickness="1" Padding="8" Margin="0,8,0,0">
+                                    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                                        <StackPanel>
+                                            <TextBlock Text="No AI recommendations yet."
+                                                       FontStyle="Italic"
+                                                       Margin="0,0,0,8">
+                                                <TextBlock.Style>
+                                                    <Style TargetType="TextBlock">
+                                                        <Setter Property="Visibility" Value="Collapsed"/>
                                                         <Style.Triggers>
-                                                            <DataTrigger Binding="{Binding Role}" Value="{x:Static models:ChatMessageRole.User}">
-                                                                <Setter Property="Background" Value="#FFE6F7FF"/>
-                                                                <Setter Property="HorizontalAlignment" Value="Right"/>
-                                                            </DataTrigger>
-                                                            <DataTrigger Binding="{Binding Role}" Value="{x:Static models:ChatMessageRole.Assistant}">
-                                                                <Setter Property="Background" Value="#FFF3F0FF"/>
-                                                                <Setter Property="HorizontalAlignment" Value="Left"/>
+                                                            <DataTrigger Binding="{Binding HasAiRecommendations}" Value="False">
+                                                                <Setter Property="Visibility" Value="Visible"/>
                                                             </DataTrigger>
                                                         </Style.Triggers>
                                                     </Style>
-                                                </Border.Style>
-                                                <StackPanel>
-                                                    <TextBlock Text="{Binding Role}" FontWeight="Bold"/>
-                                                    <TextBlock Text="{Binding Content}" TextWrapping="Wrap" Margin="0,4,0,0"/>
-                                                </StackPanel>
-                                            </Border>
-                                        </DataTemplate>
-                                    </ItemsControl.ItemTemplate>
-                                </ItemsControl>
-                            </ScrollViewer>
-                        </Border>
-                        <TextBox Grid.Row="2"
-                                 Text="{Binding ChatInput, UpdateSourceTrigger=PropertyChanged}"
-                                 AcceptsReturn="True"
-                                 Height="80"
-                                 TextWrapping="Wrap"
-                                 VerticalScrollBarVisibility="Auto"
-                                 Margin="0,0,0,8"/>
-                        <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right">
-                            <Button Content="Send"
-                                    Command="{Binding SendChatCommand}"
-                                    Padding="16,6"/>
-                        </StackPanel>
-                    </Grid>
+                                                </TextBlock.Style>
+                                            </TextBlock>
+                                            <TextBlock Text="{Binding LatestRunAiAnnotationTimestamp, StringFormat=Generated at: {0:O}}"
+                                                       Margin="0,0,0,8">
+                                                <TextBlock.Style>
+                                                    <Style TargetType="TextBlock">
+                                                        <Setter Property="Visibility" Value="Visible"/>
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding LatestRunAiAnnotationTimestamp}" Value="{x:Null}">
+                                                                <Setter Property="Visibility" Value="Collapsed"/>
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </TextBlock.Style>
+                                            </TextBlock>
+                                            <TextBox Text="{Binding LatestRunAiRecommendationSummary}"
+                                                     IsReadOnly="True"
+                                                     TextWrapping="Wrap"
+                                                     AcceptsReturn="True"
+                                                     BorderThickness="0"
+                                                     Background="Transparent"
+                                                     Margin="0,0,0,12">
+                                                <TextBox.Style>
+                                                    <Style TargetType="TextBox">
+                                                        <Setter Property="Visibility" Value="Collapsed"/>
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding HasAiRecommendations}" Value="True">
+                                                                <Setter Property="Visibility" Value="Visible"/>
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </TextBox.Style>
+                                            </TextBox>
+                                            <ItemsControl ItemsSource="{Binding LatestRunAiRecommendations}">
+                                                <ItemsControl.Style>
+                                                    <Style TargetType="ItemsControl">
+                                                        <Setter Property="Visibility" Value="Collapsed"/>
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding HasAiRecommendations}" Value="True">
+                                                                <Setter Property="Visibility" Value="Visible"/>
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </ItemsControl.Style>
+                                                <ItemsControl.ItemTemplate>
+                                                    <DataTemplate DataType="{x:Type models:AiRecommendation}">
+                                                        <Border Margin="0,0,0,12" Padding="8" BorderBrush="#FFD9D9D9" BorderThickness="1" CornerRadius="6">
+                                                            <StackPanel>
+                                                                <TextBlock Text="{Binding Title}" FontWeight="Bold"/>
+                                                                <TextBlock Text="{Binding Summary}" TextWrapping="Wrap" Margin="0,4,0,0"/>
+                                                                <StackPanel Margin="0,8,0,0">
+                                                                    <TextBlock Text="Related assets:" FontWeight="SemiBold">
+                                                                        <TextBlock.Style>
+                                                                            <Style TargetType="TextBlock">
+                                                                                <Setter Property="Visibility" Value="Collapsed"/>
+                                                                                <Style.Triggers>
+                                                                                    <DataTrigger Binding="{Binding HasRelatedAssets}" Value="True">
+                                                                                        <Setter Property="Visibility" Value="Visible"/>
+                                                                                    </DataTrigger>
+                                                                                </Style.Triggers>
+                                                                            </Style>
+                                                                        </TextBlock.Style>
+                                                                    </TextBlock>
+                                                                    <ItemsControl ItemsSource="{Binding RelatedAssets}">
+                                                                        <ItemsControl.Style>
+                                                                            <Style TargetType="ItemsControl">
+                                                                                <Setter Property="Visibility" Value="Collapsed"/>
+                                                                                <Style.Triggers>
+                                                                                    <DataTrigger Binding="{Binding HasRelatedAssets}" Value="True">
+                                                                                        <Setter Property="Visibility" Value="Visible"/>
+                                                                                    </DataTrigger>
+                                                                                </Style.Triggers>
+                                                                            </Style>
+                                                                        </ItemsControl.Style>
+                                                                        <ItemsControl.ItemTemplate>
+                                                                            <DataTemplate>
+                                                                                <TextBlock Text="•  {Binding}" TextWrapping="Wrap" Margin="0,2,0,0"/>
+                                                                            </DataTemplate>
+                                                                        </ItemsControl.ItemTemplate>
+                                                                    </ItemsControl>
+                                                                </StackPanel>
+                                                                <StackPanel Margin="0,8,0,0">
+                                                                    <TextBlock Text="Suggested follow-ups:" FontWeight="SemiBold">
+                                                                        <TextBlock.Style>
+                                                                            <Style TargetType="TextBlock">
+                                                                                <Setter Property="Visibility" Value="Collapsed"/>
+                                                                                <Style.Triggers>
+                                                                                    <DataTrigger Binding="{Binding HasSuggestedPrompts}" Value="True">
+                                                                                        <Setter Property="Visibility" Value="Visible"/>
+                                                                                    </DataTrigger>
+                                                                                </Style.Triggers>
+                                                                            </Style>
+                                                                        </TextBlock.Style>
+                                                                    </TextBlock>
+                                                                    <ItemsControl ItemsSource="{Binding SuggestedPrompts}">
+                                                                        <ItemsControl.Style>
+                                                                            <Style TargetType="ItemsControl">
+                                                                                <Setter Property="Visibility" Value="Collapsed"/>
+                                                                                <Style.Triggers>
+                                                                                    <DataTrigger Binding="{Binding HasSuggestedPrompts}" Value="True">
+                                                                                        <Setter Property="Visibility" Value="Visible"/>
+                                                                                    </DataTrigger>
+                                                                                </Style.Triggers>
+                                                                            </Style>
+                                                                        </ItemsControl.Style>
+                                                                        <ItemsControl.ItemTemplate>
+                                                                            <DataTemplate>
+                                                                                <Button Content="{Binding}"
+                                                                                        Command="{Binding DataContext.UseAiRecommendationCommand, RelativeSource={RelativeSource AncestorType=TabItem}}"
+                                                                                        CommandParameter="{Binding}"
+                                                                                        Margin="0,4,0,0"
+                                                                                        HorizontalAlignment="Left"/>
+                                                                            </DataTemplate>
+                                                                        </ItemsControl.ItemTemplate>
+                                                                    </ItemsControl>
+                                                                </StackPanel>
+                                                            </StackPanel>
+                                                        </Border>
+                                                    </DataTemplate>
+                                                </ItemsControl.ItemTemplate>
+                                            </ItemsControl>
+                                        </StackPanel>
+                                    </ScrollViewer>
+                                </Border>
+                            </Grid>
+                        </TabItem>
+                    </TabControl>
                 </Grid>
             </Border>
         </Expander>
