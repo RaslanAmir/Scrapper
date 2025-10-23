@@ -16,10 +16,18 @@ public sealed class WordPressDirectoryClient
     private const string ThemeEndpoint = "https://api.wordpress.org/themes/info/1.2/";
     private static readonly Regex DirectorySlugRegex = new("^[a-z0-9-]+$", RegexOptions.CultureInvariant | RegexOptions.Compiled);
     private readonly HttpClient _httpClient;
+    private HttpRetryPolicy _retryPolicy;
 
-    public WordPressDirectoryClient(HttpClient httpClient)
+    public WordPressDirectoryClient(HttpClient httpClient, HttpRetryPolicy? retryPolicy = null)
     {
         _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
+        _retryPolicy = retryPolicy ?? new HttpRetryPolicy();
+    }
+
+    public HttpRetryPolicy RetryPolicy
+    {
+        get => _retryPolicy;
+        set => _retryPolicy = value ?? throw new ArgumentNullException(nameof(value));
     }
 
     public static bool IsLikelyDirectorySlug(string slug)
@@ -47,14 +55,22 @@ public sealed class WordPressDirectoryClient
         return true;
     }
 
-    public async Task<WordPressDirectoryEntry?> GetPluginAsync(string slug, CancellationToken cancellationToken = default)
+    public async Task<WordPressDirectoryEntry?> GetPluginAsync(
+        string slug,
+        CancellationToken cancellationToken = default,
+        IProgress<string>? log = null)
     {
-        return await GetAsync(PluginEndpoint, "plugin_information", slug, ParsePluginAsync, cancellationToken).ConfigureAwait(false);
+        return await GetAsync(PluginEndpoint, "plugin_information", slug, ParsePluginAsync, cancellationToken, log)
+            .ConfigureAwait(false);
     }
 
-    public async Task<WordPressDirectoryEntry?> GetThemeAsync(string slug, CancellationToken cancellationToken = default)
+    public async Task<WordPressDirectoryEntry?> GetThemeAsync(
+        string slug,
+        CancellationToken cancellationToken = default,
+        IProgress<string>? log = null)
     {
-        return await GetAsync(ThemeEndpoint, "theme_information", slug, ParseThemeAsync, cancellationToken).ConfigureAwait(false);
+        return await GetAsync(ThemeEndpoint, "theme_information", slug, ParseThemeAsync, cancellationToken, log)
+            .ConfigureAwait(false);
     }
 
     private async Task<WordPressDirectoryEntry?> GetAsync(
@@ -62,7 +78,8 @@ public sealed class WordPressDirectoryClient
         string action,
         string slug,
         Func<Stream, CancellationToken, Task<WordPressDirectoryEntry?>> parser,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        IProgress<string>? log)
     {
         if (string.IsNullOrWhiteSpace(slug))
         {
@@ -70,7 +87,11 @@ public sealed class WordPressDirectoryClient
         }
 
         var requestUri = BuildRequestUri(endpoint, action, slug);
-        using var response = await _httpClient.GetAsync(requestUri, cancellationToken).ConfigureAwait(false);
+        using var response = await _retryPolicy.SendAsync(
+                () => _httpClient.GetAsync(requestUri, cancellationToken),
+                cancellationToken,
+                attempt => ReportRetry(log, slug, attempt))
+            .ConfigureAwait(false);
         if (!response.IsSuccessStatusCode)
         {
             if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
@@ -83,6 +104,26 @@ public sealed class WordPressDirectoryClient
 
         await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
         return await parser(stream, cancellationToken).ConfigureAwait(false);
+    }
+
+    private static void ReportRetry(IProgress<string>? log, string slug, HttpRetryAttempt attempt)
+    {
+        if (log is null)
+        {
+            return;
+        }
+
+        string delay;
+        if (attempt.Delay.TotalSeconds >= 1)
+        {
+            delay = $"{attempt.Delay.TotalSeconds:F1}s";
+        }
+        else
+        {
+            delay = $"{Math.Max(1, attempt.Delay.TotalMilliseconds):F0}ms";
+        }
+
+        log.Report($"Retrying WordPress.org request for slug '{slug}' in {delay} (attempt {attempt.AttemptNumber}): {attempt.Reason}");
     }
 
     private static string BuildRequestUri(string endpoint, string action, string slug)

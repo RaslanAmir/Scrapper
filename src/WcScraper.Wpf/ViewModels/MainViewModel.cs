@@ -501,6 +501,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
             _enableHttpRetries = value;
             OnPropertyChanged();
+            SavePreferences();
         }
     }
 
@@ -517,6 +518,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
             _httpRetryAttempts = newValue;
             OnPropertyChanged();
+            SavePreferences();
         }
     }
 
@@ -541,6 +543,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
             _httpRetryBaseDelaySeconds = newValue;
             OnPropertyChanged();
+            SavePreferences();
         }
     }
 
@@ -565,6 +568,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
             _httpRetryMaxDelaySeconds = newValue;
             OnPropertyChanged();
+            SavePreferences();
         }
     }
 
@@ -1520,6 +1524,19 @@ public sealed class MainViewModel : INotifyPropertyChanged
             {
                 _chatSystemPrompt = snapshot.ChatSystemPrompt!;
             }
+            _enableHttpRetries = snapshot.EnableHttpRetries;
+            if (snapshot.HttpRetryAttempts >= 0)
+            {
+                _httpRetryAttempts = snapshot.HttpRetryAttempts;
+            }
+            if (snapshot.HttpRetryBaseDelaySeconds > 0)
+            {
+                _httpRetryBaseDelaySeconds = snapshot.HttpRetryBaseDelaySeconds;
+            }
+            if (snapshot.HttpRetryMaxDelaySeconds > 0)
+            {
+                _httpRetryMaxDelaySeconds = snapshot.HttpRetryMaxDelaySeconds;
+            }
         }
         catch
         {
@@ -1782,6 +1799,10 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 ChatApiEndpoint = ChatApiEndpoint,
                 ChatModel = ChatModel,
                 ChatSystemPrompt = ChatSystemPrompt,
+                EnableHttpRetries = EnableHttpRetries,
+                HttpRetryAttempts = HttpRetryAttempts,
+                HttpRetryBaseDelaySeconds = HttpRetryBaseDelaySeconds,
+                HttpRetryMaxDelaySeconds = HttpRetryMaxDelaySeconds,
             };
 
             var json = JsonSerializer.Serialize(snapshot, _preferencesWriteOptions);
@@ -1962,6 +1983,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         var retrySettings = GetRetrySettings();
         var retryPolicy = new HttpRetryPolicy(retrySettings.Attempts, retrySettings.BaseDelay, retrySettings.MaxDelay);
         _wooScraper.HttpPolicy = retryPolicy;
+        _wpDirectoryClient.RetryPolicy = retryPolicy;
 
         ResetProvisioningContext();
 
@@ -3926,8 +3948,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
             {
                 log.Report($"Looking up {footprint.Type} slug '{slug}' on WordPress.org…");
                 entry = footprint.Type.Equals("theme", StringComparison.OrdinalIgnoreCase)
-                    ? await _wpDirectoryClient.GetThemeAsync(slug).ConfigureAwait(false)
-                    : await _wpDirectoryClient.GetPluginAsync(slug).ConfigureAwait(false);
+                    ? await _wpDirectoryClient.GetThemeAsync(slug, log: log).ConfigureAwait(false)
+                    : await _wpDirectoryClient.GetPluginAsync(slug, log: log).ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or IOException)
             {
@@ -5039,6 +5061,10 @@ public sealed class MainViewModel : INotifyPropertyChanged
         public string? ChatApiEndpoint { get; set; }
         public string? ChatModel { get; set; }
         public string? ChatSystemPrompt { get; set; }
+        public bool EnableHttpRetries { get; set; }
+        public int HttpRetryAttempts { get; set; }
+        public double HttpRetryBaseDelaySeconds { get; set; }
+        public double HttpRetryMaxDelaySeconds { get; set; }
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;
