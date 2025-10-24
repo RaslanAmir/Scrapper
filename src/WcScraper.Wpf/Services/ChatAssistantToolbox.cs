@@ -82,7 +82,7 @@ public sealed class ChatAssistantToolbox
         return new LatestRunSnapshotPayload(true, parsed, snapshot);
     }
 
-    private ExportFileListPayload ListExportFiles(ListExportFilesArguments args)
+    private ExportFileListPayload ListExportFiles(ListExportFilesArguments? args)
     {
         var limit = Math.Clamp(args?.Limit ?? 10, 1, 50);
         if (_exportFileProvider is null)
