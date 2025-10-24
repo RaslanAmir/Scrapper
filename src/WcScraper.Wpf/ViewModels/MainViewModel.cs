@@ -2551,6 +2551,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private void ApplyAssistantRetryDirective(AssistantRetryDirective directive)
     {
         var updates = new List<string>();
+        var baseDelaySeconds = directive.BaseDelaySeconds;
 
         if (directive.Enable is bool enable)
         {
@@ -2582,7 +2583,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
             }
         }
 
-        if (directive.BaseDelaySeconds is double baseDelay)
+        if (baseDelaySeconds is double baseDelay)
         {
             if (!IsDelayWithinRange(baseDelay))
             {
@@ -2605,9 +2606,9 @@ public sealed class MainViewModel : INotifyPropertyChanged
             {
                 Append($"Assistant directive skipped invalid retry max delay ({FormatSeconds(maxDelay)}). Expected between 0 and 600 seconds.");
             }
-            else if (directive.BaseDelaySeconds is double baseDelay && maxDelay < baseDelay)
+            else if (baseDelaySeconds is double baseDelayForComparison && maxDelay < baseDelayForComparison)
             {
-                Append($"Assistant directive skipped retry max delay ({FormatSeconds(maxDelay)}) because it is less than the base delay ({FormatSeconds(baseDelay)}).");
+                Append($"Assistant directive skipped retry max delay ({FormatSeconds(maxDelay)}) because it is less than the base delay ({FormatSeconds(baseDelayForComparison)}).");
             }
             else if (Math.Abs(HttpRetryMaxDelaySeconds - maxDelay) > 0.0001)
             {
