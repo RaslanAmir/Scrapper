@@ -14,6 +14,7 @@ using System.IO.Compression;
 using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.Json.Serialization;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
@@ -45,6 +46,10 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private static readonly TimeSpan DirectoryLookupDelay = TimeSpan.FromMilliseconds(400);
     private const string ApplyAssistantDirectivesCommand = "/apply-directives";
     private const string DiscardAssistantDirectivesCommand = "/discard-directives";
+    private const int RunSnapshotHistoryLimit = 6;
+    private const string RunSnapshotHistoryFolderName = ".run-history";
+    private const string RunDeltaNarrativeFileName = "manual-migration-report.delta.md";
+    private const string RunDeltaDataFileName = "manual-migration-report.delta.json";
     private static readonly HashSet<string> s_riskyAssistantOptions = new(StringComparer.OrdinalIgnoreCase)
     {
         nameof(ExportPublicExtensionFootprints),
@@ -95,6 +100,11 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private readonly JsonSerializerOptions _configurationWriteOptions = new() { WriteIndented = true };
     private readonly JsonSerializerOptions _artifactWriteOptions = new() { WriteIndented = true };
     private readonly JsonSerializerOptions _preferencesWriteOptions = new() { WriteIndented = true };
+    private readonly JsonSerializerOptions _runHistoryWriteOptions = new()
+    {
+        WriteIndented = true,
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
+    };
     private string _chatApiEndpoint = string.Empty;
     private string _chatModel = string.Empty;
     private string _chatSystemPrompt = "You are a helpful assistant for WC Local Scraper exports.";
@@ -2677,6 +2687,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
             var storeId = BuildStoreIdentifier(targetUrl);
             var storeOutputFolder = Path.Combine(baseOutputFolder, storeId);
             Directory.CreateDirectory(storeOutputFolder);
+            var historyDirectory = GetRunHistoryDirectory(storeOutputFolder);
             var timestamp = DateTime.UtcNow.ToString("yyyyMMdd_HHmmss");
 
             _artifactIndexingService.ResetForRun(storeId, timestamp);
@@ -4154,6 +4165,73 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 }
             });
 
+            string? deltaNarrativePath = null;
+            string? deltaRelativePath = null;
+            string? deltaDataPath = null;
+
+            if (!string.IsNullOrWhiteSpace(runSnapshotJson))
+            {
+                var previousRunEntry = await LoadLatestRunHistoryEntryAsync(historyDirectory);
+                var previousSnapshotJson = previousRunEntry?.SnapshotJson;
+                var previousWarnings = previousRunEntry?.AutomationWarnings ?? Array.Empty<string>();
+
+                var runDeltaJson = BuildRunDeltaJson(
+                    runSnapshotJson,
+                    previousSnapshotJson,
+                    distinctWarnings,
+                    previousWarnings,
+                    timestamp,
+                    previousRunEntry?.RunTimestamp);
+
+                if (!string.IsNullOrWhiteSpace(runDeltaJson))
+                {
+                    if (previousSnapshotJson is null)
+                    {
+                        Append("No previous run snapshot found; establishing baseline for future comparisons.");
+                    }
+
+                    deltaDataPath = Path.Combine(storeOutputFolder, RunDeltaDataFileName);
+                    await File.WriteAllTextAsync(deltaDataPath, runDeltaJson, Encoding.UTF8);
+                    Append($"Run delta data: {deltaDataPath}");
+
+                    string? aiDeltaNarrative = null;
+                    if (chatSession is not null)
+                    {
+                        try
+                        {
+                            aiDeltaNarrative = await _chatAssistantService.SummarizeRunDeltaAsync(
+                                chatSession,
+                                runDeltaJson,
+                                CancellationToken.None);
+                        }
+                        catch (Exception ex)
+                        {
+                            Append($"AI run delta summary failed: {ex.Message}");
+                        }
+                    }
+
+                    if (string.IsNullOrWhiteSpace(aiDeltaNarrative))
+                    {
+                        aiDeltaNarrative = CreateFallbackRunDeltaNarrative(runDeltaJson, chatSession is null);
+                    }
+
+                    if (!string.IsNullOrWhiteSpace(aiDeltaNarrative))
+                    {
+                        var trimmedDelta = aiDeltaNarrative.Trim();
+                        deltaNarrativePath = Path.Combine(storeOutputFolder, RunDeltaNarrativeFileName);
+                        await File.WriteAllTextAsync(deltaNarrativePath, trimmedDelta, Encoding.UTF8);
+                        Append($"Run delta summary: {deltaNarrativePath}");
+                        deltaRelativePath = TryGetStoreRelativePath(storeOutputFolder, deltaNarrativePath)
+                            ?? RunDeltaNarrativeFileName;
+                    }
+                }
+            }
+
+            if (!string.IsNullOrWhiteSpace(deltaRelativePath))
+            {
+                reportContext = reportContext with { RunDeltaNarrativeRelativePath = deltaRelativePath };
+            }
+
             var reportBuilder = new ManualMigrationReportBuilder(_chatAssistantService);
             var reportResult = await reportBuilder.BuildAsync(reportContext, chatSession, CancellationToken.None);
             var report = reportResult.ReportMarkdown;
@@ -4205,6 +4283,25 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 }
             }
 
+            if (!string.IsNullOrWhiteSpace(runSnapshotJson))
+            {
+                try
+                {
+                    await PersistRunSnapshotHistoryAsync(
+                        historyDirectory,
+                        timestamp,
+                        runSnapshotJson,
+                        distinctWarnings,
+                        deltaNarrativePath,
+                        deltaDataPath,
+                        CancellationToken.None);
+                }
+                catch (Exception ex)
+                {
+                    Append($"Failed to persist run snapshot history: {ex.Message}");
+                }
+            }
+
             SetProvisioningContext(prods, variations, configuration, pluginBundles, themeBundles, customers, coupons, orders, subscriptions, siteContent, categoryTerms);
 
             Append("All done.");
@@ -4216,6 +4313,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 ReportPath = reportPath,
                 ManualBundlePath = manualBundleArchivePath,
                 AiBriefPath = aiBriefPath,
+                RunDeltaPath = deltaNarrativePath,
                 AskFollowUp = string.IsNullOrWhiteSpace(runSnapshotJson) ? null : LaunchRunFollowUpPanel
             };
 
@@ -5586,6 +5684,802 @@ public sealed class MainViewModel : INotifyPropertyChanged
     {
         return path.Replace("\\", "/");
     }
+
+    private static string GetRunHistoryDirectory(string storeOutputFolder)
+    {
+        return Path.Combine(storeOutputFolder, RunSnapshotHistoryFolderName);
+    }
+
+    private async Task<RunHistoryEntry?> LoadLatestRunHistoryEntryAsync(string historyDirectory)
+    {
+        if (string.IsNullOrWhiteSpace(historyDirectory) || !Directory.Exists(historyDirectory))
+        {
+            return null;
+        }
+
+        try
+        {
+            var files = Directory.GetFiles(historyDirectory, "run-snapshot-*.json");
+            if (files.Length == 0)
+            {
+                return null;
+            }
+
+            var latestFile = files
+                .OrderByDescending(path => Path.GetFileNameWithoutExtension(path), StringComparer.OrdinalIgnoreCase)
+                .First();
+
+            await using var stream = File.OpenRead(latestFile);
+            var node = await JsonNode.ParseAsync(stream).ConfigureAwait(false);
+            if (node is null)
+            {
+                return null;
+            }
+
+            string? snapshotJson = null;
+            if (node["snapshot"] is JsonNode snapshotNode)
+            {
+                snapshotJson = snapshotNode.ToJsonString(_runHistoryWriteOptions);
+            }
+            else if (node["snapshotJson"] is JsonNode rawNode)
+            {
+                snapshotJson = rawNode.GetValue<string?>();
+            }
+
+            if (string.IsNullOrWhiteSpace(snapshotJson))
+            {
+                return null;
+            }
+
+            var warnings = new List<string>();
+            if (node["automationWarnings"] is JsonArray warningsArray)
+            {
+                foreach (var entry in warningsArray)
+                {
+                    var text = entry?.GetValue<string?>();
+                    if (!string.IsNullOrWhiteSpace(text))
+                    {
+                        warnings.Add(text.Trim());
+                    }
+                }
+            }
+
+            var runTimestamp = node["runTimestamp"]?.GetValue<string?>()
+                ?? Path.GetFileNameWithoutExtension(latestFile);
+
+            DateTime? capturedAt = null;
+            var timestampValue = node["timestampUtc"]?.GetValue<string?>();
+            if (!string.IsNullOrWhiteSpace(timestampValue)
+                && DateTime.TryParse(
+                    timestampValue,
+                    CultureInfo.InvariantCulture,
+                    DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal,
+                    out var parsed))
+            {
+                capturedAt = parsed;
+            }
+
+            return new RunHistoryEntry(runTimestamp ?? string.Empty, capturedAt, snapshotJson, warnings);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private async Task PersistRunSnapshotHistoryAsync(
+        string historyDirectory,
+        string runTimestamp,
+        string runSnapshotJson,
+        IReadOnlyList<string> automationWarnings,
+        string? deltaNarrativePath,
+        string? deltaDataPath,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(historyDirectory)
+            || string.IsNullOrWhiteSpace(runTimestamp)
+            || string.IsNullOrWhiteSpace(runSnapshotJson))
+        {
+            return;
+        }
+
+        Directory.CreateDirectory(historyDirectory);
+
+        JsonNode? snapshotNode;
+        try
+        {
+            snapshotNode = JsonNode.Parse(runSnapshotJson);
+        }
+        catch
+        {
+            snapshotNode = null;
+        }
+
+        var root = new JsonObject
+        {
+            ["timestampUtc"] = DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture),
+            ["runTimestamp"] = runTimestamp
+        };
+
+        if (snapshotNode is not null)
+        {
+            root["snapshot"] = snapshotNode;
+        }
+        else
+        {
+            root["snapshotJson"] = runSnapshotJson;
+        }
+
+        var warningArray = new JsonArray();
+        if (automationWarnings is not null)
+        {
+            foreach (var warning in automationWarnings)
+            {
+                if (!string.IsNullOrWhiteSpace(warning))
+                {
+                    warningArray.Add(warning.Trim());
+                }
+            }
+        }
+
+        root["automationWarnings"] = warningArray;
+
+        if (!string.IsNullOrWhiteSpace(deltaNarrativePath))
+        {
+            root["deltaNarrativePath"] = deltaNarrativePath;
+        }
+
+        if (!string.IsNullOrWhiteSpace(deltaDataPath))
+        {
+            root["deltaDataPath"] = deltaDataPath;
+        }
+
+        var fileName = $"run-snapshot-{runTimestamp}.json";
+        var filePath = Path.Combine(historyDirectory, fileName);
+        await File.WriteAllTextAsync(filePath, root.ToJsonString(_runHistoryWriteOptions), Encoding.UTF8, cancellationToken)
+            .ConfigureAwait(false);
+
+        PruneRunSnapshotHistory(historyDirectory);
+    }
+
+    private static void PruneRunSnapshotHistory(string historyDirectory)
+    {
+        if (string.IsNullOrWhiteSpace(historyDirectory) || !Directory.Exists(historyDirectory))
+        {
+            return;
+        }
+
+        try
+        {
+            var files = Directory.GetFiles(historyDirectory, "run-snapshot-*.json");
+            if (files.Length <= RunSnapshotHistoryLimit)
+            {
+                return;
+            }
+
+            var toDelete = files
+                .OrderByDescending(path => Path.GetFileNameWithoutExtension(path), StringComparer.OrdinalIgnoreCase)
+                .Skip(RunSnapshotHistoryLimit)
+                .ToList();
+
+            foreach (var path in toDelete)
+            {
+                try
+                {
+                    File.Delete(path);
+                }
+                catch
+                {
+                    // Ignore cleanup failures.
+                }
+            }
+        }
+        catch
+        {
+            // Ignore cleanup failures.
+        }
+    }
+
+    private string BuildRunDeltaJson(
+        string currentSnapshotJson,
+        string? previousSnapshotJson,
+        IReadOnlyList<string> currentWarnings,
+        IReadOnlyList<string> previousWarnings,
+        string currentTimestamp,
+        string? previousTimestamp)
+    {
+        var current = TryParseRunSnapshot(currentSnapshotJson);
+        if (current is null)
+        {
+            return JsonSerializer.Serialize(new { error = "Unable to parse current run snapshot." }, _runHistoryWriteOptions);
+        }
+
+        var previous = TryParseRunSnapshot(previousSnapshotJson);
+
+        var pluginAdded = current.Plugins.Values
+            .Where(plugin => previous is null || !previous.Plugins.ContainsKey(plugin.Slug))
+            .Select(plugin => new { plugin.Slug, plugin.Name, plugin.Version, plugin.Status })
+            .ToList();
+
+        var pluginRemoved = previous?.Plugins.Values
+            .Where(plugin => !current.Plugins.ContainsKey(plugin.Slug))
+            .Select(plugin => new { plugin.Slug, plugin.Name, plugin.Version, plugin.Status })
+            .ToList() ?? new List<object>();
+
+        var pluginUpdated = new List<object>();
+        if (previous is not null)
+        {
+            foreach (var (slug, plugin) in current.Plugins)
+            {
+                if (previous.Plugins.TryGetValue(slug, out var oldPlugin))
+                {
+                    if (!string.Equals(plugin.Version, oldPlugin.Version, StringComparison.OrdinalIgnoreCase)
+                        || !string.Equals(plugin.Status, oldPlugin.Status, StringComparison.OrdinalIgnoreCase)
+                        || !string.Equals(plugin.Name, oldPlugin.Name, StringComparison.OrdinalIgnoreCase))
+                    {
+                        pluginUpdated.Add(new
+                        {
+                            slug = plugin.Slug,
+                            previous = new { oldPlugin.Name, oldPlugin.Version, oldPlugin.Status },
+                            current = new { plugin.Name, plugin.Version, plugin.Status }
+                        });
+                    }
+                }
+            }
+        }
+
+        var themeAdded = current.Themes.Values
+            .Where(theme => previous is null || !previous.Themes.ContainsKey(theme.Slug))
+            .Select(theme => new { theme.Slug, theme.Name, theme.Version, theme.Status })
+            .ToList();
+
+        var themeRemoved = previous?.Themes.Values
+            .Where(theme => !current.Themes.ContainsKey(theme.Slug))
+            .Select(theme => new { theme.Slug, theme.Name, theme.Version, theme.Status })
+            .ToList() ?? new List<object>();
+
+        var themeUpdated = new List<object>();
+        if (previous is not null)
+        {
+            foreach (var (slug, theme) in current.Themes)
+            {
+                if (previous.Themes.TryGetValue(slug, out var oldTheme))
+                {
+                    if (!string.Equals(theme.Version, oldTheme.Version, StringComparison.OrdinalIgnoreCase)
+                        || !string.Equals(theme.Status, oldTheme.Status, StringComparison.OrdinalIgnoreCase)
+                        || !string.Equals(theme.Name, oldTheme.Name, StringComparison.OrdinalIgnoreCase))
+                    {
+                        themeUpdated.Add(new
+                        {
+                            slug = theme.Slug,
+                            previous = new { oldTheme.Name, oldTheme.Version, oldTheme.Status },
+                            current = new { theme.Name, theme.Version, theme.Status }
+                        });
+                    }
+                }
+            }
+        }
+
+        var extensionAdded = current.PublicExtensions.Values
+            .Where(extension => previous is null || !previous.PublicExtensions.ContainsKey(extension.Key))
+            .Select(extension => new
+            {
+                extension.Slug,
+                extension.Type,
+                extension.VersionHint,
+                extension.DirectoryVersion,
+                extension.DirectoryStatus,
+                extension.DirectoryTitle
+            })
+            .ToList();
+
+        var extensionRemoved = previous?.PublicExtensions.Values
+            .Where(extension => !current.PublicExtensions.ContainsKey(extension.Key))
+            .Select(extension => new
+            {
+                extension.Slug,
+                extension.Type,
+                extension.VersionHint,
+                extension.DirectoryVersion,
+                extension.DirectoryStatus,
+                extension.DirectoryTitle
+            })
+            .ToList() ?? new List<object>();
+
+        var extensionUpdated = new List<object>();
+        if (previous is not null)
+        {
+            foreach (var (key, extension) in current.PublicExtensions)
+            {
+                if (previous.PublicExtensions.TryGetValue(key, out var oldExtension))
+                {
+                    if (!string.Equals(extension.VersionHint, oldExtension.VersionHint, StringComparison.OrdinalIgnoreCase)
+                        || !string.Equals(extension.DirectoryVersion, oldExtension.DirectoryVersion, StringComparison.OrdinalIgnoreCase)
+                        || !string.Equals(extension.DirectoryStatus, oldExtension.DirectoryStatus, StringComparison.OrdinalIgnoreCase)
+                        || !string.Equals(extension.DirectoryTitle, oldExtension.DirectoryTitle, StringComparison.OrdinalIgnoreCase))
+                    {
+                        extensionUpdated.Add(new
+                        {
+                            slug = extension.Slug,
+                            type = extension.Type,
+                            previous = new
+                            {
+                                oldExtension.VersionHint,
+                                oldExtension.DirectoryVersion,
+                                oldExtension.DirectoryStatus,
+                                oldExtension.DirectoryTitle
+                            },
+                            current = new
+                            {
+                                extension.VersionHint,
+                                extension.DirectoryVersion,
+                                extension.DirectoryStatus,
+                                extension.DirectoryTitle
+                            }
+                        });
+                    }
+                }
+            }
+        }
+
+        var designChanges = BuildDesignChanges(current.Design, previous?.Design);
+
+        var automationDiff = BuildRunDeltaSetDiff(currentWarnings ?? Array.Empty<string>(), previousWarnings ?? Array.Empty<string>());
+        var credentialDiff = BuildRunDeltaSetDiff(current.MissingCredentialExports, previous?.MissingCredentialExports ?? Array.Empty<string>());
+        var logDiff = BuildRunDeltaSetDiff(current.LogHighlights, previous?.LogHighlights ?? Array.Empty<string>());
+
+        var diff = new
+        {
+            storeIdentifier = current.StoreIdentifier,
+            storeUrl = current.StoreUrl,
+            currentRun = new
+            {
+                timestamp = currentTimestamp,
+                pluginCount = current.Plugins.Count,
+                themeCount = current.Themes.Count,
+                publicExtensionCount = current.PublicExtensions.Count,
+                designSnapshotStatus = DescribeDesignSnapshotStatus(current.Design),
+                designScreenshotCount = current.Design?.Screenshots.Count ?? 0
+            },
+            previousRun = previous is null
+                ? null
+                : new
+                {
+                    timestamp = previousTimestamp,
+                    pluginCount = previous.Plugins.Count,
+                    themeCount = previous.Themes.Count,
+                    publicExtensionCount = previous.PublicExtensions.Count,
+                    designSnapshotStatus = DescribeDesignSnapshotStatus(previous.Design),
+                    designScreenshotCount = previous.Design?.Screenshots.Count ?? 0
+                },
+            changes = new
+            {
+                plugins = new { added = pluginAdded, removed = pluginRemoved, updated = pluginUpdated },
+                themes = new { added = themeAdded, removed = themeRemoved, updated = themeUpdated },
+                publicExtensions = new { added = extensionAdded, removed = extensionRemoved, updated = extensionUpdated },
+                design = designChanges,
+                automationWarnings = new
+                {
+                    added = automationDiff.Added,
+                    resolved = automationDiff.Resolved,
+                    current = automationDiff.Current,
+                    previous = automationDiff.Previous
+                },
+                missingCredentialNotes = new
+                {
+                    added = credentialDiff.Added,
+                    resolved = credentialDiff.Resolved,
+                    current = credentialDiff.Current,
+                    previous = credentialDiff.Previous
+                },
+                logHighlights = new
+                {
+                    added = logDiff.Added,
+                    resolved = logDiff.Resolved,
+                    current = logDiff.Current,
+                    previous = logDiff.Previous
+                }
+            },
+            notes = previous is null ? "Baseline run established (no prior history)." : null
+        };
+
+        return JsonSerializer.Serialize(diff, _runHistoryWriteOptions);
+    }
+
+    private static object? BuildDesignChanges(RunDesignState? current, RunDesignState? previous)
+    {
+        if (current is null && previous is null)
+        {
+            return null;
+        }
+
+        var changes = new Dictionary<string, object>();
+
+        var currentStatus = DescribeDesignSnapshotStatus(current);
+        var previousStatus = DescribeDesignSnapshotStatus(previous);
+        if (!string.Equals(currentStatus, previousStatus, StringComparison.OrdinalIgnoreCase))
+        {
+            changes["snapshotStatus"] = new { current = currentStatus, previous = previousStatus };
+        }
+
+        var snapshotMetrics = CompareDesignSnapshotMetrics(current?.Snapshot, previous?.Snapshot);
+        if (snapshotMetrics.Count > 0)
+        {
+            changes["snapshotMetrics"] = snapshotMetrics;
+        }
+
+        var screenshotDiff = BuildRunDeltaSetDiff(current?.Screenshots ?? Array.Empty<string>(), previous?.Screenshots ?? Array.Empty<string>());
+        if (screenshotDiff.Added.Count > 0 || screenshotDiff.Resolved.Count > 0)
+        {
+            changes["screenshots"] = new
+            {
+                added = screenshotDiff.Added,
+                removed = screenshotDiff.Resolved,
+                current = screenshotDiff.Current,
+                previous = screenshotDiff.Previous
+            };
+        }
+
+        return changes.Count == 0 ? null : changes;
+    }
+
+    private static string DescribeDesignSnapshotStatus(RunDesignState? design)
+    {
+        if (design is null)
+        {
+            return "not requested";
+        }
+
+        if (design.SnapshotFailed)
+        {
+            return "failed";
+        }
+
+        if (design.Snapshot is not null)
+        {
+            return "captured";
+        }
+
+        if (design.RequestedSnapshot)
+        {
+            return "requested";
+        }
+
+        return "not requested";
+    }
+
+    private static List<object> CompareDesignSnapshotMetrics(RunDesignSnapshotState? current, RunDesignSnapshotState? previous)
+    {
+        var results = new List<object>();
+        if (current is null && previous is null)
+        {
+            return results;
+        }
+
+        var metrics = new (string Name, int? Current, int? Previous)[]
+        {
+            ("htmlLength", current?.HtmlLength, previous?.HtmlLength),
+            ("inlineCssLength", current?.InlineCssLength, previous?.InlineCssLength),
+            ("stylesheetCount", current?.StylesheetCount, previous?.StylesheetCount),
+            ("fontFileCount", current?.FontFileCount, previous?.FontFileCount),
+            ("iconCount", current?.IconCount, previous?.IconCount),
+            ("imageCount", current?.ImageCount, previous?.ImageCount),
+            ("cssImageCount", current?.CssImageCount, previous?.CssImageCount),
+            ("htmlImageCount", current?.HtmlImageCount, previous?.HtmlImageCount),
+            ("fontDeclarationCount", current?.FontDeclarationCount, previous?.FontDeclarationCount),
+            ("colorPaletteCount", current?.ColorPaletteCount, previous?.ColorPaletteCount),
+            ("pageCount", current?.PageCount, previous?.PageCount)
+        };
+
+        foreach (var metric in metrics)
+        {
+            if (metric.Current != metric.Previous)
+            {
+                results.Add(new { metric = metric.Name, previous = metric.Previous, current = metric.Current });
+            }
+        }
+
+        return results;
+    }
+
+    private static RunDeltaSetDiff BuildRunDeltaSetDiff(IReadOnlyList<string> current, IReadOnlyList<string> previous)
+    {
+        var comparer = StringComparer.OrdinalIgnoreCase;
+        var currentSet = new HashSet<string>(current.Where(value => !string.IsNullOrWhiteSpace(value)).Select(value => value.Trim()), comparer);
+        var previousSet = new HashSet<string>(previous.Where(value => !string.IsNullOrWhiteSpace(value)).Select(value => value.Trim()), comparer);
+
+        var added = currentSet.Except(previousSet, comparer).OrderBy(value => value, comparer).ToArray();
+        var resolved = previousSet.Except(currentSet, comparer).OrderBy(value => value, comparer).ToArray();
+        var currentOrdered = currentSet.OrderBy(value => value, comparer).ToArray();
+        var previousOrdered = previousSet.OrderBy(value => value, comparer).ToArray();
+
+        return new RunDeltaSetDiff(added, resolved, currentOrdered, previousOrdered);
+    }
+
+    private static RunSnapshotDetails? TryParseRunSnapshot(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json))
+        {
+            return null;
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(json);
+            var root = document.RootElement;
+
+            var storeIdentifier = TryGetOptionalString(root, "storeIdentifier") ?? string.Empty;
+            var storeUrl = TryGetOptionalString(root, "storeUrl");
+            var isWooCommerce = false;
+            if (root.TryGetProperty("isWooCommerce", out var isWooProperty)
+                && isWooProperty.ValueKind is JsonValueKind.True or JsonValueKind.False)
+            {
+                isWooCommerce = isWooProperty.ValueKind == JsonValueKind.True;
+            }
+
+            var requestedPublic = false;
+            if (root.TryGetProperty("requestedPublicExtensionFootprints", out var requestedProperty)
+                && requestedProperty.ValueKind is JsonValueKind.True or JsonValueKind.False)
+            {
+                requestedPublic = requestedProperty.ValueKind == JsonValueKind.True;
+            }
+
+            var plugins = new Dictionary<string, RunPluginState>(StringComparer.OrdinalIgnoreCase);
+            if (root.TryGetProperty("plugins", out var pluginArray) && pluginArray.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var pluginElement in pluginArray.EnumerateArray())
+                {
+                    var slug = TryGetOptionalString(pluginElement, "slug");
+                    if (string.IsNullOrWhiteSpace(slug))
+                    {
+                        continue;
+                    }
+
+                    var plugin = new RunPluginState(
+                        slug,
+                        TryGetOptionalString(pluginElement, "name"),
+                        TryGetOptionalString(pluginElement, "version"),
+                        TryGetOptionalString(pluginElement, "status"));
+                    plugins[plugin.Slug] = plugin;
+                }
+            }
+
+            var themes = new Dictionary<string, RunThemeState>(StringComparer.OrdinalIgnoreCase);
+            if (root.TryGetProperty("themes", out var themeArray) && themeArray.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var themeElement in themeArray.EnumerateArray())
+                {
+                    var slug = TryGetOptionalString(themeElement, "slug");
+                    if (string.IsNullOrWhiteSpace(slug))
+                    {
+                        continue;
+                    }
+
+                    var theme = new RunThemeState(
+                        slug,
+                        TryGetOptionalString(themeElement, "name"),
+                        TryGetOptionalString(themeElement, "version"),
+                        TryGetOptionalString(themeElement, "status"));
+                    themes[theme.Slug] = theme;
+                }
+            }
+
+            var publicExtensions = new Dictionary<string, RunPublicExtensionState>(StringComparer.OrdinalIgnoreCase);
+            if (root.TryGetProperty("publicExtensions", out var extensionArray) && extensionArray.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var extensionElement in extensionArray.EnumerateArray())
+                {
+                    var slug = TryGetOptionalString(extensionElement, "slug") ?? string.Empty;
+                    var type = TryGetOptionalString(extensionElement, "type") ?? string.Empty;
+                    var key = $"{slug}|{type}";
+                    var extension = new RunPublicExtensionState(
+                        slug,
+                        type,
+                        TryGetOptionalString(extensionElement, "versionHint"),
+                        TryGetOptionalString(extensionElement, "directoryVersion"),
+                        TryGetOptionalString(extensionElement, "directoryStatus"),
+                        TryGetOptionalString(extensionElement, "directoryTitle"));
+                    publicExtensions[key] = extension;
+                }
+            }
+
+            RunDesignState? design = null;
+            if (root.TryGetProperty("design", out var designElement) && designElement.ValueKind == JsonValueKind.Object)
+            {
+                var requestedSnapshot = designElement.TryGetProperty("requestedSnapshot", out var requestedElement) && requestedElement.ValueKind == JsonValueKind.True;
+                var snapshotFailed = designElement.TryGetProperty("snapshotFailed", out var failedElement) && failedElement.ValueKind == JsonValueKind.True;
+                RunDesignSnapshotState? snapshot = null;
+                if (designElement.TryGetProperty("snapshot", out var snapshotElement) && snapshotElement.ValueKind == JsonValueKind.Object)
+                {
+                    snapshot = new RunDesignSnapshotState(
+                        GetOptionalInt(snapshotElement, "htmlLength"),
+                        GetOptionalInt(snapshotElement, "inlineCssLength"),
+                        GetOptionalInt(snapshotElement, "stylesheetCount"),
+                        GetOptionalInt(snapshotElement, "fontFileCount"),
+                        GetOptionalInt(snapshotElement, "iconCount"),
+                        GetOptionalInt(snapshotElement, "imageCount"),
+                        GetOptionalInt(snapshotElement, "cssImageCount"),
+                        GetOptionalInt(snapshotElement, "htmlImageCount"),
+                        GetOptionalInt(snapshotElement, "fontDeclarationCount"),
+                        GetOptionalInt(snapshotElement, "colorPaletteCount"),
+                        snapshotElement.TryGetProperty("pages", out var pagesElement) && pagesElement.ValueKind == JsonValueKind.Array
+                            ? pagesElement.GetArrayLength()
+                            : (int?)null);
+                }
+
+                var requestedScreenshots = designElement.TryGetProperty("requestedScreenshots", out var shotsElement) && shotsElement.ValueKind == JsonValueKind.True;
+                var screenshots = new List<string>();
+                if (designElement.TryGetProperty("screenshots", out var screenshotsElement) && screenshotsElement.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var screenshotElement in screenshotsElement.EnumerateArray())
+                    {
+                        var fileName = TryGetOptionalString(screenshotElement, "fileName");
+                        if (!string.IsNullOrWhiteSpace(fileName))
+                        {
+                            screenshots.Add(fileName);
+                            continue;
+                        }
+
+                        var label = TryGetOptionalString(screenshotElement, "label");
+                        if (!string.IsNullOrWhiteSpace(label))
+                        {
+                            screenshots.Add(label);
+                        }
+                    }
+                }
+
+                design = new RunDesignState(requestedSnapshot, snapshotFailed, snapshot, requestedScreenshots, screenshots);
+            }
+
+            var missingCredentialExports = ParseStringArray(root, "missingCredentialExports");
+            var logHighlights = ParseStringArray(root, "logHighlights");
+
+            return new RunSnapshotDetails(
+                storeIdentifier,
+                storeUrl,
+                isWooCommerce,
+                requestedPublic,
+                plugins,
+                themes,
+                publicExtensions,
+                design,
+                missingCredentialExports,
+                logHighlights);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static IReadOnlyList<string> ParseStringArray(JsonElement root, string propertyName)
+    {
+        if (!root.TryGetProperty(propertyName, out var array) || array.ValueKind != JsonValueKind.Array)
+        {
+            return Array.Empty<string>();
+        }
+
+        return array.EnumerateArray()
+            .Select(element => element.ValueKind == JsonValueKind.String ? element.GetString() : null)
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .Select(value => value!.Trim())
+            .ToArray();
+    }
+
+    private static string? TryGetOptionalString(JsonElement element, string propertyName)
+    {
+        if (!element.TryGetProperty(propertyName, out var property))
+        {
+            return null;
+        }
+
+        return property.ValueKind switch
+        {
+            JsonValueKind.String => property.GetString(),
+            JsonValueKind.Null => null,
+            _ => property.GetRawText()
+        };
+    }
+
+    private static int? GetOptionalInt(JsonElement element, string propertyName)
+    {
+        if (!element.TryGetProperty(propertyName, out var property))
+        {
+            return null;
+        }
+
+        if (property.ValueKind == JsonValueKind.Number && property.TryGetInt32(out var value))
+        {
+            return value;
+        }
+
+        if (property.ValueKind == JsonValueKind.Number && property.TryGetInt64(out var longValue))
+        {
+            return (int)Math.Clamp(longValue, int.MinValue, int.MaxValue);
+        }
+
+        return null;
+    }
+
+    private static string CreateFallbackRunDeltaNarrative(string runDeltaJson, bool assistantMissing)
+    {
+        var builder = new StringBuilder();
+        builder.AppendLine("# Run delta summary");
+        builder.AppendLine();
+        if (assistantMissing)
+        {
+            builder.AppendLine("Assistant configuration missing. Review the structured diff below.");
+        }
+        else
+        {
+            builder.AppendLine("The assistant could not summarize the run delta automatically. Review the structured diff below.");
+        }
+
+        builder.AppendLine();
+        builder.AppendLine("```json");
+        builder.AppendLine(runDeltaJson);
+        builder.AppendLine("```");
+        return builder.ToString();
+    }
+
+    private sealed record RunHistoryEntry(
+        string RunTimestamp,
+        DateTime? CapturedAtUtc,
+        string SnapshotJson,
+        IReadOnlyList<string> AutomationWarnings);
+
+    private sealed record RunSnapshotDetails(
+        string StoreIdentifier,
+        string? StoreUrl,
+        bool IsWooCommerce,
+        bool RequestedPublicExtensionFootprints,
+        IReadOnlyDictionary<string, RunPluginState> Plugins,
+        IReadOnlyDictionary<string, RunThemeState> Themes,
+        IReadOnlyDictionary<string, RunPublicExtensionState> PublicExtensions,
+        RunDesignState? Design,
+        IReadOnlyList<string> MissingCredentialExports,
+        IReadOnlyList<string> LogHighlights);
+
+    private sealed record RunPluginState(string Slug, string? Name, string? Version, string? Status);
+
+    private sealed record RunThemeState(string Slug, string? Name, string? Version, string? Status);
+
+    private sealed record RunPublicExtensionState(
+        string Slug,
+        string Type,
+        string? VersionHint,
+        string? DirectoryVersion,
+        string? DirectoryStatus,
+        string? DirectoryTitle)
+    {
+        public string Key => $"{Slug}|{Type}";
+    }
+
+    private sealed record RunDesignState(
+        bool RequestedSnapshot,
+        bool SnapshotFailed,
+        RunDesignSnapshotState? Snapshot,
+        bool RequestedScreenshots,
+        IReadOnlyList<string> Screenshots);
+
+    private sealed record RunDesignSnapshotState(
+        int? HtmlLength,
+        int? InlineCssLength,
+        int? StylesheetCount,
+        int? FontFileCount,
+        int? IconCount,
+        int? ImageCount,
+        int? CssImageCount,
+        int? HtmlImageCount,
+        int? FontDeclarationCount,
+        int? ColorPaletteCount,
+        int? PageCount);
+
+    private sealed record RunDeltaSetDiff(
+        IReadOnlyList<string> Added,
+        IReadOnlyList<string> Resolved,
+        IReadOnlyList<string> Current,
+        IReadOnlyList<string> Previous);
 
     private static string SanitizeSegment(string? value)
     {
