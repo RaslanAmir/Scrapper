@@ -253,6 +253,10 @@ public class MainViewModelTests
         Assert.Equal(15, viewModel.ChatPromptTokenTotal);
         Assert.Equal(13, viewModel.ChatCompletionTokenTotal);
         Assert.Equal(28, viewModel.ChatTotalTokenTotal);
+        Assert.Equal(15, viewModel.TotalPromptTokens);
+        Assert.Equal(13, viewModel.TotalCompletionTokens);
+        Assert.Equal(28, viewModel.TotalTokens);
+        Assert.Equal(0m, viewModel.TotalCostUsd);
 
         viewModel.ChatMessages.Add(new ChatMessage(ChatMessageRole.User, "hello"));
         Assert.True(viewModel.ClearChatHistoryCommand.CanExecute(null));
@@ -261,6 +265,10 @@ public class MainViewModelTests
         Assert.Equal(0, viewModel.ChatPromptTokenTotal);
         Assert.Equal(0, viewModel.ChatCompletionTokenTotal);
         Assert.Equal(0, viewModel.ChatTotalTokenTotal);
+        Assert.Equal(0, viewModel.TotalPromptTokens);
+        Assert.Equal(0, viewModel.TotalCompletionTokens);
+        Assert.Equal(0, viewModel.TotalTokens);
+        Assert.Equal(0m, viewModel.TotalCostUsd);
     }
 
     [Fact]

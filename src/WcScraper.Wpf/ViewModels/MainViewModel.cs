@@ -121,6 +121,9 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private int _chatPromptTokenTotal;
     private int _chatCompletionTokenTotal;
     private int _chatTotalTokenTotal;
+    private long _totalPromptTokens;
+    private long _totalCompletionTokens;
+    private decimal _totalCostUsd;
     private int? _chatMaxPromptTokens;
     private int? _chatMaxTotalTokens;
     private decimal? _chatMaxCostUsd;
@@ -1093,6 +1096,55 @@ public sealed class MainViewModel : INotifyPropertyChanged
         }
     }
 
+    public long TotalPromptTokens
+    {
+        get => _totalPromptTokens;
+        private set
+        {
+            if (_totalPromptTokens == value)
+            {
+                return;
+            }
+
+            _totalPromptTokens = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(TotalTokens));
+        }
+    }
+
+    public long TotalCompletionTokens
+    {
+        get => _totalCompletionTokens;
+        private set
+        {
+            if (_totalCompletionTokens == value)
+            {
+                return;
+            }
+
+            _totalCompletionTokens = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(TotalTokens));
+        }
+    }
+
+    public long TotalTokens => TotalPromptTokens + TotalCompletionTokens;
+
+    public decimal TotalCostUsd
+    {
+        get => _totalCostUsd;
+        private set
+        {
+            if (_totalCostUsd == value)
+            {
+                return;
+            }
+
+            _totalCostUsd = value;
+            OnPropertyChanged();
+        }
+    }
+
     public RelayCommand SendChatCommand { get; }
     public RelayCommand CancelChatCommand { get; }
     public RelayCommand SaveChatTranscriptCommand { get; }
@@ -1216,6 +1268,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
             _selectedChatMode = value;
             OnPropertyChanged();
+            ResetChatUsageTotals();
             UpdateChatConfigurationStatus();
         }
     }
@@ -1803,9 +1856,15 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
         ExecuteOnUiThread(() =>
         {
-            ChatPromptTokenTotal += usage.PromptTokens;
-            ChatCompletionTokenTotal += usage.CompletionTokens;
-            ChatTotalTokenTotal += usage.TotalTokens;
+            var incrementalCost = CalculateUsageCost(usage);
+
+            ChatPromptTokenTotal = AddWithoutOverflow(ChatPromptTokenTotal, usage.PromptTokens);
+            ChatCompletionTokenTotal = AddWithoutOverflow(ChatCompletionTokenTotal, usage.CompletionTokens);
+            ChatTotalTokenTotal = AddWithoutOverflow(ChatTotalTokenTotal, usage.TotalTokens);
+
+            TotalPromptTokens = AddWithoutOverflow(TotalPromptTokens, usage.PromptTokens);
+            TotalCompletionTokens = AddWithoutOverflow(TotalCompletionTokens, usage.CompletionTokens);
+            TotalCostUsd = TotalCostUsd + incrementalCost;
         });
     }
 
@@ -1814,6 +1873,82 @@ public sealed class MainViewModel : INotifyPropertyChanged
         ChatPromptTokenTotal = 0;
         ChatCompletionTokenTotal = 0;
         ChatTotalTokenTotal = 0;
+        TotalPromptTokens = 0;
+        TotalCompletionTokens = 0;
+        TotalCostUsd = 0m;
+    }
+
+    private void UpdateChatUsageTotals(ChatSessionSettings? session)
+    {
+        if (session is null)
+        {
+            return;
+        }
+
+        ExecuteOnUiThread(() =>
+        {
+            TotalPromptTokens = session.ConsumedPromptTokens;
+            TotalCompletionTokens = session.ConsumedCompletionTokens;
+            TotalCostUsd = session.ConsumedCostUsd;
+
+            ChatPromptTokenTotal = ClampToInt(session.ConsumedPromptTokens);
+            ChatCompletionTokenTotal = ClampToInt(session.ConsumedCompletionTokens);
+            ChatTotalTokenTotal = ClampToInt(session.ConsumedTotalTokens);
+        });
+    }
+
+    private decimal CalculateUsageCost(ChatUsageSnapshot usage)
+    {
+        decimal cost = 0m;
+
+        if (usage.PromptTokens > 0 && ChatPromptTokenUsdPerThousand is { } promptRate && promptRate > 0m)
+        {
+            cost += (usage.PromptTokens / 1000m) * promptRate;
+        }
+
+        if (usage.CompletionTokens > 0 && ChatCompletionTokenUsdPerThousand is { } completionRate && completionRate > 0m)
+        {
+            cost += (usage.CompletionTokens / 1000m) * completionRate;
+        }
+
+        return cost;
+    }
+
+    private static int AddWithoutOverflow(int current, int delta)
+    {
+        if (delta <= 0)
+        {
+            return current;
+        }
+
+        var sum = (long)current + delta;
+        return sum > int.MaxValue ? int.MaxValue : (int)sum;
+    }
+
+    private static long AddWithoutOverflow(long current, int delta)
+    {
+        if (delta <= 0)
+        {
+            return current;
+        }
+
+        var sum = current + delta;
+        return sum < current ? long.MaxValue : sum;
+    }
+
+    private static int ClampToInt(long value)
+    {
+        if (value > int.MaxValue)
+        {
+            return int.MaxValue;
+        }
+
+        if (value < int.MinValue)
+        {
+            return int.MinValue;
+        }
+
+        return (int)value;
     }
 
     private bool CanExplainLogs()
@@ -1891,6 +2026,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
         var wasCancelled = false;
 
+        ChatSessionSettings? sessionState = null;
+
         try
         {
             var context = BuildChatContext();
@@ -1906,6 +2043,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 CompletionTokenCostPerThousandUsd: ChatCompletionTokenUsdPerThousand,
                 DiagnosticLogger: Append,
                 UsageReported: OnChatUsageReported);
+            sessionState = session;
 
             if (SelectedChatMode == ChatInteractionMode.DatasetQuestion)
             {
@@ -2021,6 +2159,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
             {
                 ChatStatusMessage = "Assistant response cancelled.";
             }
+
+            UpdateChatUsageTotals(sessionState);
         }
 
         await TryAppendTranscriptAsync(assistantMessage);
@@ -3313,9 +3453,11 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
         ExecuteOnUiThread(() => IsLogSummaryBusy = true);
 
+        ChatSessionSettings? session = null;
+
         try
         {
-            var session = new ChatSessionSettings(
+            session = new ChatSessionSettings(
                 ChatApiEndpoint,
                 ChatApiKey,
                 ChatModel,
@@ -3349,6 +3491,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
         finally
         {
             ExecuteOnUiThread(() => IsLogSummaryBusy = false);
+
+            UpdateChatUsageTotals(session);
 
             var shouldReschedule = false;
             lock (_logSummarySync)
@@ -5209,6 +5353,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
                     automationError = ex.Message;
                     Append($"Automation script generation failed: {ex.Message}");
                 }
+
+                UpdateChatUsageTotals(chatSession);
             }
 
             var distinctWarnings = automationWarnings
@@ -5289,6 +5435,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
                         {
                             Append($"AI run delta summary failed: {ex.Message}");
                         }
+
+                        UpdateChatUsageTotals(chatSession);
                     }
 
                     if (string.IsNullOrWhiteSpace(aiDeltaNarrative))
@@ -5355,15 +5503,15 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 await TryAnnotateManualReportAsync(reportPath, manualBundleArchivePath);
             }
 
-            if (chatSession is not null)
-            {
-                try
+                if (chatSession is not null)
                 {
-                    var verificationResult = await _chatAssistantService.VerifyExportsAsync(
-                        chatSession,
-                        reportContext,
-                        reportContext.FileSystemStats?.Directories ?? Array.Empty<ManualMigrationDirectorySnapshot>(),
-                        CancellationToken.None);
+                    try
+                    {
+                        var verificationResult = await _chatAssistantService.VerifyExportsAsync(
+                            chatSession,
+                            reportContext,
+                            reportContext.FileSystemStats?.Directories ?? Array.Empty<ManualMigrationDirectorySnapshot>(),
+                            CancellationToken.None);
 
                     if (verificationResult is not null)
                     {
@@ -5424,12 +5572,14 @@ public sealed class MainViewModel : INotifyPropertyChanged
                     {
                         Append("AI export verification returned no structured findings.");
                     }
+                    }
+                    catch (Exception ex)
+                    {
+                        Append($"AI export verification failed: {ex.Message}");
+                    }
+
+                    UpdateChatUsageTotals(chatSession);
                 }
-                catch (Exception ex)
-                {
-                    Append($"AI export verification failed: {ex.Message}");
-                }
-            }
 
             string? aiBriefPath = null;
             if (chatSession is not null)
@@ -5460,6 +5610,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
                         LatestRunAiBriefPath = null;
                     });
                 }
+
+                UpdateChatUsageTotals(chatSession);
             }
 
             if (!string.IsNullOrWhiteSpace(runSnapshotJson))
