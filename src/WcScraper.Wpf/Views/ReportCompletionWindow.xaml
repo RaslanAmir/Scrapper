@@ -14,6 +14,7 @@
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
 
         <TextBlock Grid.Row="0"
@@ -60,6 +61,28 @@
                 <Style TargetType="StackPanel">
                     <Setter Property="Visibility" Value="Visible"/>
                     <Style.Triggers>
+                        <DataTrigger Binding="{Binding HasRunDelta}" Value="False">
+                            <Setter Property="Visibility" Value="Collapsed"/>
+                        </DataTrigger>
+                    </Style.Triggers>
+                </Style>
+            </StackPanel.Style>
+            <TextBlock Text="Run delta:" FontWeight="SemiBold" VerticalAlignment="Center"/>
+            <TextBox Text="{Binding RunDeltaPath}"
+                     IsReadOnly="True"
+                     Margin="8,0,0,0"
+                     MinWidth="320"/>
+            <Button Content="Open"
+                    Margin="8,0,0,0"
+                    Padding="12,4"
+                    Click="OnOpenRunDelta"/>
+        </StackPanel>
+
+        <StackPanel Grid.Row="4" Orientation="Horizontal" Margin="0,8,0,0" VerticalAlignment="Center">
+            <StackPanel.Style>
+                <Style TargetType="StackPanel">
+                    <Setter Property="Visibility" Value="Visible"/>
+                    <Style.Triggers>
                         <DataTrigger Binding="{Binding HasManualBundle}" Value="False">
                             <Setter Property="Visibility" Value="Collapsed"/>
                         </DataTrigger>
@@ -77,7 +100,7 @@
                     Click="OnOpenBundle"/>
         </StackPanel>
 
-        <StackPanel Grid.Row="4" Orientation="Horizontal" Margin="0,8,0,0" VerticalAlignment="Center">
+        <StackPanel Grid.Row="5" Orientation="Horizontal" Margin="0,8,0,0" VerticalAlignment="Center">
             <StackPanel.Style>
                 <Style TargetType="StackPanel">
                     <Setter Property="Visibility" Value="Visible"/>
@@ -99,7 +122,7 @@
                     Click="OnOpenAiBrief"/>
         </StackPanel>
 
-        <StackPanel Grid.Row="5" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,16,0,0">
+        <StackPanel Grid.Row="6" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,16,0,0">
             <Button Content="Ask follow-up"
                     Margin="0,0,8,0"
                     Padding="16,6"

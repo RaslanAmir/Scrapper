@@ -56,6 +56,12 @@ internal sealed class ManualMigrationReportBuilder
             builder.AppendLine($"- **Output Folder:** `{context.OutputFolder}`");
         }
 
+        if (!string.IsNullOrWhiteSpace(context.RunDeltaNarrativeRelativePath))
+        {
+            var deltaPath = MarkdownEscape(context.RunDeltaNarrativeRelativePath);
+            builder.AppendLine($"- **Run delta summary:** [{deltaPath}]({deltaPath})");
+        }
+
         builder.AppendLine($"- **HTTP retries:** {FormatRetrySummary(context)}");
         builder.AppendLine();
         AppendPlatformVersionSection(builder, context);
@@ -1067,7 +1073,8 @@ internal sealed record ManualMigrationReportContext(
     TimeSpan HttpRetryBaseDelay,
     TimeSpan HttpRetryMaxDelay,
     AiArtifactIntelligencePayload? ArtifactIntelligence,
-    ManualMigrationAutomationScriptSet? AutomationScripts = null);
+    ManualMigrationAutomationScriptSet? AutomationScripts = null,
+    string? RunDeltaNarrativeRelativePath = null);
 
 internal sealed record ManualMigrationAutomationScriptSet(
     string? Summary,

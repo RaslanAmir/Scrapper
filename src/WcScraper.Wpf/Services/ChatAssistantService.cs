@@ -608,6 +608,79 @@ public sealed class ChatAssistantService
         return string.IsNullOrWhiteSpace(content) ? null : content.Trim();
     }
 
+    public async Task<string?> SummarizeRunDeltaAsync(
+        ChatSessionSettings settings,
+        string runDeltaJson,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+
+        if (string.IsNullOrWhiteSpace(runDeltaJson))
+        {
+            return null;
+        }
+
+        if (string.IsNullOrWhiteSpace(settings.ApiKey))
+        {
+            throw new ArgumentException("An API key is required.", nameof(settings));
+        }
+
+        if (string.IsNullOrWhiteSpace(settings.Endpoint))
+        {
+            throw new ArgumentException("An endpoint is required.", nameof(settings));
+        }
+
+        if (!Uri.TryCreate(settings.Endpoint, UriKind.Absolute, out var endpoint))
+        {
+            throw new ArgumentException("The API endpoint must be an absolute URI.", nameof(settings));
+        }
+
+        if (string.IsNullOrWhiteSpace(settings.Model))
+        {
+            throw new ArgumentException("A model or deployment identifier is required.", nameof(settings));
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var client = new OpenAIClient(endpoint, new AzureKeyCredential(settings.ApiKey));
+
+        var options = new ChatCompletionsOptions
+        {
+            DeploymentName = settings.Model,
+            Temperature = 0.2f,
+        };
+
+        var systemPrompt = new StringBuilder();
+        if (!string.IsNullOrWhiteSpace(settings.SystemPrompt))
+        {
+            systemPrompt.AppendLine(settings.SystemPrompt.Trim());
+            systemPrompt.AppendLine();
+        }
+
+        systemPrompt.AppendLine("You compare consecutive WC Local Scraper runs and explain what changed.");
+        systemPrompt.AppendLine("Call out new risks, resolved issues, and manual follow-ups for migration operators.");
+        systemPrompt.AppendLine("Respond in Markdown with concise sections and bullet lists.");
+
+        options.Messages.Add(new Azure.AI.OpenAI.ChatMessage(ChatRole.System, systemPrompt.ToString()));
+
+        var userPrompt = new StringBuilder();
+        userPrompt.AppendLine("Summarize the delta between the latest run and the previous baseline.");
+        userPrompt.AppendLine("Highlight plugin/theme changes, public extension updates, design asset shifts, automation warnings, and missing credentials or log notes.");
+        userPrompt.AppendLine("Identify newly emerged concerns and call out resolved items where applicable.");
+        userPrompt.AppendLine();
+        userPrompt.AppendLine("Run delta (JSON):");
+        userPrompt.AppendLine("```json");
+        userPrompt.AppendLine(runDeltaJson.Trim());
+        userPrompt.AppendLine("```");
+
+        options.Messages.Add(new Azure.AI.OpenAI.ChatMessage(ChatRole.User, userPrompt.ToString()));
+
+        var response = await client.GetChatCompletionsAsync(options, cancellationToken).ConfigureAwait(false);
+        var choice = response.Value.Choices.FirstOrDefault();
+        var content = choice?.Message?.Content;
+        return string.IsNullOrWhiteSpace(content) ? null : content.Trim();
+    }
+
     public async Task<MigrationScriptGenerationResult> GenerateMigrationScriptsAsync(
         ChatSessionSettings settings,
         string runSnapshotJson,

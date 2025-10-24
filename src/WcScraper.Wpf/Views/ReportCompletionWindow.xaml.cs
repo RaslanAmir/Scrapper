@@ -26,6 +26,9 @@ public partial class ReportCompletionWindow : Window
     private void OnOpenAiBrief(object? sender, RoutedEventArgs e)
         => TryOpenPath(_info.AiBriefPath);
 
+    private void OnOpenRunDelta(object? sender, RoutedEventArgs e)
+        => TryOpenPath(_info.RunDeltaPath);
+
     private void OnAskFollowUp(object sender, RoutedEventArgs e)
     {
         try
