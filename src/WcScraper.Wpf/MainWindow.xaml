@@ -890,7 +890,7 @@
                                                     </Style>
                                                 </TextBlock.Style>
                                             </TextBlock>
-                                            <TextBox Text="{Binding LatestRunAiRecommendationSummary}"
+                                            <TextBox Text="{Binding LatestRunAiRecommendationSummary, Mode=OneWay}"
                                                      IsReadOnly="True"
                                                      TextWrapping="Wrap"
                                                      AcceptsReturn="True"
