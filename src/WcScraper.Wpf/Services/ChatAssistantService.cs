@@ -19,6 +19,8 @@ namespace WcScraper.Wpf.Services;
 
 public sealed class ChatAssistantService
 {
+    private const int DefaultToolCallIterationLimit = 8;
+
     private static readonly JsonSerializerOptions s_artifactPayloadOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
@@ -108,6 +110,11 @@ public sealed class ChatAssistantService
                 requestMessages.Add(requestMessage);
             }
         }
+
+        var toolCallIterations = 0;
+        var maxToolCallIterations = settings.ToolCallIterationLimit.HasValue && settings.ToolCallIterationLimit.Value > 0
+            ? settings.ToolCallIterationLimit.Value
+            : DefaultToolCallIterationLimit;
 
         while (true)
         {
@@ -238,6 +245,16 @@ public sealed class ChatAssistantService
             foreach (var toolMessage in toolMessages)
             {
                 requestMessages.Add(toolMessage);
+            }
+
+            toolCallIterations++;
+            if (toolCallIterations >= maxToolCallIterations)
+            {
+                var cycleText = toolCallIterations == 1 ? "cycle" : "cycles";
+                var diagnostic = $"Assistant stopped after reaching the tool-call iteration limit ({toolCallIterations} {cycleText}).";
+                settings.DiagnosticLogger?.Invoke(diagnostic);
+                yield return diagnostic;
+                break;
             }
         }
     }
@@ -2216,7 +2233,13 @@ public sealed class ChatAssistantService
     }
 }
 
-public sealed record ChatSessionSettings(string Endpoint, string ApiKey, string Model, string? SystemPrompt);
+public sealed record ChatSessionSettings(
+    string Endpoint,
+    string ApiKey,
+    string Model,
+    string? SystemPrompt,
+    int? ToolCallIterationLimit = null,
+    Action<string>? DiagnosticLogger = null);
 
 public sealed record AssistantDirectiveBatch(
     string Summary,

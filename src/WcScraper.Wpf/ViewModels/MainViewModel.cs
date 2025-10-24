@@ -1669,7 +1669,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         try
         {
             var context = BuildChatContext();
-            var session = new ChatSessionSettings(ChatApiEndpoint, ChatApiKey, ChatModel, ChatSystemPrompt);
+            var session = new ChatSessionSettings(ChatApiEndpoint, ChatApiKey, ChatModel, ChatSystemPrompt, DiagnosticLogger: Append);
 
             if (SelectedChatMode == ChatInteractionMode.DatasetQuestion)
             {
@@ -3005,7 +3005,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
         try
         {
-            var session = new ChatSessionSettings(ChatApiEndpoint, ChatApiKey, ChatModel, ChatSystemPrompt);
+            var session = new ChatSessionSettings(ChatApiEndpoint, ChatApiKey, ChatModel, ChatSystemPrompt, DiagnosticLogger: Append);
             var summary = await _chatAssistantService.SummarizeLogsAsync(session, logSnapshot, cancellationToken).ConfigureAwait(false);
             if (summary is not null)
             {
@@ -4769,7 +4769,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
             ChatSessionSettings? chatSession = null;
             if (HasChatConfiguration)
             {
-                chatSession = new ChatSessionSettings(ChatApiEndpoint, ChatApiKey, ChatModel, ChatSystemPrompt);
+                chatSession = new ChatSessionSettings(ChatApiEndpoint, ChatApiKey, ChatModel, ChatSystemPrompt, DiagnosticLogger: Append);
             }
 
             var automationReferences = new List<ManualMigrationAutomationScript>();
