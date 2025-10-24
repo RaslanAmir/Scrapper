@@ -66,7 +66,13 @@
                          Visibility="{Binding IsWooCommerce, Converter={StaticResource BoolToVisibility}}" />
                 <TextBox Grid.Row="1" Grid.Column="1" Text="{Binding ShopifyStoreUrl, UpdateSourceTrigger=PropertyChanged}" MinWidth="520"
                          Visibility="{Binding IsShopify, Converter={StaticResource BoolToVisibility}}" />
-                <Button Grid.Row="1" Grid.Column="2" Content="Run" Margin="8,0,0,0" Padding="16,6" Command="{Binding RunCommand}" />
+                <StackPanel Grid.Row="1" Grid.Column="2" Orientation="Horizontal" Margin="8,0,0,0">
+                    <Button Content="Run" Padding="16,6" Command="{Binding RunCommand}" />
+                    <Button Content="AI Setup Wizard"
+                            Margin="8,0,0,0"
+                            Padding="12,6"
+                            Command="{Binding LaunchWizardCommand}"/>
+                </StackPanel>
 
                 <!-- Output -->
                 <TextBlock Grid.Row="2" Text="Output folder:" VerticalAlignment="Center" Margin="0,8,8,0"/>

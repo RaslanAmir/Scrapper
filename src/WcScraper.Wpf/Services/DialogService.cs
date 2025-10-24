@@ -1,6 +1,7 @@
 using System;
 using System.Windows;
 using Forms = System.Windows.Forms;
+using WcScraper.Wpf.Models;
 using WcScraper.Wpf.ViewModels;
 using WcScraper.Wpf.Views;
 
@@ -11,6 +12,7 @@ public interface IDialogService
     string? BrowseForFolder(string? initial = null);
     void ShowLogWindow(WcScraper.Wpf.ViewModels.MainViewModel viewModel);
     void ShowRunCompletionDialog(ManualRunCompletionInfo info);
+    OnboardingWizardSettings? ShowOnboardingWizard(MainViewModel viewModel, ChatAssistantService chatAssistantService);
 }
 
 public sealed class DialogService : IDialogService
@@ -65,5 +67,25 @@ public sealed class DialogService : IDialogService
         }
 
         window.ShowDialog();
+    }
+
+    public OnboardingWizardSettings? ShowOnboardingWizard(MainViewModel viewModel, ChatAssistantService chatAssistantService)
+    {
+        ArgumentNullException.ThrowIfNull(viewModel);
+        ArgumentNullException.ThrowIfNull(chatAssistantService);
+
+        var wizardViewModel = new OnboardingWizardViewModel(viewModel, chatAssistantService);
+        var window = new OnboardingWizardWindow
+        {
+            DataContext = wizardViewModel
+        };
+
+        if (System.Windows.Application.Current?.MainWindow is not null && window.Owner is null)
+        {
+            window.Owner = System.Windows.Application.Current.MainWindow;
+        }
+
+        var dialogResult = window.ShowDialog();
+        return dialogResult == true ? wizardViewModel.Result : null;
     }
 }
