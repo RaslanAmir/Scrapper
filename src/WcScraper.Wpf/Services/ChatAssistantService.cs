@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Linq;
@@ -321,7 +322,7 @@ public sealed class ChatAssistantService
             Temperature = 0.1f,
         };
 
-        var systemPrompt = BuildDatasetSystemPrompt(settings.SystemPrompt, datasetInventory, matches);
+        var systemPrompt = BuildDatasetSystemPrompt(settings.SystemPrompt, datasetInventory, matches, settings.DiagnosticLogger);
         options.Messages.Add(new Azure.AI.OpenAI.ChatMessage(ChatRole.System, systemPrompt));
 
         foreach (var message in history)
@@ -2322,7 +2323,8 @@ public sealed class ChatAssistantService
     private static string BuildDatasetSystemPrompt(
         string? systemPrompt,
         IReadOnlyList<AiIndexedDatasetReference> datasets,
-        IReadOnlyList<ArtifactSearchResult> matches)
+        IReadOnlyList<ArtifactSearchResult> matches,
+        Action<string>? diagnosticLogger)
     {
         var builder = new StringBuilder();
         if (!string.IsNullOrWhiteSpace(systemPrompt))
@@ -2361,6 +2363,17 @@ public sealed class ChatAssistantService
         var index = 1;
         foreach (var match in matches)
         {
+            var sanitizedSnippet = PiIRedactor.Redact(match.Snippet);
+            if (sanitizedSnippet.HasRedactions)
+            {
+                var summary = PiIRedactor.BuildSummary(sanitizedSnippet);
+                var message = string.IsNullOrWhiteSpace(summary)
+                    ? $"Redacted sensitive values for {match.DatasetName} row {match.RowNumber} before building the dataset prompt."
+                    : $"Redacted {summary} for {match.DatasetName} row {match.RowNumber} before building the dataset prompt.";
+                diagnosticLogger?.Invoke(message);
+                Trace.WriteLine(message);
+            }
+
             builder.Append('[');
             builder.Append(index++);
             builder.Append("] ");
@@ -2372,7 +2385,7 @@ public sealed class ChatAssistantService
             builder.Append(", score: ");
             builder.Append(match.Score.ToString("0.000", CultureInfo.InvariantCulture));
             builder.AppendLine(")");
-            builder.AppendLine(match.Snippet);
+            builder.AppendLine(sanitizedSnippet.RedactedText);
             builder.AppendLine();
         }
 

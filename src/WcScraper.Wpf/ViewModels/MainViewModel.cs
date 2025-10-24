@@ -196,6 +196,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         _designScreenshotService = designScreenshotService ?? throw new ArgumentNullException(nameof(designScreenshotService));
         _artifactIndexingService = artifactIndexingService ?? throw new ArgumentNullException(nameof(artifactIndexingService));
         _chatAssistantService = chatAssistantService ?? throw new ArgumentNullException(nameof(chatAssistantService));
+        _artifactIndexingService.DiagnosticLogger = Append;
         _settingsDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "WcScraper");
         _preferencesPath = Path.Combine(_settingsDirectory, "preferences.json");
         _chatKeyPath = Path.Combine(_settingsDirectory, "chat.key");
@@ -2632,7 +2633,11 @@ public sealed class MainViewModel : INotifyPropertyChanged
         ExecuteOnUiThread(() =>
         {
             LatestRunAiAnnotation = annotation;
-            LatestRunAiRecommendationSummary = annotation?.MarkdownSummary?.Trim() ?? string.Empty;
+            const string privacyNote = "Sensitive identifiers from indexed exports are masked before assistant analysis.";
+            var normalizedSummary = annotation?.MarkdownSummary?.Trim();
+            LatestRunAiRecommendationSummary = string.IsNullOrWhiteSpace(normalizedSummary)
+                ? privacyNote
+                : string.Concat(privacyNote, Environment.NewLine, Environment.NewLine, normalizedSummary);
             LatestRunAiRecommendations.Clear();
 
             if (annotation?.Recommendations is { Count: > 0 })

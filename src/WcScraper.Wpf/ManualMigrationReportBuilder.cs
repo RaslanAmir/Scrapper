@@ -63,6 +63,7 @@ internal sealed class ManualMigrationReportBuilder
         }
 
         builder.AppendLine($"- **HTTP retries:** {FormatRetrySummary(context)}");
+        builder.AppendLine("- **Privacy:** Dataset snippets are automatically redacted to mask emails, phone numbers, card numbers, and street addresses before indexing or assistant review.");
         builder.AppendLine();
         if (AppendRunPlanSection(builder, context))
         {

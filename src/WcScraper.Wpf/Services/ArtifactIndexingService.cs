@@ -1,10 +1,12 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using WcScraper.Wpf.Models;
@@ -18,6 +20,8 @@ public interface IArtifactIndexingService
     bool HasAnyIndexedArtifacts { get; }
 
     int IndexedDatasetCount { get; }
+
+    Action<string>? DiagnosticLogger { get; set; }
 
     void ResetForRun(string storeIdentifier, string runIdentifier);
 
@@ -48,6 +52,8 @@ public sealed class ArtifactIndexingService : IArtifactIndexingService
     private string _runIdentifier = string.Empty;
 
     public event EventHandler? IndexChanged;
+
+    public Action<string>? DiagnosticLogger { get; set; }
 
     public bool HasAnyIndexedArtifacts
     {
@@ -418,7 +424,7 @@ public sealed class ArtifactIndexingService : IArtifactIndexingService
         return values;
     }
 
-    private static string BuildCsvSnippet(int rowNumber, IReadOnlyList<string> headers, IReadOnlyList<string> values)
+    private string BuildCsvSnippet(int rowNumber, IReadOnlyList<string> headers, IReadOnlyList<string> values)
     {
         var builder = new StringBuilder();
         builder.Append("Row ");
@@ -445,10 +451,13 @@ public sealed class ArtifactIndexingService : IArtifactIndexingService
             builder.Append(value.Trim());
         }
 
-        return Truncate(builder.ToString());
+        var raw = builder.ToString();
+        var redaction = PiIRedactor.Redact(raw);
+        LogRedaction($"CSV row {rowNumber}", redaction);
+        return Truncate(redaction.RedactedText);
     }
 
-    private static string BuildJsonlSnippet(int rowNumber, JsonElement element, HashSet<string> schema)
+    private string BuildJsonlSnippet(int rowNumber, JsonElement element, HashSet<string> schema)
     {
         var builder = new StringBuilder();
         builder.Append("Entry ");
@@ -463,7 +472,10 @@ public sealed class ArtifactIndexingService : IArtifactIndexingService
             builder.Append(pair);
         }
 
-        return Truncate(builder.ToString());
+        var raw = builder.ToString();
+        var redaction = PiIRedactor.Redact(raw);
+        LogRedaction($"JSONL row {rowNumber}", redaction);
+        return Truncate(redaction.RedactedText);
     }
 
     private static void BuildJsonPairs(JsonElement element, List<string> pairs, HashSet<string> schema, string prefix)
@@ -629,4 +641,146 @@ public sealed class ArtifactIndexingService : IArtifactIndexingService
     private sealed record ArtifactChunk(int RowNumber, string Snippet, VectorRepresentation Vector);
 
     private sealed record VectorRepresentation(Dictionary<string, double> Weights, double Magnitude);
+
+    private void LogRedaction(string scope, PiIRedactor.RedactionResult result)
+    {
+        if (!result.HasRedactions)
+        {
+            return;
+        }
+
+        var summary = PiIRedactor.BuildSummary(result);
+        var message = string.IsNullOrWhiteSpace(summary)
+            ? $"Redacted sensitive values from {scope}."
+            : $"Redacted {summary} from {scope}.";
+        DiagnosticLogger?.Invoke(message);
+        Trace.WriteLine(message);
+    }
+}
+
+internal static class PiIRedactor
+{
+    private static readonly Regex EmailRegex = new(
+        @"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+    private static readonly Regex PhoneRegex = new(
+        @"(?<!\d)(?:\+?\d{1,3}[\s.-]?)?(?:\(\d{3}\)|\d{3})[\s.-]?\d{3}[\s.-]?\d{4}(?!\d)",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+    private static readonly Regex CreditCardRegex = new(
+        @"(?<!\d)(?:\d[ -]?){12,18}\d(?!\d)",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+    private static readonly Regex AddressRegex = new(
+        @"\b\d{1,5}\s+(?:[A-Z0-9.'-]+\s){0,4}(?:STREET|ST|AVENUE|AVE|ROAD|RD|BOULEVARD|BLVD|DRIVE|DR|LANE|LN|COURT|CT|TERRACE|TER|WAY|PLACE|PL)\b",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+    public static RedactionResult Redact(string? text)
+    {
+        if (string.IsNullOrEmpty(text))
+        {
+            return new RedactionResult(text ?? string.Empty, 0, 0, 0, 0);
+        }
+
+        var result = text;
+        var emailCount = 0;
+        var phoneCount = 0;
+        var creditCardCount = 0;
+        var addressCount = 0;
+
+        result = EmailRegex.Replace(result, _ =>
+        {
+            emailCount++;
+            return "[email redacted]";
+        });
+
+        result = PhoneRegex.Replace(result, match =>
+        {
+            var digits = CountDigits(match.Value);
+            if (digits < 10)
+            {
+                return match.Value;
+            }
+
+            phoneCount++;
+            return "[phone redacted]";
+        });
+
+        result = CreditCardRegex.Replace(result, match =>
+        {
+            var digits = CountDigits(match.Value);
+            if (digits < 13 || digits > 19)
+            {
+                return match.Value;
+            }
+
+            creditCardCount++;
+            return "[card redacted]";
+        });
+
+        result = AddressRegex.Replace(result, match =>
+        {
+            addressCount++;
+            return "[address redacted]";
+        });
+
+        return new RedactionResult(result, emailCount, phoneCount, creditCardCount, addressCount);
+    }
+
+    public static string BuildSummary(RedactionResult result)
+    {
+        if (!result.HasRedactions)
+        {
+            return string.Empty;
+        }
+
+        var categories = new List<string>();
+        if (result.EmailCount > 0)
+        {
+            categories.Add($"{result.EmailCount} email(s)");
+        }
+
+        if (result.PhoneNumberCount > 0)
+        {
+            categories.Add($"{result.PhoneNumberCount} phone number(s)");
+        }
+
+        if (result.CreditCardCount > 0)
+        {
+            categories.Add($"{result.CreditCardCount} card-like number(s)");
+        }
+
+        if (result.AddressCount > 0)
+        {
+            categories.Add($"{result.AddressCount} address(es)");
+        }
+
+        return string.Join(", ", categories);
+    }
+
+    private static int CountDigits(string value)
+    {
+        var count = 0;
+        foreach (var ch in value)
+        {
+            if (char.IsDigit(ch))
+            {
+                count++;
+            }
+        }
+
+        return count;
+    }
+
+    internal sealed record RedactionResult(
+        string RedactedText,
+        int EmailCount,
+        int PhoneNumberCount,
+        int CreditCardCount,
+        int AddressCount)
+    {
+        public bool HasRedactions => TotalCount > 0;
+        public int TotalCount => EmailCount + PhoneNumberCount + CreditCardCount + AddressCount;
+    }
 }
