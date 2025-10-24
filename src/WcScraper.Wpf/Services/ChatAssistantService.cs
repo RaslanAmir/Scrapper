@@ -158,7 +158,7 @@ public sealed class ChatAssistantService
             var encounteredToolCalls = false;
             Dictionary<int, ToolCallState>? toolCallStates = toolbox is null ? null : new Dictionary<int, ToolCallState>();
 
-            await foreach (var update in streaming.EnumerateValues().WithCancellation(cancellationToken))
+            await foreach (var update in streaming.WithCancellation(cancellationToken))
             {
                 if (toolbox is not null && update.ToolCallUpdate is StreamingFunctionToolCallUpdate functionToolCall)
                 {
@@ -201,7 +201,7 @@ public sealed class ChatAssistantService
                 {
                     foreach (var part in contentParts)
                     {
-                        if (part is ChatMessageTextContent textContent && !string.IsNullOrEmpty(textContent.Text))
+                        if (part is ChatMessageTextContentItem textContent && !string.IsNullOrEmpty(textContent.Text))
                         {
                             yield return textContent.Text;
                         }
@@ -214,9 +214,11 @@ public sealed class ChatAssistantService
                 }
             }
 
-            await streaming.CompleteAsync().ConfigureAwait(false);
+            var completions = await client
+                .GetChatCompletionsAsync(options, cancellationToken)
+                .ConfigureAwait(false);
 
-            var usageSnapshot = CreateUsageSnapshot(streaming.Usage);
+            var usageSnapshot = CreateUsageSnapshot(completions.Value.Usage);
             ReportUsage(settings, usageSnapshot);
 
             if (toolbox is null || !encounteredToolCalls)
@@ -337,7 +339,7 @@ public sealed class ChatAssistantService
         };
 
         var systemPrompt = BuildDatasetSystemPrompt(settings.SystemPrompt, datasetInventory, matches, settings.DiagnosticLogger);
-        options.Messages.Add(new Azure.AI.OpenAI.ChatMessage(ChatRole.System, systemPrompt));
+        options.Messages.Add(new ChatRequestSystemMessage(systemPrompt));
 
         foreach (var message in history)
         {
@@ -346,7 +348,10 @@ public sealed class ChatAssistantService
                 continue;
             }
 
-            options.Messages.Add(new Azure.AI.OpenAI.ChatMessage(ToChatRole(message.Role), message.Content));
+            if (TryCreateRequestMessage(message, out var requestMessage))
+            {
+                options.Messages.Add(requestMessage);
+            }
         }
 
         if (!HasRemainingBudget(settings, out var datasetBudgetWarning))
@@ -362,13 +367,13 @@ public sealed class ChatAssistantService
         var response = await client.GetChatCompletionsStreamingAsync(options, cancellationToken).ConfigureAwait(false);
         await using var streaming = response.Value;
 
-        await foreach (var choice in streaming.GetChoicesStreaming(cancellationToken))
+        await foreach (var update in streaming.WithCancellation(cancellationToken))
         {
-            await foreach (var chatMessage in choice.GetMessageStreaming(cancellationToken))
+            if (update.ContentUpdate is { Count: > 0 } contentParts)
             {
-                foreach (var content in chatMessage.Content)
+                foreach (var part in contentParts)
                 {
-                    if (content is ChatMessageTextContent textContent && !string.IsNullOrEmpty(textContent.Text))
+                    if (part is ChatMessageTextContentItem textContent && !string.IsNullOrEmpty(textContent.Text))
                     {
                         yield return textContent.Text;
                     }
@@ -376,9 +381,11 @@ public sealed class ChatAssistantService
             }
         }
 
-        await streaming.CompleteAsync().ConfigureAwait(false);
+        var completions = await client
+            .GetChatCompletionsAsync(options, cancellationToken)
+            .ConfigureAwait(false);
 
-        var usageSnapshot = CreateUsageSnapshot(streaming.Usage);
+        var usageSnapshot = CreateUsageSnapshot(completions.Value.Usage);
         ReportUsage(settings, usageSnapshot);
     }
 
@@ -451,7 +458,7 @@ public sealed class ChatAssistantService
         systemPrompt.AppendLine("}");
         systemPrompt.AppendLine("If there are no actionable changes, return empty arrays and false flags.");
 
-        options.Messages.Add(new Azure.AI.OpenAI.ChatMessage(ChatRole.System, systemPrompt.ToString()));
+        options.Messages.Add(new ChatRequestSystemMessage(systemPrompt.ToString()));
 
         var contextPrompt = BuildContextualPrompt(context);
 
@@ -464,7 +471,7 @@ public sealed class ChatAssistantService
         userPrompt.AppendLine();
         userPrompt.AppendLine("Return JSON only. Do not include markdown fences.");
 
-        options.Messages.Add(new Azure.AI.OpenAI.ChatMessage(ChatRole.User, userPrompt.ToString()));
+        options.Messages.Add(new ChatRequestUserMessage(userPrompt.ToString()));
 
         var response = await client.GetChatCompletionsAsync(options, cancellationToken).ConfigureAwait(false);
         var choice = response.Value.Choices.FirstOrDefault();
@@ -536,7 +543,7 @@ public sealed class ChatAssistantService
         systemPrompt.AppendLine("Highlight real issues, classify them, and suggest practical next steps.");
         systemPrompt.AppendLine("Respond with concise and actionable guidance.");
 
-        options.Messages.Add(new Azure.AI.OpenAI.ChatMessage(ChatRole.System, systemPrompt.ToString()));
+        options.Messages.Add(new ChatRequestSystemMessage(systemPrompt.ToString()));
 
         var logPayload = string.Join(Environment.NewLine, snippet);
         var userPrompt = new StringBuilder();
@@ -557,7 +564,7 @@ public sealed class ChatAssistantService
         userPrompt.AppendLine(logPayload);
         userPrompt.AppendLine("```");
 
-        options.Messages.Add(new Azure.AI.OpenAI.ChatMessage(ChatRole.User, userPrompt.ToString()));
+        options.Messages.Add(new ChatRequestUserMessage(userPrompt.ToString()));
 
         var response = await client.GetChatCompletionsAsync(options, cancellationToken).ConfigureAwait(false);
         var choice = response.Value.Choices.FirstOrDefault();
@@ -630,7 +637,7 @@ public sealed class ChatAssistantService
         systemPrompt.AppendLine("Focus on risks, manual work items, and opportunities surfaced by the run.");
         systemPrompt.AppendLine("Respond in clear Markdown with short sections and actionable recommendations.");
 
-        options.Messages.Add(new Azure.AI.OpenAI.ChatMessage(ChatRole.System, systemPrompt.ToString()));
+        options.Messages.Add(new ChatRequestSystemMessage(systemPrompt.ToString()));
 
         var userPrompt = new StringBuilder();
         userPrompt.AppendLine("Craft a narrative summary of the latest run, highlighting what a human operator should do next.");
@@ -651,7 +658,7 @@ public sealed class ChatAssistantService
         userPrompt.AppendLine(runSnapshotJson.Trim());
         userPrompt.AppendLine("```");
 
-        options.Messages.Add(new Azure.AI.OpenAI.ChatMessage(ChatRole.User, userPrompt.ToString()));
+        options.Messages.Add(new ChatRequestUserMessage(userPrompt.ToString()));
 
         var response = await client.GetChatCompletionsAsync(options, cancellationToken).ConfigureAwait(false);
         var choice = response.Value.Choices.FirstOrDefault();
@@ -805,7 +812,7 @@ public sealed class ChatAssistantService
         systemPrompt.AppendLine("Only include suggested_directives when configuration changes would help.");
         systemPrompt.AppendLine("Do not wrap the response in markdown fences.");
 
-        options.Messages.Add(new Azure.AI.OpenAI.ChatMessage(ChatRole.System, systemPrompt.ToString()));
+        options.Messages.Add(new ChatRequestSystemMessage(systemPrompt.ToString()));
 
         var userPrompt = new StringBuilder();
         userPrompt.AppendLine("Review the latest export metrics and directory inventory.");
@@ -817,7 +824,7 @@ public sealed class ChatAssistantService
         userPrompt.AppendLine(payloadJson);
         userPrompt.AppendLine("```");
 
-        options.Messages.Add(new Azure.AI.OpenAI.ChatMessage(ChatRole.User, userPrompt.ToString()));
+        options.Messages.Add(new ChatRequestUserMessage(userPrompt.ToString()));
 
         var response = await client.GetChatCompletionsAsync(options, cancellationToken).ConfigureAwait(false);
         var choice = response.Value.Choices.FirstOrDefault();
@@ -878,7 +885,7 @@ public sealed class ChatAssistantService
         systemPrompt.AppendLine("Call out new risks, resolved issues, and manual follow-ups for migration operators.");
         systemPrompt.AppendLine("Respond in Markdown with concise sections and bullet lists.");
 
-        options.Messages.Add(new Azure.AI.OpenAI.ChatMessage(ChatRole.System, systemPrompt.ToString()));
+        options.Messages.Add(new ChatRequestSystemMessage(systemPrompt.ToString()));
 
         var userPrompt = new StringBuilder();
         userPrompt.AppendLine("Summarize the delta between the latest run and the previous baseline.");
@@ -890,7 +897,7 @@ public sealed class ChatAssistantService
         userPrompt.AppendLine(runDeltaJson.Trim());
         userPrompt.AppendLine("```");
 
-        options.Messages.Add(new Azure.AI.OpenAI.ChatMessage(ChatRole.User, userPrompt.ToString()));
+        options.Messages.Add(new ChatRequestUserMessage(userPrompt.ToString()));
 
         var response = await client.GetChatCompletionsAsync(options, cancellationToken).ConfigureAwait(false);
         var choice = response.Value.Choices.FirstOrDefault();
@@ -961,7 +968,7 @@ public sealed class ChatAssistantService
         systemPrompt.AppendLine("}");
         systemPrompt.AppendLine("Return an empty scripts array if nothing actionable exists. Do not use markdown fences.");
 
-        options.Messages.Add(new Azure.AI.OpenAI.ChatMessage(ChatRole.System, systemPrompt.ToString()));
+        options.Messages.Add(new ChatRequestSystemMessage(systemPrompt.ToString()));
 
         var userPrompt = new StringBuilder();
         userPrompt.AppendLine("Generate 1-3 concise automation snippets that help an operator execute the migration goals.");
@@ -984,7 +991,7 @@ public sealed class ChatAssistantService
         userPrompt.AppendLine();
         userPrompt.AppendLine("Return JSON only.");
 
-        options.Messages.Add(new Azure.AI.OpenAI.ChatMessage(ChatRole.User, userPrompt.ToString()));
+        options.Messages.Add(new ChatRequestUserMessage(userPrompt.ToString()));
 
         var response = await client.GetChatCompletionsAsync(options, cancellationToken).ConfigureAwait(false);
         var choice = response.Value.Choices.FirstOrDefault();
@@ -1046,7 +1053,7 @@ public sealed class ChatAssistantService
         systemPrompt.AppendLine("Call out public plugin clues, likely extension purposes, and design rebuild notes.");
         systemPrompt.AppendLine("Respond with concise, actionable guidance that references concrete files or slugs when possible.");
 
-        options.Messages.Add(new Azure.AI.OpenAI.ChatMessage(ChatRole.System, systemPrompt.ToString()));
+        options.Messages.Add(new ChatRequestSystemMessage(systemPrompt.ToString()));
 
         var payloadJson = JsonSerializer.Serialize(payload, s_artifactPayloadOptions);
 
@@ -1066,7 +1073,7 @@ public sealed class ChatAssistantService
         userPrompt.AppendLine(payloadJson);
         userPrompt.AppendLine("```");
 
-        options.Messages.Add(new Azure.AI.OpenAI.ChatMessage(ChatRole.User, userPrompt.ToString()));
+        options.Messages.Add(new ChatRequestUserMessage(userPrompt.ToString()));
 
         var response = await client.GetChatCompletionsAsync(options, cancellationToken).ConfigureAwait(false);
         var choice = response.Value.Choices.FirstOrDefault();
@@ -2335,15 +2342,6 @@ public sealed class ChatAssistantService
         public string? Content { get; set; }
         public List<string>? Notes { get; set; }
     }
-
-    private static ChatRole ToChatRole(ChatMessageRole role)
-        => role switch
-        {
-            ChatMessageRole.System => ChatRole.System,
-            ChatMessageRole.Assistant => ChatRole.Assistant,
-            ChatMessageRole.Tool => ChatRole.Tool,
-            _ => ChatRole.User,
-        };
 
     private static string FormatBoolean(bool value) => value ? "yes" : "no";
 
