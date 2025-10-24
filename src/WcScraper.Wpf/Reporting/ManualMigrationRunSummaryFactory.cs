@@ -17,6 +17,8 @@ public static class ManualMigrationRunSummaryFactory
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
     };
 
+    private static readonly IEqualityComparer<(string Slug, string Type)> s_publicExtensionComparer = new PublicExtensionKeyComparer();
+
     public static string CreateSnapshotJson(ManualMigrationReportContext context)
     {
         ArgumentNullException.ThrowIfNull(context);
@@ -88,7 +90,7 @@ public static class ManualMigrationRunSummaryFactory
         }
 
         return extensions
-            .GroupBy(extension => (Slug: Normalize(extension.Slug) ?? string.Empty, Type: Normalize(extension.Type) ?? string.Empty), StringComparer.OrdinalIgnoreCase)
+            .GroupBy(extension => (Slug: Normalize(extension.Slug) ?? string.Empty, Type: Normalize(extension.Type) ?? string.Empty), s_publicExtensionComparer)
             .Select(group =>
             {
                 var primary = group.First();
@@ -102,6 +104,23 @@ public static class ManualMigrationRunSummaryFactory
             })
             .OrderBy(summary => summary.Slug, StringComparer.OrdinalIgnoreCase)
             .ToArray();
+    }
+
+    private sealed class PublicExtensionKeyComparer : IEqualityComparer<(string Slug, string Type)>
+    {
+        public bool Equals((string Slug, string Type) x, (string Slug, string Type) y)
+        {
+            return string.Equals(x.Slug, y.Slug, StringComparison.OrdinalIgnoreCase)
+                && string.Equals(x.Type, y.Type, StringComparison.OrdinalIgnoreCase);
+        }
+
+        public int GetHashCode((string Slug, string Type) obj)
+        {
+            var hash = new HashCode();
+            hash.Add(obj.Slug, StringComparer.OrdinalIgnoreCase);
+            hash.Add(obj.Type, StringComparer.OrdinalIgnoreCase);
+            return hash.ToHashCode();
+        }
     }
 
     private static DesignSummary? BuildDesignSummary(ManualMigrationReportContext context)
