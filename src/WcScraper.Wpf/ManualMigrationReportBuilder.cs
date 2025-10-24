@@ -1221,7 +1221,7 @@ internal sealed class ManualMigrationReportBuilder
     }
 }
 
-internal sealed record ManualMigrationReportContext(
+public sealed record ManualMigrationReportContext(
     string StoreUrl,
     string StoreIdentifier,
     string OutputFolder,
@@ -1260,13 +1260,13 @@ internal sealed record ManualMigrationReportContext(
     IReadOnlyList<RunPlanSnapshot>? RunPlans = null,
     string? ChatTranscriptPath = null);
 
-internal sealed record ManualMigrationAutomationScriptSet(
+public sealed record ManualMigrationAutomationScriptSet(
     string? Summary,
     IReadOnlyList<ManualMigrationAutomationScript> Scripts,
     IReadOnlyList<string> Warnings,
     string? Error);
 
-internal sealed record ManualMigrationAutomationScript(
+public sealed record ManualMigrationAutomationScript(
     string Name,
     string? Description,
     string Language,
@@ -1274,24 +1274,24 @@ internal sealed record ManualMigrationAutomationScript(
     string FileName,
     IReadOnlyList<string> Notes);
 
-internal sealed record ManualMigrationReportBuildResult(
+public sealed record ManualMigrationReportBuildResult(
     string ReportMarkdown,
     AiArtifactAnnotation? Annotation,
     string? AnnotationError);
 
-internal sealed record ManualMigrationEntityCounts(
+public sealed record ManualMigrationEntityCounts(
     int ProductCount,
     int OrderCount,
     int MediaItemCount,
     int DesignAssetCount,
     int PublicSlugCount);
 
-internal sealed record ManualMigrationFileSystemStats(
+public sealed record ManualMigrationFileSystemStats(
     IReadOnlyList<ManualMigrationDirectorySnapshot> Directories,
     int TotalFileCount,
     long TotalSizeBytes);
 
-internal sealed record ManualMigrationDirectorySnapshot(
+public sealed record ManualMigrationDirectorySnapshot(
     string AbsolutePath,
     string RelativePath,
     int FileCount,
