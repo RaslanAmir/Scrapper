@@ -20,7 +20,6 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Input;
-using System.Windows.Threading;
 using WcScraper.Core;
 using WcScraper.Core.Exporters;
 using WcScraper.Core.Shopify;
@@ -214,7 +213,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         _preferencesPath = Path.Combine(_settingsDirectory, "preferences.json");
         _chatKeyPath = Path.Combine(_settingsDirectory, "chat.key");
         _chatTranscriptStore = new ChatTranscriptStore(_settingsDirectory);
-        var dispatcher = Application.Current?.Dispatcher ?? Dispatcher.CurrentDispatcher;
+        var dispatcher = System.Windows.Application.Current?.Dispatcher ?? System.Windows.Threading.Dispatcher.CurrentDispatcher;
         _runPlanner = new RunPlanner(ExecuteRunPlanAsync, dispatcher);
         _runPlans = _runPlanner.Plans;
         ((INotifyCollectionChanged)_runPlans).CollectionChanged += OnRunPlansChanged;
@@ -1983,7 +1982,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
         try
         {
-            Clipboard.SetText(script.Content);
+            System.Windows.Clipboard.SetText(script.Content);
         }
         catch (Exception ex)
         {
@@ -3043,17 +3042,17 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
         var text = builder.ToString();
 
-        if (Application.Current?.Dispatcher is Dispatcher dispatcher)
+        if (System.Windows.Application.Current?.Dispatcher is System.Windows.Threading.Dispatcher dispatcher)
         {
             if (dispatcher.CheckAccess())
             {
-                return MessageBox.Show(text, "Confirm assistant action", MessageBoxButton.YesNo, MessageBoxImage.Question) == MessageBoxResult.Yes;
+                return System.Windows.MessageBox.Show(text, "Confirm assistant action", MessageBoxButton.YesNo, MessageBoxImage.Question) == MessageBoxResult.Yes;
             }
 
-            return dispatcher.Invoke(() => MessageBox.Show(text, "Confirm assistant action", MessageBoxButton.YesNo, MessageBoxImage.Question) == MessageBoxResult.Yes);
+            return dispatcher.Invoke(() => System.Windows.MessageBox.Show(text, "Confirm assistant action", MessageBoxButton.YesNo, MessageBoxImage.Question) == MessageBoxResult.Yes);
         }
 
-        return MessageBox.Show(text, "Confirm assistant action", MessageBoxButton.YesNo, MessageBoxImage.Question) == MessageBoxResult.Yes;
+        return System.Windows.MessageBox.Show(text, "Confirm assistant action", MessageBoxButton.YesNo, MessageBoxImage.Question) == MessageBoxResult.Yes;
     }
 
     private static bool IsDelayWithinRange(double value)
@@ -3624,7 +3623,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
             return;
         }
 
-        var dispatcher = App.Current?.Dispatcher;
+        var dispatcher = System.Windows.Application.Current?.Dispatcher;
         if (dispatcher is null || dispatcher.CheckAccess())
         {
             action();
@@ -3813,7 +3812,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
             {
                 var cats = await _wooScraper.FetchProductCategoriesAsync(baseUrl, logger);
                 var tags = await _wooScraper.FetchProductTagsAsync(baseUrl, logger);
-                App.Current?.Dispatcher.Invoke(() =>
+                System.Windows.Application.Current?.Dispatcher.Invoke(() =>
                 {
                     CategoryChoices.Clear();
                     foreach (var c in cats) CategoryChoices.Add(new SelectableTerm(c));
@@ -3826,7 +3825,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 var settings = BuildShopifySettings(baseUrl);
                 var collections = await _shopifyScraper.FetchCollectionsAsync(settings, logger);
                 var tags = await _shopifyScraper.FetchProductTagsAsync(settings, logger);
-                App.Current?.Dispatcher.Invoke(() =>
+                System.Windows.Application.Current?.Dispatcher.Invoke(() =>
                 {
                     CategoryChoices.Clear();
                     foreach (var collection in collections.Terms)
@@ -5196,14 +5195,14 @@ public sealed class MainViewModel : INotifyPropertyChanged
             }
 
             List<string> logSnapshot;
-            if (App.Current is null)
+            if (System.Windows.Application.Current is null)
             {
                 logSnapshot = Logs.ToList();
             }
             else
             {
                 var tempLogs = new List<string>();
-                App.Current.Dispatcher.Invoke(() => tempLogs.AddRange(Logs));
+                System.Windows.Application.Current.Dispatcher.Invoke(() => tempLogs.AddRange(Logs));
                 logSnapshot = tempLogs;
             }
 
@@ -6669,7 +6668,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
     private void Append(string message)
     {
-        App.Current?.Dispatcher.Invoke(() => Logs.Add(message));
+        System.Windows.Application.Current?.Dispatcher.Invoke(() => Logs.Add(message));
     }
 
     private static string BuildMediaRelativePath(WordPressMediaItem item)
@@ -8267,7 +8266,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
     private void ClearFilters()
     {
-        App.Current?.Dispatcher.Invoke(() =>
+        System.Windows.Application.Current?.Dispatcher.Invoke(() =>
         {
             CategoryChoices.Clear();
             TagChoices.Clear();
