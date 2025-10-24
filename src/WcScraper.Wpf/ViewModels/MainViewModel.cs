@@ -8119,7 +8119,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         return string.IsNullOrWhiteSpace(sanitized) ? "segment" : sanitized;
     }
 
-    private sealed record AutomationScriptDisplay(
+    public sealed record AutomationScriptDisplay(
         string Name,
         string? Description,
         string Language,
