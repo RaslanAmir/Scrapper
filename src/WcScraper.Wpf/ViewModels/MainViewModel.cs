@@ -131,7 +131,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private decimal? _chatCompletionTokenUsdPerThousand;
     private readonly TimeSpan _logSummaryDebounce = TimeSpan.FromSeconds(6);
     private readonly object _logSummarySync = new();
-    private Timer? _logSummaryTimer;
+    private System.Threading.Timer? _logSummaryTimer;
     private int _pendingLogSummaryCount;
     private bool _isLogSummaryBusy;
     private LogTriageResult? _latestLogSummary;
