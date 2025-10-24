@@ -81,6 +81,7 @@ public class ManualMigrationRunSummaryFactoryTests
             HttpRetryAttempts: 3,
             HttpRetryBaseDelay: TimeSpan.FromSeconds(1),
             HttpRetryMaxDelay: TimeSpan.FromSeconds(10),
+            ArtifactIntelligence: null,
             RunPlans: Array.Empty<RunPlanSnapshot>());
 
         var directorySnapshots = new[]
