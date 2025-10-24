@@ -16,6 +16,7 @@ using Azure.AI.OpenAI;
 using WcScraper.Core;
 using WcScraper.Wpf.Models;
 using WcScraper.Wpf.Reporting;
+using WcScraper.Wpf.ViewModels;
 
 namespace WcScraper.Wpf.Services;
 
