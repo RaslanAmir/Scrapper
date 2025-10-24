@@ -152,7 +152,7 @@ public sealed class ChatAssistantService
             }
 
             var response = await client.GetChatCompletionsStreamingAsync(options, cancellationToken).ConfigureAwait(false);
-            await using var streaming = response;
+            using var streaming = response;
 
             var finishReason = default(CompletionsFinishReason?);
             var encounteredToolCalls = false;
@@ -365,7 +365,7 @@ public sealed class ChatAssistantService
         }
 
         var response = await client.GetChatCompletionsStreamingAsync(options, cancellationToken).ConfigureAwait(false);
-        await using var streaming = response;
+        using var streaming = response;
 
         await foreach (var update in streaming.WithCancellation(cancellationToken))
         {
