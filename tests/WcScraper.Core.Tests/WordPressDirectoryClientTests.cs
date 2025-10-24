@@ -46,7 +46,15 @@ public sealed class WordPressDirectoryClientTests
 
     private static HttpResponseMessage CreatePluginResponse()
     {
-        const string payload = "{""slug"":""test-plugin"",""name"":""Test Plugin"",""version"":""1.0.0"",""homepage"":""https://example.com"",""download_link"":""https://example.com/download""}";
+        const string payload = """
+        {
+            "slug": "test-plugin",
+            "name": "Test Plugin",
+            "version": "1.0.0",
+            "homepage": "https://example.com",
+            "download_link": "https://example.com/download"
+        }
+        """;
         return new HttpResponseMessage(HttpStatusCode.OK)
         {
             Content = new StringContent(payload, Encoding.UTF8, "application/json")
