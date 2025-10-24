@@ -1766,9 +1766,11 @@ public sealed class MainViewModel : INotifyPropertyChanged
         }
         catch (Exception ex)
         {
-            assistantMessage.Content = $"Error: {ex.Message}";
-            ChatStatusMessage = "Assistant encountered an error. Review the latest response.";
-            Append($"Assistant error: {ex.Message}");
+            var guidance = ChatAssistantService.CreateErrorGuidance(ex);
+            var guidanceMessage = guidance.ToMessage();
+            assistantMessage.Content = guidanceMessage;
+            ChatStatusMessage = guidanceMessage;
+            Append($"Assistant error: {ex}");
         }
         finally
         {
