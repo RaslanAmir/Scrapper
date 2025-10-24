@@ -14,6 +14,7 @@ using System.Windows;
 using ClosedXML.Excel;
 using WcScraper.Core;
 using WcScraper.Core.Shopify;
+using WcScraper.Wpf.Models;
 using WcScraper.Wpf.Services;
 using WcScraper.Wpf.ViewModels;
 using Xunit;
@@ -222,6 +223,44 @@ public class MainViewModelTests
 
         viewModel.ClearTagsCommand.Execute(null);
         Assert.All(viewModel.TagChoices, term => Assert.False(term.IsSelected));
+    }
+
+    [Fact]
+    public void OnChatUsageReported_TracksTotalsAndClearsWithHistory()
+    {
+        using var wooScraper = new WooScraper();
+        using var shopifyScraper = new ShopifyScraper();
+        using var httpClient = new HttpClient();
+
+        var ctor = typeof(MainViewModel).GetConstructor(
+            BindingFlags.NonPublic | BindingFlags.Instance,
+            binder: null,
+            new[] { typeof(IDialogService), typeof(WooScraper), typeof(ShopifyScraper), typeof(HttpClient) },
+            modifiers: null);
+        Assert.NotNull(ctor);
+
+        var viewModel = (MainViewModel)ctor!.Invoke(new object[]
+        {
+            new StubDialogService(),
+            wooScraper,
+            shopifyScraper,
+            httpClient
+        });
+
+        viewModel.OnChatUsageReported(new ChatUsageSnapshot(12, 8, 20));
+        viewModel.OnChatUsageReported(new ChatUsageSnapshot(3, 5, 8));
+
+        Assert.Equal(15, viewModel.ChatPromptTokenTotal);
+        Assert.Equal(13, viewModel.ChatCompletionTokenTotal);
+        Assert.Equal(28, viewModel.ChatTotalTokenTotal);
+
+        viewModel.ChatMessages.Add(new ChatMessage(ChatMessageRole.User, "hello"));
+        Assert.True(viewModel.ClearChatHistoryCommand.CanExecute(null));
+        viewModel.ClearChatHistoryCommand.Execute(null);
+
+        Assert.Equal(0, viewModel.ChatPromptTokenTotal);
+        Assert.Equal(0, viewModel.ChatCompletionTokenTotal);
+        Assert.Equal(0, viewModel.ChatTotalTokenTotal);
     }
 
     [Fact]

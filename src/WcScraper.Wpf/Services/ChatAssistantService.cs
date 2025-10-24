@@ -205,6 +205,9 @@ public sealed class ChatAssistantService
 
             await streaming.CompleteAsync().ConfigureAwait(false);
 
+            var usageSnapshot = CreateUsageSnapshot(streaming.Usage);
+            ReportUsage(settings, usageSnapshot);
+
             if (toolbox is null || !encounteredToolCalls)
             {
                 break;
@@ -353,6 +356,9 @@ public sealed class ChatAssistantService
         }
 
         await streaming.CompleteAsync().ConfigureAwait(false);
+
+        var usageSnapshot = CreateUsageSnapshot(streaming.Usage);
+        ReportUsage(settings, usageSnapshot);
     }
 
     public async Task<AssistantDirectiveBatch?> ParseAssistantDirectivesAsync(
@@ -2408,6 +2414,30 @@ public sealed class ChatAssistantService
         return requestMessage is not null;
     }
 
+    internal static void ReportUsage(ChatSessionSettings settings, ChatUsageSnapshot? usage)
+    {
+        if (settings?.UsageReported is null || usage is null)
+        {
+            return;
+        }
+
+        settings.UsageReported(usage);
+    }
+
+    private static ChatUsageSnapshot? CreateUsageSnapshot(CompletionsUsage? usage)
+    {
+        if (usage is null)
+        {
+            return null;
+        }
+
+        var promptTokens = usage.PromptTokens ?? 0;
+        var completionTokens = usage.CompletionTokens ?? 0;
+        var totalTokens = usage.TotalTokens ?? 0;
+
+        return new ChatUsageSnapshot(promptTokens, completionTokens, totalTokens);
+    }
+
     private static ToolCallState GetOrCreateToolState(Dictionary<int, ToolCallState> states, int index)
     {
         if (!states.TryGetValue(index, out var state))
@@ -2443,7 +2473,8 @@ public sealed record ChatSessionSettings(
     string Model,
     string? SystemPrompt,
     int? ToolCallIterationLimit = null,
-    Action<string>? DiagnosticLogger = null);
+    Action<string>? DiagnosticLogger = null,
+    Action<ChatUsageSnapshot>? UsageReported = null);
 
 public sealed record AssistantDirectiveBatch(
     string Summary,

@@ -118,6 +118,9 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private bool _isChatBusy;
     private string _chatInput = string.Empty;
     private string _chatStatusMessage = "Enter API endpoint, model, and API key to enable the assistant.";
+    private int _chatPromptTokenTotal;
+    private int _chatCompletionTokenTotal;
+    private int _chatTotalTokenTotal;
     private readonly TimeSpan _logSummaryDebounce = TimeSpan.FromSeconds(6);
     private readonly object _logSummarySync = new();
     private Timer? _logSummaryTimer;
@@ -1040,6 +1043,51 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
     public bool HasChatMessages => ChatMessages.Count > 0;
 
+    public int ChatPromptTokenTotal
+    {
+        get => _chatPromptTokenTotal;
+        private set
+        {
+            if (_chatPromptTokenTotal == value)
+            {
+                return;
+            }
+
+            _chatPromptTokenTotal = value;
+            OnPropertyChanged();
+        }
+    }
+
+    public int ChatCompletionTokenTotal
+    {
+        get => _chatCompletionTokenTotal;
+        private set
+        {
+            if (_chatCompletionTokenTotal == value)
+            {
+                return;
+            }
+
+            _chatCompletionTokenTotal = value;
+            OnPropertyChanged();
+        }
+    }
+
+    public int ChatTotalTokenTotal
+    {
+        get => _chatTotalTokenTotal;
+        private set
+        {
+            if (_chatTotalTokenTotal == value)
+            {
+                return;
+            }
+
+            _chatTotalTokenTotal = value;
+            OnPropertyChanged();
+        }
+    }
+
     public RelayCommand SendChatCommand { get; }
     public RelayCommand CancelChatCommand { get; }
     public RelayCommand SaveChatTranscriptCommand { get; }
@@ -1649,6 +1697,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         try
         {
             ChatMessages.Clear();
+            ResetChatUsageTotals();
             _chatTranscriptStore.StartNewSession();
             ChatStatusMessage = "Chat history cleared. Start a new conversation.";
         }
@@ -1658,6 +1707,28 @@ public sealed class MainViewModel : INotifyPropertyChanged
         }
 
         return Task.CompletedTask;
+    }
+
+    internal void OnChatUsageReported(ChatUsageSnapshot usage)
+    {
+        if (usage is null)
+        {
+            return;
+        }
+
+        ExecuteOnUiThread(() =>
+        {
+            ChatPromptTokenTotal += usage.PromptTokens;
+            ChatCompletionTokenTotal += usage.CompletionTokens;
+            ChatTotalTokenTotal += usage.TotalTokens;
+        });
+    }
+
+    private void ResetChatUsageTotals()
+    {
+        ChatPromptTokenTotal = 0;
+        ChatCompletionTokenTotal = 0;
+        ChatTotalTokenTotal = 0;
     }
 
     private bool CanExplainLogs()
@@ -1738,7 +1809,13 @@ public sealed class MainViewModel : INotifyPropertyChanged
         try
         {
             var context = BuildChatContext();
-            var session = new ChatSessionSettings(ChatApiEndpoint, ChatApiKey, ChatModel, ChatSystemPrompt, DiagnosticLogger: Append);
+            var session = new ChatSessionSettings(
+                ChatApiEndpoint,
+                ChatApiKey,
+                ChatModel,
+                ChatSystemPrompt,
+                DiagnosticLogger: Append,
+                UsageReported: OnChatUsageReported);
 
             if (SelectedChatMode == ChatInteractionMode.DatasetQuestion)
             {
@@ -1896,6 +1973,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                     }
 
                     ChatMessages.Clear();
+                    ResetChatUsageTotals();
                     foreach (var message in session.Messages)
                     {
                         ChatMessages.Add(message);
@@ -3142,7 +3220,13 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
         try
         {
-            var session = new ChatSessionSettings(ChatApiEndpoint, ChatApiKey, ChatModel, ChatSystemPrompt, DiagnosticLogger: Append);
+            var session = new ChatSessionSettings(
+                ChatApiEndpoint,
+                ChatApiKey,
+                ChatModel,
+                ChatSystemPrompt,
+                DiagnosticLogger: Append,
+                UsageReported: OnChatUsageReported);
             var summary = await _chatAssistantService.SummarizeLogsAsync(session, logSnapshot, cancellationToken).ConfigureAwait(false);
             if (summary is not null)
             {
@@ -4907,7 +4991,13 @@ public sealed class MainViewModel : INotifyPropertyChanged
             ChatSessionSettings? chatSession = null;
             if (HasChatConfiguration)
             {
-                chatSession = new ChatSessionSettings(ChatApiEndpoint, ChatApiKey, ChatModel, ChatSystemPrompt, DiagnosticLogger: Append);
+                chatSession = new ChatSessionSettings(
+                    ChatApiEndpoint,
+                    ChatApiKey,
+                    ChatModel,
+                    ChatSystemPrompt,
+                    DiagnosticLogger: Append,
+                    UsageReported: OnChatUsageReported);
             }
 
             var automationReferences = new List<ManualMigrationAutomationScript>();
@@ -6197,6 +6287,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         {
             IsAssistantPanelExpanded = true;
             ChatMessages.Clear();
+            ResetChatUsageTotals();
             _chatTranscriptStore.StartNewSession();
 
             var contextBuilder = new StringBuilder();

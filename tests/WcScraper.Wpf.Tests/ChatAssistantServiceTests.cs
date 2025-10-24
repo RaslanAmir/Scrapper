@@ -1,3 +1,5 @@
+using System.Collections.Generic;
+using WcScraper.Wpf.Models;
 using WcScraper.Wpf.Services;
 using Xunit;
 
@@ -97,5 +99,42 @@ public static class ChatAssistantServiceTests
         var reminder = Assert.Single(result.CredentialReminders);
         Assert.Equal("General", reminder.Credential);
         Assert.Equal("Provide storefront token.", reminder.Message);
+    }
+
+    [Fact]
+    public static void ReportUsage_WithSnapshot_NotifiesListener()
+    {
+        var snapshots = new List<ChatUsageSnapshot>();
+        var settings = new ChatSessionSettings(
+            "https://example.invalid",
+            "key",
+            "model",
+            systemPrompt: null,
+            UsageReported: snapshots.Add);
+
+        var usage = new ChatUsageSnapshot(10, 5, 15);
+        ChatAssistantService.ReportUsage(settings, usage);
+
+        var captured = Assert.Single(snapshots);
+        Assert.Equal(usage, captured);
+    }
+
+    [Fact]
+    public static void ReportUsage_WithMultipleSnapshots_NotifiesEachListenerInvocation()
+    {
+        var snapshots = new List<ChatUsageSnapshot>();
+        var settings = new ChatSessionSettings(
+            "https://example.invalid",
+            "key",
+            "model",
+            systemPrompt: null,
+            UsageReported: snapshots.Add);
+
+        ChatAssistantService.ReportUsage(settings, new ChatUsageSnapshot(5, 3, 8));
+        ChatAssistantService.ReportUsage(settings, new ChatUsageSnapshot(7, 2, 9));
+
+        Assert.Equal(2, snapshots.Count);
+        Assert.Contains(new ChatUsageSnapshot(5, 3, 8), snapshots);
+        Assert.Contains(new ChatUsageSnapshot(7, 2, 9), snapshots);
     }
 }
