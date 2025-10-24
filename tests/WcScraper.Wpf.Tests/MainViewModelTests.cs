@@ -899,6 +899,11 @@ public class MainViewModelTests
         {
             // no-op for tests
         }
+
+        public OnboardingWizardSettings? ShowOnboardingWizard(MainViewModel viewModel, ChatAssistantService chatAssistantService)
+            => null;
+
+        public string? SaveFile(string filter, string defaultFileName, string? initialDirectory = null) => null;
     }
 
     private sealed class StubHttpMessageHandler : HttpMessageHandler

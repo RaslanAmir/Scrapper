@@ -13,6 +13,7 @@ public interface IDialogService
     void ShowLogWindow(WcScraper.Wpf.ViewModels.MainViewModel viewModel);
     void ShowRunCompletionDialog(ManualRunCompletionInfo info);
     OnboardingWizardSettings? ShowOnboardingWizard(MainViewModel viewModel, ChatAssistantService chatAssistantService);
+    string? SaveFile(string filter, string defaultFileName, string? initialDirectory = null);
 }
 
 public sealed class DialogService : IDialogService
@@ -87,5 +88,22 @@ public sealed class DialogService : IDialogService
 
         var dialogResult = window.ShowDialog();
         return dialogResult == true ? wizardViewModel.Result : null;
+    }
+
+    public string? SaveFile(string filter, string defaultFileName, string? initialDirectory = null)
+    {
+        using var dlg = new Forms.SaveFileDialog
+        {
+            Filter = string.IsNullOrWhiteSpace(filter) ? "All files (*.*)|*.*" : filter,
+            FileName = defaultFileName,
+            AddExtension = true,
+        };
+
+        if (!string.IsNullOrWhiteSpace(initialDirectory))
+        {
+            dlg.InitialDirectory = initialDirectory;
+        }
+
+        return dlg.ShowDialog() == Forms.DialogResult.OK ? dlg.FileName : null;
     }
 }
