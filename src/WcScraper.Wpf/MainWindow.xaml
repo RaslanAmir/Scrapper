@@ -425,6 +425,11 @@
                                     <Button Content="Send"
                                             Command="{Binding SendChatCommand}"
                                             Padding="16,6"/>
+                                    <Button Content="Cancel response"
+                                            Command="{Binding CancelChatCommand}"
+                                            Padding="12,6"
+                                            Margin="8,0,0,0"
+                                            Visibility="{Binding IsChatBusy, Converter={StaticResource BoolToVisibility}}"/>
                                 </StackPanel>
                             </Grid>
                         </TabItem>

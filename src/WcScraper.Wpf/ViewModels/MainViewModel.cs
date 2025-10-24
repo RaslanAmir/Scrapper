@@ -139,6 +139,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private AssistantDirectiveBatch? _pendingAssistantDirectives;
     private RunPlan? _activeRunPlan;
     private RunPlanExecutionOutcome? _activeRunPlanOutcome;
+    private CancellationTokenSource? _chatCts;
     private readonly Dictionary<string, (Func<bool> Getter, Action<bool> Setter)> _assistantToggleBindings;
     private readonly ObservableCollection<AutomationScriptDisplay> _latestAutomationScripts = new();
     private readonly ObservableCollection<string> _latestAutomationScriptWarnings = new();
@@ -216,6 +217,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         ExplainLogsCommand = new RelayCommand(async () => await OnExplainLatestLogsAsync(), CanExplainLogs);
         LaunchWizardCommand = new RelayCommand(OnLaunchWizard, CanLaunchWizard);
         SendChatCommand = new RelayCommand(async () => await OnSendChatAsync(), CanSendChat);
+        CancelChatCommand = new RelayCommand(OnCancelChat, CanCancelChat);
         UseAiRecommendationCommand = new RelayCommand<string?>(OnUseAiRecommendation);
         CopyAutomationScriptCommand = new RelayCommand<AutomationScriptDisplay>(OnCopyAutomationScript);
         ApproveRunPlanCommand = new RelayCommand<RunPlan>(OnApproveRunPlan, CanApproveRunPlan);
@@ -1029,6 +1031,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public ObservableCollection<ChatMessage> ChatMessages { get; }
 
     public RelayCommand SendChatCommand { get; }
+    public RelayCommand CancelChatCommand { get; }
 
     public string ChatApiEndpoint
     {
@@ -1167,6 +1170,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
             _isChatBusy = value;
             OnPropertyChanged();
             SendChatCommand.RaiseCanExecuteChanged();
+            CancelChatCommand?.RaiseCanExecuteChanged();
         }
     }
 
@@ -1566,6 +1570,28 @@ public sealed class MainViewModel : INotifyPropertyChanged
             && HasChatConfiguration
             && !string.IsNullOrWhiteSpace(ChatInput);
 
+    private bool CanCancelChat()
+        => IsChatBusy;
+
+    private void OnCancelChat()
+    {
+        var cts = _chatCts;
+        if (cts is null || !IsChatBusy)
+        {
+            return;
+        }
+
+        ChatStatusMessage = "Cancelling assistant response…";
+
+        try
+        {
+            cts.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+    }
+
     private bool CanExplainLogs()
         => !IsLogSummaryBusy
             && HasChatConfiguration
@@ -1631,8 +1657,14 @@ public sealed class MainViewModel : INotifyPropertyChanged
         var assistantMessage = new ChatMessage(ChatMessageRole.Assistant, string.Empty);
         ChatMessages.Add(assistantMessage);
 
+        var chatCts = new CancellationTokenSource();
+        _chatCts = chatCts;
+        var cancellationToken = chatCts.Token;
+
         IsChatBusy = true;
         ChatStatusMessage = "Requesting assistant response…";
+
+        var wasCancelled = false;
 
         try
         {
@@ -1641,7 +1673,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
             if (SelectedChatMode == ChatInteractionMode.DatasetQuestion)
             {
-                await foreach (var token in _chatAssistantService.StreamDatasetAnswerAsync(session, history, trimmed, CancellationToken.None))
+                await foreach (var token in _chatAssistantService.StreamDatasetAnswerAsync(session, history, trimmed, cancellationToken))
                 {
                     assistantMessage.Append(token);
                 }
@@ -1677,35 +1709,59 @@ public sealed class MainViewModel : INotifyPropertyChanged
                         }
                     });
 
-                await foreach (var token in _chatAssistantService.StreamChatCompletionAsync(session, history, contextSummary, toolbox, CancellationToken.None))
+                await foreach (var token in _chatAssistantService.StreamChatCompletionAsync(session, history, contextSummary, toolbox, cancellationToken))
                 {
                     assistantMessage.Append(token);
                 }
             }
 
-            if (string.IsNullOrWhiteSpace(assistantMessage.Content))
+            if (cancellationToken.IsCancellationRequested)
             {
-                assistantMessage.Content = "(No response received.)";
+                wasCancelled = true;
             }
 
-            ChatStatusMessage = SelectedChatMode == ChatInteractionMode.DatasetQuestion
-                ? "Dataset Q&A ready for another question."
-                : "Assistant ready for another prompt.";
+            if (string.IsNullOrWhiteSpace(assistantMessage.Content))
+            {
+                assistantMessage.Content = cancellationToken.IsCancellationRequested
+                    ? "(Response cancelled.)"
+                    : "(No response received.)";
+            }
 
-            if (SelectedChatMode != ChatInteractionMode.DatasetQuestion)
+            if (!cancellationToken.IsCancellationRequested)
+            {
+                ChatStatusMessage = SelectedChatMode == ChatInteractionMode.DatasetQuestion
+                    ? "Dataset Q&A ready for another question."
+                    : "Assistant ready for another prompt.";
+            }
+
+            if (SelectedChatMode != ChatInteractionMode.DatasetQuestion && !cancellationToken.IsCancellationRequested)
             {
                 try
                 {
-                    var directives = await _chatAssistantService.ParseAssistantDirectivesAsync(session, context, trimmed, CancellationToken.None);
+                    var directives = await _chatAssistantService.ParseAssistantDirectivesAsync(session, context, trimmed, cancellationToken);
                     if (directives is not null)
                     {
                         ProcessAssistantDirectives(directives, confirmed: false);
                     }
                 }
+                catch (OperationCanceledException)
+                {
+                    wasCancelled = true;
+                    throw;
+                }
                 catch (Exception directiveEx)
                 {
                     Append($"Assistant directive processing failed: {directiveEx.Message}");
                 }
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            wasCancelled = true;
+            ChatStatusMessage = "Assistant response cancelled.";
+            if (string.IsNullOrWhiteSpace(assistantMessage.Content))
+            {
+                assistantMessage.Content = "(Response cancelled.)";
             }
         }
         catch (Exception ex)
@@ -1716,7 +1772,17 @@ public sealed class MainViewModel : INotifyPropertyChanged
         }
         finally
         {
+            wasCancelled |= cancellationToken.IsCancellationRequested;
+            if (ReferenceEquals(_chatCts, chatCts))
+            {
+                _chatCts = null;
+            }
+            chatCts.Dispose();
             IsChatBusy = false;
+            if (wasCancelled)
+            {
+                ChatStatusMessage = "Assistant response cancelled.";
+            }
         }
     }
 
