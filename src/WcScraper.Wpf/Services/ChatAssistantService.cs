@@ -13,6 +13,7 @@ using Azure;
 using Azure.AI.OpenAI;
 using WcScraper.Core;
 using WcScraper.Wpf.Models;
+using WcScraper.Wpf.Reporting;
 
 namespace WcScraper.Wpf.Services;
 
@@ -609,6 +610,172 @@ public sealed class ChatAssistantService
         return string.IsNullOrWhiteSpace(content) ? null : content.Trim();
     }
 
+    public async Task<ExportVerificationResult?> VerifyExportsAsync(
+        ChatSessionSettings settings,
+        ManualMigrationReportContext context,
+        IReadOnlyList<ManualMigrationDirectorySnapshot>? outputDirectories,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+        ArgumentNullException.ThrowIfNull(context);
+
+        if (string.IsNullOrWhiteSpace(settings.ApiKey))
+        {
+            throw new ArgumentException("An API key is required.", nameof(settings));
+        }
+
+        if (string.IsNullOrWhiteSpace(settings.Endpoint))
+        {
+            throw new ArgumentException("An endpoint is required.", nameof(settings));
+        }
+
+        if (!Uri.TryCreate(settings.Endpoint, UriKind.Absolute, out var endpoint))
+        {
+            throw new ArgumentException("The API endpoint must be an absolute URI.", nameof(settings));
+        }
+
+        if (string.IsNullOrWhiteSpace(settings.Model))
+        {
+            throw new ArgumentException("A model or deployment identifier is required.", nameof(settings));
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var client = new OpenAIClient(endpoint, new AzureKeyCredential(settings.ApiKey));
+
+        var entityCounts = context.EntityCounts is null
+            ? null
+            : new
+            {
+                products = context.EntityCounts.ProductCount,
+                orders = context.EntityCounts.OrderCount,
+                media = context.EntityCounts.MediaItemCount,
+                designAssets = context.EntityCounts.DesignAssetCount,
+                publicSlugs = context.EntityCounts.PublicSlugCount,
+            };
+
+        var directories = (outputDirectories ?? Array.Empty<ManualMigrationDirectorySnapshot>())
+            .Select(directory => new
+            {
+                relativePath = directory.RelativePath,
+                absolutePath = directory.AbsolutePath,
+                files = directory.FileCount,
+                bytes = directory.TotalSizeBytes,
+            })
+            .ToArray();
+
+        var fileSystem = context.FileSystemStats is null
+            ? null
+            : new
+            {
+                totalFiles = context.FileSystemStats.TotalFileCount,
+                totalBytes = context.FileSystemStats.TotalSizeBytes,
+            };
+
+        var logTail = context.LogEntries.Count == 0
+            ? Array.Empty<string>()
+            : context.LogEntries
+                .Skip(Math.Max(0, context.LogEntries.Count - 10))
+                .Select(entry => entry.Trim())
+                .Where(entry => entry.Length > 0)
+                .ToArray();
+
+        var payload = new
+        {
+            generatedAtUtc = context.GeneratedAtUtc,
+            store = new
+            {
+                context.StoreIdentifier,
+                context.StoreUrl,
+                context.IsWooCommerce,
+            },
+            requests = new
+            {
+                context.RequestedPluginInventory,
+                context.RequestedThemeInventory,
+                context.RequestedPublicExtensionFootprints,
+                context.RequestedDesignSnapshot,
+                context.RequestedDesignScreenshots,
+            },
+            attempts = new
+            {
+                context.AttemptedPluginFetch,
+                context.AttemptedThemeFetch,
+                context.AttemptedPublicExtensionFootprintFetch,
+            },
+            entityCounts,
+            exportInventories = new
+            {
+                plugins = context.Plugins?.Count ?? 0,
+                themes = context.Themes?.Count ?? 0,
+                publicExtensions = context.PublicExtensions?.Count ?? 0,
+                pluginBundles = context.PluginBundles?.Count ?? 0,
+                themeBundles = context.ThemeBundles?.Count ?? 0,
+                automationScripts = context.AutomationScripts?.Scripts.Count ?? 0,
+                designScreenshots = context.DesignScreenshots?.Count ?? 0,
+            },
+            fileSystem,
+            directories,
+            missingCredentials = context.MissingCredentialExports,
+            logTail,
+            httpRetries = new
+            {
+                context.HttpRetriesEnabled,
+                context.HttpRetryAttempts,
+                baseDelaySeconds = Math.Round(context.HttpRetryBaseDelay.TotalSeconds, 3),
+                maxDelaySeconds = Math.Round(context.HttpRetryMaxDelay.TotalSeconds, 3),
+            }
+        };
+
+        var payloadJson = JsonSerializer.Serialize(payload, s_artifactPayloadOptions);
+
+        var options = new ChatCompletionsOptions
+        {
+            DeploymentName = settings.Model,
+            Temperature = 0.1f,
+        };
+
+        var systemPrompt = new StringBuilder();
+        if (!string.IsNullOrWhiteSpace(settings.SystemPrompt))
+        {
+            systemPrompt.AppendLine(settings.SystemPrompt.Trim());
+            systemPrompt.AppendLine();
+        }
+
+        systemPrompt.AppendLine("You verify WC Local Scraper export runs for completeness and health.");
+        systemPrompt.AppendLine("Cross-check entity counts against captured files and call out suspiciously small datasets.");
+        systemPrompt.AppendLine("Look for missing exports, mismatched totals, or directories that appear truncated.");
+        systemPrompt.AppendLine("Respond ONLY with compact JSON using this shape:");
+        systemPrompt.AppendLine("{");
+        systemPrompt.AppendLine("  \"summary\": \"status headline\",");
+        systemPrompt.AppendLine("  \"issues\": [{\"severity\": \"critical|warning|info\", \"title\": \"short label\", \"description\": \"details\", \"recommendation\": \"next step\"}],");
+        systemPrompt.AppendLine("  \"suggested_fixes\": [\"operator action\"],");
+        systemPrompt.AppendLine("  \"suggested_directives\": { ... optional WC Local Scraper directive payload ... }");
+        systemPrompt.AppendLine("}");
+        systemPrompt.AppendLine("If there are no concerns, return an empty issues array and a confident summary.");
+        systemPrompt.AppendLine("Only include suggested_directives when configuration changes would help.");
+        systemPrompt.AppendLine("Do not wrap the response in markdown fences.");
+
+        options.Messages.Add(new Azure.AI.OpenAI.ChatMessage(ChatRole.System, systemPrompt.ToString()));
+
+        var userPrompt = new StringBuilder();
+        userPrompt.AppendLine("Review the latest export metrics and directory inventory.");
+        userPrompt.AppendLine("Identify missing files, mismatched counts, or unusually small datasets that could block a migration.");
+        userPrompt.AppendLine("Suggest concrete follow-up actions for any problems you find.");
+        userPrompt.AppendLine();
+        userPrompt.AppendLine("Run context (JSON):");
+        userPrompt.AppendLine("```json");
+        userPrompt.AppendLine(payloadJson);
+        userPrompt.AppendLine("```");
+
+        options.Messages.Add(new Azure.AI.OpenAI.ChatMessage(ChatRole.User, userPrompt.ToString()));
+
+        var response = await client.GetChatCompletionsAsync(options, cancellationToken).ConfigureAwait(false);
+        var choice = response.Value.Choices.FirstOrDefault();
+        var content = choice?.Message?.Content;
+        return ParseExportVerificationPayload(content);
+    }
+
     public async Task<string?> SummarizeRunDeltaAsync(
         ChatSessionSettings settings,
         string runDeltaJson,
@@ -1172,6 +1339,92 @@ public sealed class ChatAssistantService
                 reminders,
                 requiresConfirmation,
                 normalizedRiskNote);
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    private static ExportVerificationResult? ParseExportVerificationPayload(string? response)
+    {
+        if (string.IsNullOrWhiteSpace(response))
+        {
+            return null;
+        }
+
+        var jsonText = ExtractJsonPayload(response);
+        if (string.IsNullOrWhiteSpace(jsonText))
+        {
+            return null;
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(jsonText);
+            var root = document.RootElement;
+
+            var summary = root.TryGetProperty("summary", out var summaryElement)
+                ? summaryElement.GetString()
+                : null;
+
+            var issues = new List<ExportVerificationIssue>();
+            if (root.TryGetProperty("issues", out var issuesElement) && issuesElement.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var issueElement in issuesElement.EnumerateArray())
+                {
+                    var severity = issueElement.TryGetProperty("severity", out var severityElement)
+                        ? severityElement.GetString()
+                        : null;
+                    var title = issueElement.TryGetProperty("title", out var titleElement)
+                        ? titleElement.GetString()
+                        : null;
+                    var description = issueElement.TryGetProperty("description", out var descriptionElement)
+                        ? descriptionElement.GetString()
+                        : null;
+                    var recommendation = issueElement.TryGetProperty("recommendation", out var recommendationElement)
+                        ? recommendationElement.GetString()
+                        : null;
+
+                    if (string.IsNullOrWhiteSpace(title) && string.IsNullOrWhiteSpace(description))
+                    {
+                        continue;
+                    }
+
+                    issues.Add(new ExportVerificationIssue(
+                        string.IsNullOrWhiteSpace(severity) ? "info" : severity.Trim(),
+                        string.IsNullOrWhiteSpace(title) ? "Issue" : title.Trim(),
+                        string.IsNullOrWhiteSpace(description) ? "No additional details provided." : description.Trim(),
+                        string.IsNullOrWhiteSpace(recommendation) ? null : recommendation.Trim()));
+                }
+            }
+
+            var fixes = ReadStringArray(root, "suggested_fixes");
+            var fixArray = fixes.Count > 0 ? fixes.ToArray() : Array.Empty<string>();
+
+            AssistantDirectiveBatch? directives = null;
+            if (root.TryGetProperty("suggested_directives", out var directivesElement)
+                && directivesElement.ValueKind == JsonValueKind.Object)
+            {
+                var directivePayload = ParseAssistantDirectivePayload(directivesElement.GetRawText());
+                if (directivePayload is not null)
+                {
+                    directives = directivePayload;
+                }
+            }
+
+            var summaryText = string.IsNullOrWhiteSpace(summary)
+                ? (issues.Count > 0 ? "Issues detected in exports." : "Exports appear healthy.")
+                : summary.Trim();
+
+            var issueArray = issues.Count > 0 ? issues.ToArray() : Array.Empty<ExportVerificationIssue>();
+
+            return new ExportVerificationResult(
+                DateTimeOffset.UtcNow,
+                summaryText,
+                issueArray,
+                fixArray,
+                directives);
         }
         catch (JsonException)
         {

@@ -64,6 +64,10 @@ internal sealed class ManualMigrationReportBuilder
 
         builder.AppendLine($"- **HTTP retries:** {FormatRetrySummary(context)}");
         builder.AppendLine();
+        if (AppendRunMetricsSection(builder, context))
+        {
+            builder.AppendLine();
+        }
         AppendPlatformVersionSection(builder, context);
         builder.AppendLine();
         AppendExtensionFootprintSection(builder, context);
@@ -131,6 +135,63 @@ internal sealed class ManualMigrationReportBuilder
         }
 
         return $"{bytes:N0} B";
+    }
+
+    private static bool AppendRunMetricsSection(StringBuilder builder, ManualMigrationReportContext context)
+    {
+        var counts = context.EntityCounts;
+        var fileStats = context.FileSystemStats;
+        var hasCounts = counts is not null;
+        var hasFileStats = fileStats is not null && fileStats.Directories.Count > 0;
+
+        if (!hasCounts && !hasFileStats)
+        {
+            return false;
+        }
+
+        builder.AppendLine("## Export metrics");
+        builder.AppendLine();
+
+        if (hasCounts)
+        {
+            builder.AppendLine("| Dataset | Count |");
+            builder.AppendLine("| --- | ---: |");
+            builder.AppendLine($"| Products | {counts!.ProductCount:N0} |");
+            builder.AppendLine($"| Orders | {counts.OrderCount:N0} |");
+            builder.AppendLine($"| Media items | {counts.MediaItemCount:N0} |");
+            builder.AppendLine($"| Design assets | {counts.DesignAssetCount:N0} |");
+            builder.AppendLine($"| Public slug detections | {counts.PublicSlugCount:N0} |");
+        }
+        else
+        {
+            builder.AppendLine("Entity counts were not captured for this run.");
+        }
+
+        if (hasFileStats)
+        {
+            if (hasCounts)
+            {
+                builder.AppendLine();
+            }
+
+            builder.AppendLine("### Output file system");
+            builder.AppendLine($"- **Total files:** {fileStats!.TotalFileCount:N0}");
+            builder.AppendLine($"- **Total size:** {FormatByteSize(fileStats.TotalSizeBytes)}");
+
+            if (fileStats.Directories.Count > 0)
+            {
+                builder.AppendLine();
+                builder.AppendLine("| Directory | Files | Size |");
+                builder.AppendLine("| --- | ---: | ---: |");
+
+                foreach (var directory in fileStats.Directories)
+                {
+                    builder.AppendLine($"| {MarkdownEscape(directory.RelativePath)} | {directory.FileCount:N0} | {FormatByteSize(directory.TotalSizeBytes)} |");
+                }
+            }
+        }
+
+        return true;
     }
 
     private static void AppendPlatformVersionSection(StringBuilder builder, ManualMigrationReportContext context)
@@ -1074,7 +1135,9 @@ internal sealed record ManualMigrationReportContext(
     TimeSpan HttpRetryMaxDelay,
     AiArtifactIntelligencePayload? ArtifactIntelligence,
     ManualMigrationAutomationScriptSet? AutomationScripts = null,
-    string? RunDeltaNarrativeRelativePath = null);
+    string? RunDeltaNarrativeRelativePath = null,
+    ManualMigrationEntityCounts? EntityCounts = null,
+    ManualMigrationFileSystemStats? FileSystemStats = null);
 
 internal sealed record ManualMigrationAutomationScriptSet(
     string? Summary,
@@ -1094,3 +1157,21 @@ internal sealed record ManualMigrationReportBuildResult(
     string ReportMarkdown,
     AiArtifactAnnotation? Annotation,
     string? AnnotationError);
+
+internal sealed record ManualMigrationEntityCounts(
+    int ProductCount,
+    int OrderCount,
+    int MediaItemCount,
+    int DesignAssetCount,
+    int PublicSlugCount);
+
+internal sealed record ManualMigrationFileSystemStats(
+    IReadOnlyList<ManualMigrationDirectorySnapshot> Directories,
+    int TotalFileCount,
+    long TotalSizeBytes);
+
+internal sealed record ManualMigrationDirectorySnapshot(
+    string AbsolutePath,
+    string RelativePath,
+    int FileCount,
+    long TotalSizeBytes);

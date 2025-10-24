@@ -31,6 +31,8 @@ public static class ManualMigrationRunSummaryFactory
             BuildThemeSummaries(context.Themes),
             BuildPublicExtensionSummaries(context.PublicExtensions),
             BuildDesignSummary(context),
+            BuildEntityCountSummary(context.EntityCounts),
+            BuildFileSystemSummary(context.FileSystemStats),
             new RetrySummary(
                 context.HttpRetriesEnabled,
                 context.HttpRetryAttempts,
@@ -160,6 +162,41 @@ public static class ManualMigrationRunSummaryFactory
             screenshots);
     }
 
+    private static EntityCountSummary? BuildEntityCountSummary(ManualMigrationEntityCounts? counts)
+    {
+        if (counts is null)
+        {
+            return null;
+        }
+
+        return new EntityCountSummary(
+            counts.ProductCount,
+            counts.OrderCount,
+            counts.MediaItemCount,
+            counts.DesignAssetCount,
+            counts.PublicSlugCount);
+    }
+
+    private static FileSystemSummary? BuildFileSystemSummary(ManualMigrationFileSystemStats? stats)
+    {
+        if (stats is null)
+        {
+            return null;
+        }
+
+        var directories = stats.Directories
+            .Select(directory => new DirectorySummary(
+                directory.RelativePath,
+                directory.FileCount,
+                directory.TotalSizeBytes))
+            .ToArray();
+
+        return new FileSystemSummary(
+            stats.TotalFileCount,
+            stats.TotalSizeBytes,
+            directories);
+    }
+
     private static IReadOnlyList<string> BuildLogHighlights(IReadOnlyList<string> logEntries)
     {
         if (logEntries is null || logEntries.Count == 0)
@@ -265,6 +302,8 @@ public static class ManualMigrationRunSummaryFactory
         IReadOnlyList<ThemeSummary> Themes,
         IReadOnlyList<PublicExtensionSummary> PublicExtensions,
         DesignSummary? Design,
+        EntityCountSummary? EntityCounts,
+        FileSystemSummary? FileSystem,
         RetrySummary Retry,
         IReadOnlyList<string> LogHighlights,
         IReadOnlyList<string> MissingCredentialExports);
@@ -295,6 +334,23 @@ public static class ManualMigrationRunSummaryFactory
         DesignSnapshotDetails? Snapshot,
         bool RequestedScreenshots,
         IReadOnlyList<ScreenshotSummary> Screenshots);
+
+    private sealed record EntityCountSummary(
+        int Products,
+        int Orders,
+        int MediaItems,
+        int DesignAssets,
+        int PublicSlugs);
+
+    private sealed record FileSystemSummary(
+        int TotalFiles,
+        long TotalBytes,
+        IReadOnlyList<DirectorySummary> Directories);
+
+    private sealed record DirectorySummary(
+        string Path,
+        int Files,
+        long Bytes);
 
     private sealed record DesignSnapshotDetails(
         string? HomeUrl,

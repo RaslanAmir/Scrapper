@@ -51,6 +51,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private const string RunSnapshotHistoryFolderName = ".run-history";
     private const string RunDeltaNarrativeFileName = "manual-migration-report.delta.md";
     private const string RunDeltaDataFileName = "manual-migration-report.delta.json";
+    private const string ExportVerificationFileName = "export-verification.ai.md";
     private static readonly HashSet<string> s_riskyAssistantOptions = new(StringComparer.OrdinalIgnoreCase)
     {
         nameof(ExportPublicExtensionFootprints),
@@ -3100,6 +3101,10 @@ public sealed class MainViewModel : INotifyPropertyChanged
             var aiAdditionalExtensionPages = new List<string>();
             int? aiPublicExtensionPageLimit = null;
             long? aiPublicExtensionByteLimit = null;
+            string? exportVerificationSummary = null;
+            string[] exportVerificationAlerts = Array.Empty<string>();
+            string? exportVerificationPath = null;
+            bool hasCriticalExportFindings = false;
 
             if (SelectedPlatform == PlatformMode.WooCommerce)
             {
@@ -4579,6 +4584,25 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 reportContext = reportContext with { RunDeltaNarrativeRelativePath = deltaRelativePath };
             }
 
+            var entityCounts = BuildEntityCounts(
+                prods,
+                orders,
+                mediaLibrary,
+                designSnapshot,
+                designScreenshots,
+                publicExtensionFootprints);
+            var fileSystemStats = CaptureOutputFileSystemStats(storeOutputFolder);
+
+            reportContext = reportContext with
+            {
+                EntityCounts = entityCounts,
+                FileSystemStats = fileSystemStats
+            };
+
+            runSnapshotJson = ManualMigrationRunSummaryFactory.CreateSnapshotJson(reportContext);
+            var refreshedSnapshotJson = runSnapshotJson;
+            ExecuteOnUiThread(() => LatestRunSnapshotJson = refreshedSnapshotJson);
+
             var reportBuilder = new ManualMigrationReportBuilder(_chatAssistantService);
             var reportResult = await reportBuilder.BuildAsync(reportContext, chatSession, CancellationToken.None);
             var report = reportResult.ReportMarkdown;
@@ -4599,6 +4623,82 @@ public sealed class MainViewModel : INotifyPropertyChanged
             {
                 Append($"Manual bundle archive: {manualBundleArchivePath}");
                 await TryAnnotateManualReportAsync(reportPath, manualBundleArchivePath);
+            }
+
+            if (chatSession is not null)
+            {
+                try
+                {
+                    var verificationResult = await _chatAssistantService.VerifyExportsAsync(
+                        chatSession,
+                        reportContext,
+                        reportContext.FileSystemStats?.Directories ?? Array.Empty<ManualMigrationDirectorySnapshot>(),
+                        CancellationToken.None);
+
+                    if (verificationResult is not null)
+                    {
+                        exportVerificationSummary = verificationResult.Summary;
+                        exportVerificationAlerts = BuildExportVerificationAlerts(verificationResult);
+                        hasCriticalExportFindings = verificationResult.Issues.Any(issue => issue.IsCritical);
+
+                        var verificationMarkdown = BuildExportVerificationMarkdown(verificationResult);
+                        exportVerificationPath = Path.Combine(storeOutputFolder, ExportVerificationFileName);
+                        await File.WriteAllTextAsync(exportVerificationPath, verificationMarkdown, Encoding.UTF8);
+                        Append($"AI export verification: {exportVerificationPath}");
+                        Append($"AI export verification summary: {verificationResult.Summary}");
+
+                        if (verificationResult.Issues.Count > 0)
+                        {
+                            if (hasCriticalExportFindings)
+                            {
+                                Append("⚠️ AI export verification flagged critical issues:");
+                            }
+                            else
+                            {
+                                Append("AI export verification found potential issues:");
+                            }
+
+                            foreach (var issue in verificationResult.Issues)
+                            {
+                                Append($"  - [{issue.Severity}] {issue.Title}: {issue.Description}");
+                                if (!string.IsNullOrWhiteSpace(issue.Recommendation))
+                                {
+                                    Append($"    Recommendation: {issue.Recommendation}");
+                                }
+                            }
+                        }
+                        else
+                        {
+                            Append("AI export verification completed with no issues detected.");
+                        }
+
+                        if (verificationResult.SuggestedFixes.Count > 0)
+                        {
+                            Append("Suggested fixes:");
+                            foreach (var fix in verificationResult.SuggestedFixes)
+                            {
+                                if (!string.IsNullOrWhiteSpace(fix))
+                                {
+                                    Append("  - " + fix);
+                                }
+                            }
+                        }
+
+                        if (verificationResult.SuggestedDirectives is not null)
+                        {
+                            Append("Processing export verification directives…");
+                            ProcessAssistantDirectives(verificationResult.SuggestedDirectives, confirmed: false);
+                        }
+                    }
+                    else
+                    {
+                        Append("AI export verification returned no structured findings.");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Append($"AI export verification failed: {ex.Message}");
+                }
             }
 
             string? aiBriefPath = null;
@@ -4663,6 +4763,10 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 ManualBundlePath = manualBundleArchivePath,
                 AiBriefPath = aiBriefPath,
                 RunDeltaPath = deltaNarrativePath,
+                ExportVerificationPath = exportVerificationPath,
+                ExportVerificationSummary = exportVerificationSummary,
+                ExportVerificationAlerts = exportVerificationAlerts,
+                HasCriticalExportFindings = hasCriticalExportFindings,
                 AskFollowUp = string.IsNullOrWhiteSpace(runSnapshotJson) ? null : LaunchRunFollowUpPanel
             };
 
@@ -6433,6 +6537,244 @@ public sealed class MainViewModel : INotifyPropertyChanged
         };
 
         return JsonSerializer.Serialize(diff, _runHistoryWriteOptions);
+    }
+
+    private static ManualMigrationEntityCounts BuildEntityCounts(
+        IList<StoreProduct> products,
+        IList<WooOrder> orders,
+        IList<WordPressMediaItem> mediaItems,
+        FrontEndDesignSnapshotResult? designSnapshot,
+        IReadOnlyList<DesignScreenshot> designScreenshots,
+        IReadOnlyList<PublicExtensionFootprint> publicExtensions)
+    {
+        var designAssetCount = 0;
+        if (designSnapshot is not null)
+        {
+            designAssetCount += designSnapshot.Stylesheets?.Count ?? 0;
+            designAssetCount += designSnapshot.FontFiles?.Count ?? 0;
+            designAssetCount += designSnapshot.IconFiles?.Count ?? 0;
+            designAssetCount += designSnapshot.ImageFiles?.Count ?? 0;
+        }
+
+        if (designScreenshots is not null)
+        {
+            designAssetCount += designScreenshots.Count;
+        }
+
+        return new ManualMigrationEntityCounts(
+            products?.Count ?? 0,
+            orders?.Count ?? 0,
+            mediaItems?.Count ?? 0,
+            designAssetCount,
+            publicExtensions?.Count ?? 0);
+    }
+
+    private ManualMigrationFileSystemStats CaptureOutputFileSystemStats(string rootFolder)
+    {
+        if (string.IsNullOrWhiteSpace(rootFolder) || !Directory.Exists(rootFolder))
+        {
+            return new ManualMigrationFileSystemStats(Array.Empty<ManualMigrationDirectorySnapshot>(), 0, 0);
+        }
+
+        var snapshots = new List<ManualMigrationDirectorySnapshot>();
+
+        try
+        {
+            var rootInfo = new DirectoryInfo(rootFolder);
+            var rootTotals = CaptureDirectory(rootInfo, rootFolder, snapshots);
+
+            snapshots.Sort((left, right) =>
+            {
+                var leftIsRoot = string.Equals(left.RelativePath, ".", StringComparison.Ordinal);
+                var rightIsRoot = string.Equals(right.RelativePath, ".", StringComparison.Ordinal);
+                if (leftIsRoot && !rightIsRoot)
+                {
+                    return -1;
+                }
+
+                if (!leftIsRoot && rightIsRoot)
+                {
+                    return 1;
+                }
+
+                return string.Compare(left.RelativePath, right.RelativePath, StringComparison.OrdinalIgnoreCase);
+            });
+
+            return new ManualMigrationFileSystemStats(snapshots, rootTotals.FileCount, rootTotals.TotalBytes);
+        }
+        catch
+        {
+            return new ManualMigrationFileSystemStats(Array.Empty<ManualMigrationDirectorySnapshot>(), 0, 0);
+        }
+
+        static (int FileCount, long TotalBytes) CaptureDirectory(
+            DirectoryInfo directory,
+            string root,
+            ICollection<ManualMigrationDirectorySnapshot> results)
+        {
+            var fileCount = 0;
+            long totalBytes = 0;
+
+            FileInfo[] files;
+            try
+            {
+                files = directory.GetFiles();
+            }
+            catch (IOException)
+            {
+                files = Array.Empty<FileInfo>();
+            }
+            catch (UnauthorizedAccessException)
+            {
+                files = Array.Empty<FileInfo>();
+            }
+
+            foreach (var file in files)
+            {
+                fileCount++;
+                try
+                {
+                    totalBytes += file.Length;
+                }
+                catch (IOException)
+                {
+                }
+                catch (UnauthorizedAccessException)
+                {
+                }
+            }
+
+            DirectoryInfo[] children;
+            try
+            {
+                children = directory.GetDirectories();
+            }
+            catch (IOException)
+            {
+                children = Array.Empty<DirectoryInfo>();
+            }
+            catch (UnauthorizedAccessException)
+            {
+                children = Array.Empty<DirectoryInfo>();
+            }
+
+            foreach (var child in children)
+            {
+                var totals = CaptureDirectory(child, root, results);
+                fileCount += totals.FileCount;
+                totalBytes += totals.TotalBytes;
+            }
+
+            var relative = Path.GetRelativePath(root, directory.FullName);
+            if (string.IsNullOrEmpty(relative) || relative == ".")
+            {
+                relative = ".";
+            }
+
+            var snapshot = new ManualMigrationDirectorySnapshot(directory.FullName, relative, fileCount, totalBytes);
+            results.Add(snapshot);
+            return (fileCount, totalBytes);
+        }
+    }
+
+    private static string[] BuildExportVerificationAlerts(ExportVerificationResult result)
+    {
+        if (result.Issues.Count == 0)
+        {
+            return Array.Empty<string>();
+        }
+
+        return result.Issues
+            .Select(issue =>
+            {
+                var severity = issue.IsCritical
+                    ? "Critical"
+                    : issue.IsWarning
+                        ? "Warning"
+                        : (string.IsNullOrWhiteSpace(issue.Severity) ? "Info" : issue.Severity.Trim());
+
+                var messageBuilder = new StringBuilder();
+                messageBuilder.Append(severity);
+                messageBuilder.Append(':');
+                messageBuilder.Append(' ');
+                messageBuilder.Append(issue.Title);
+
+                if (!string.IsNullOrWhiteSpace(issue.Description))
+                {
+                    messageBuilder.Append(" — ");
+                    messageBuilder.Append(issue.Description);
+                }
+
+                if (!string.IsNullOrWhiteSpace(issue.Recommendation))
+                {
+                    messageBuilder.Append(" (");
+                    messageBuilder.Append(issue.Recommendation);
+                    messageBuilder.Append(')');
+                }
+
+                return messageBuilder.ToString();
+            })
+            .ToArray();
+    }
+
+    private static string BuildExportVerificationMarkdown(ExportVerificationResult result)
+    {
+        var builder = new StringBuilder();
+        builder.AppendLine("# AI Export Verification");
+        builder.AppendLine();
+        builder.AppendLine($"- **Generated:** {result.GeneratedAt:O}");
+        builder.AppendLine($"- **Summary:** {result.Summary}");
+        builder.AppendLine();
+
+        if (result.Issues.Count > 0)
+        {
+            builder.AppendLine("## Findings");
+            builder.AppendLine();
+
+            foreach (var issue in result.Issues)
+            {
+                var severity = string.IsNullOrWhiteSpace(issue.Severity)
+                    ? "INFO"
+                    : issue.Severity.Trim().ToUpperInvariant();
+                builder.AppendLine($"- **{severity}** — {issue.Title}");
+                builder.AppendLine($"  - {issue.Description}");
+                if (!string.IsNullOrWhiteSpace(issue.Recommendation))
+                {
+                    builder.AppendLine($"  - Recommendation: {issue.Recommendation}");
+                }
+            }
+
+            builder.AppendLine();
+        }
+        else
+        {
+            builder.AppendLine("No issues detected.");
+            builder.AppendLine();
+        }
+
+        if (result.SuggestedFixes.Count > 0)
+        {
+            builder.AppendLine("## Suggested fixes");
+            builder.AppendLine();
+            foreach (var fix in result.SuggestedFixes)
+            {
+                if (!string.IsNullOrWhiteSpace(fix))
+                {
+                    builder.AppendLine($"- {fix}");
+                }
+            }
+            builder.AppendLine();
+        }
+
+        if (result.SuggestedDirectives is not null)
+        {
+            builder.AppendLine("## Suggested directives");
+            builder.AppendLine();
+            builder.AppendLine("The assistant proposed configuration changes. Use `/apply-directives` to review and apply them.");
+            builder.AppendLine();
+        }
+
+        return builder.ToString();
     }
 
     private static object? BuildDesignChanges(RunDesignState? current, RunDesignState? previous)
