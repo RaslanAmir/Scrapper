@@ -1337,6 +1337,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
             _chatMaxPromptTokens = value;
             OnPropertyChanged();
             SavePreferences();
+            UpdateChatConfigurationStatus();
         }
     }
 
@@ -1353,6 +1354,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
             _chatMaxTotalTokens = value;
             OnPropertyChanged();
             SavePreferences();
+            UpdateChatConfigurationStatus();
         }
     }
 
@@ -1369,6 +1371,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
             _chatMaxCostUsd = value;
             OnPropertyChanged();
             SavePreferences();
+            UpdateChatConfigurationStatus();
         }
     }
 
@@ -1837,7 +1840,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
             ChatMessages.Clear();
             ResetChatUsageTotals();
             _chatTranscriptStore.StartNewSession();
-            ChatStatusMessage = "Chat history cleared. Start a new conversation.";
+            ChatStatusMessage = AppendBudgetReminder("Chat history cleared. Start a new conversation.");
         }
         catch (Exception ex)
         {
@@ -2104,8 +2107,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
             if (!cancellationToken.IsCancellationRequested)
             {
                 ChatStatusMessage = SelectedChatMode == ChatInteractionMode.DatasetQuestion
-                    ? "Dataset Q&A ready for another question."
-                    : "Assistant ready for another prompt.";
+                    ? AppendBudgetReminder("Dataset Q&A ready for another question.")
+                    : AppendBudgetReminder("Assistant ready for another prompt.");
             }
 
             if (SelectedChatMode != ChatInteractionMode.DatasetQuestion && !cancellationToken.IsCancellationRequested)
@@ -2210,7 +2213,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                     }
 
                     var resumedAt = session.CreatedAtUtc.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture);
-                    ChatStatusMessage = $"Resumed chat transcript from {resumedAt} UTC.";
+                    ChatStatusMessage = AppendBudgetReminder($"Resumed chat transcript from {resumedAt} UTC.");
                 });
             }
             catch (Exception ex)
@@ -2233,7 +2236,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
             if (_pendingAssistantDirectives is null)
             {
                 Append("No pending assistant directives to apply.");
-                ChatStatusMessage = "Assistant ready for another prompt.";
+                ChatStatusMessage = AppendBudgetReminder("Assistant ready for another prompt.");
                 return true;
             }
 
@@ -2256,7 +2259,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 Append("Pending assistant directives discarded.");
             }
 
-            ChatStatusMessage = "Assistant ready for another prompt.";
+            ChatStatusMessage = AppendBudgetReminder("Assistant ready for another prompt.");
             return true;
         }
 
@@ -2341,7 +2344,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
             Append("No configuration changes were applied.");
         }
 
-        ChatStatusMessage = confirmed ? "Assistant directives applied." : "Assistant ready for another prompt.";
+        ChatStatusMessage = AppendBudgetReminder(confirmed ? "Assistant directives applied." : "Assistant ready for another prompt.");
     }
 
     private static bool ShouldDeferAssistantDirective(AssistantDirectiveBatch directives)
@@ -3246,6 +3249,43 @@ public sealed class MainViewModel : INotifyPropertyChanged
         => !string.IsNullOrWhiteSpace(TargetConsumerKey)
             && !string.IsNullOrWhiteSpace(TargetConsumerSecret);
 
+    private string AppendBudgetReminder(string message)
+    {
+        var reminder = BuildChatBudgetReminder();
+        return reminder is null ? message : $"{message} {reminder}";
+    }
+
+    private string? BuildChatBudgetReminder()
+    {
+        if (ChatMaxPromptTokens is null && ChatMaxTotalTokens is null && ChatMaxCostUsd is null)
+        {
+            return null;
+        }
+
+        var segments = new List<string>();
+        if (ChatMaxPromptTokens is { } promptTokens)
+        {
+            segments.Add($"prompt ≤ {promptTokens:N0} tokens");
+        }
+
+        if (ChatMaxTotalTokens is { } totalTokens)
+        {
+            segments.Add($"total ≤ {totalTokens:N0} tokens");
+        }
+
+        if (ChatMaxCostUsd is { } costLimit)
+        {
+            segments.Add($"cost ≤ ${costLimit:F2}");
+        }
+
+        if (segments.Count == 0)
+        {
+            return "Session budgets are active to prevent accidental overages.";
+        }
+
+        return $"Session budgets active ({string.Join(", ", segments)}). Requests stop automatically to prevent accidental overages.";
+    }
+
     private void UpdateChatConfigurationStatus()
     {
         if (IsChatBusy)
@@ -3261,13 +3301,16 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
         if (SelectedChatMode == ChatInteractionMode.DatasetQuestion)
         {
-            ChatStatusMessage = _artifactIndexingService.HasAnyIndexedArtifacts
+            var baseMessage = _artifactIndexingService.HasAnyIndexedArtifacts
                 ? "Dataset Q&A ready. Ask about the exported CSV or JSONL files."
                 : "Run a scrape with CSV or JSONL exports to enable dataset Q&A.";
+            ChatStatusMessage = _artifactIndexingService.HasAnyIndexedArtifacts
+                ? AppendBudgetReminder(baseMessage)
+                : baseMessage;
             return;
         }
 
-        ChatStatusMessage = "Assistant ready for your next prompt.";
+        ChatStatusMessage = AppendBudgetReminder("Assistant ready for your next prompt.");
     }
 
     private void LoadPreferences()
@@ -3312,9 +3355,9 @@ public sealed class MainViewModel : INotifyPropertyChanged
             {
                 _chatSystemPrompt = snapshot.ChatSystemPrompt!;
             }
-            _chatMaxPromptTokens = snapshot.ChatMaxPromptTokens;
-            _chatMaxTotalTokens = snapshot.ChatMaxTotalTokens;
-            _chatMaxCostUsd = snapshot.ChatMaxCostUsd;
+            _chatMaxPromptTokens = snapshot.ChatDefaultMaxPromptTokens ?? snapshot.LegacyChatMaxPromptTokens;
+            _chatMaxTotalTokens = snapshot.ChatDefaultMaxTotalTokens ?? snapshot.LegacyChatMaxTotalTokens;
+            _chatMaxCostUsd = snapshot.ChatDefaultMaxCostUsd ?? snapshot.LegacyChatMaxCostUsd;
             _chatPromptTokenUsdPerThousand = snapshot.ChatPromptTokenUsdPerThousand;
             _chatCompletionTokenUsdPerThousand = snapshot.ChatCompletionTokenUsdPerThousand;
             _enableHttpRetries = snapshot.EnableHttpRetries;
@@ -3640,9 +3683,12 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 ChatApiEndpoint = ChatApiEndpoint,
                 ChatModel = ChatModel,
                 ChatSystemPrompt = ChatSystemPrompt,
-                ChatMaxPromptTokens = ChatMaxPromptTokens,
-                ChatMaxTotalTokens = ChatMaxTotalTokens,
-                ChatMaxCostUsd = ChatMaxCostUsd,
+                ChatDefaultMaxPromptTokens = ChatMaxPromptTokens,
+                LegacyChatMaxPromptTokens = ChatMaxPromptTokens,
+                ChatDefaultMaxTotalTokens = ChatMaxTotalTokens,
+                LegacyChatMaxTotalTokens = ChatMaxTotalTokens,
+                ChatDefaultMaxCostUsd = ChatMaxCostUsd,
+                LegacyChatMaxCostUsd = ChatMaxCostUsd,
                 ChatPromptTokenUsdPerThousand = ChatPromptTokenUsdPerThousand,
                 ChatCompletionTokenUsdPerThousand = ChatCompletionTokenUsdPerThousand,
                 EnableHttpRetries = EnableHttpRetries,
@@ -6595,7 +6641,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
             }
 
             ChatInput = string.Empty;
-            ChatStatusMessage = "Assistant loaded with the latest run summary. Ask a follow-up question.";
+            ChatStatusMessage = AppendBudgetReminder("Assistant loaded with the latest run summary. Ask a follow-up question.");
         });
     }
 
@@ -8451,9 +8497,23 @@ public sealed class MainViewModel : INotifyPropertyChanged
         public string? ChatApiEndpoint { get; set; }
         public string? ChatModel { get; set; }
         public string? ChatSystemPrompt { get; set; }
-        public int? ChatMaxPromptTokens { get; set; }
-        public int? ChatMaxTotalTokens { get; set; }
-        public decimal? ChatMaxCostUsd { get; set; }
+        [JsonPropertyName("ChatDefaultMaxPromptTokens")]
+        public int? ChatDefaultMaxPromptTokens { get; set; }
+
+        [JsonPropertyName("ChatMaxPromptTokens")]
+        public int? LegacyChatMaxPromptTokens { get; set; }
+
+        [JsonPropertyName("ChatDefaultMaxTotalTokens")]
+        public int? ChatDefaultMaxTotalTokens { get; set; }
+
+        [JsonPropertyName("ChatMaxTotalTokens")]
+        public int? LegacyChatMaxTotalTokens { get; set; }
+
+        [JsonPropertyName("ChatDefaultMaxCostUsd")]
+        public decimal? ChatDefaultMaxCostUsd { get; set; }
+
+        [JsonPropertyName("ChatMaxCostUsd")]
+        public decimal? LegacyChatMaxCostUsd { get; set; }
         public decimal? ChatPromptTokenUsdPerThousand { get; set; }
         public decimal? ChatCompletionTokenUsdPerThousand { get; set; }
         public bool EnableHttpRetries { get; set; }
