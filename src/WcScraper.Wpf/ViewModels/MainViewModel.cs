@@ -40,6 +40,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private readonly HeadlessBrowserScreenshotService _designScreenshotService;
     private readonly WordPressDirectoryClient _wpDirectoryClient;
     private readonly ChatAssistantService _chatAssistantService;
+    private readonly ChatTranscriptStore _chatTranscriptStore;
     private readonly IArtifactIndexingService _artifactIndexingService;
     private readonly string _settingsDirectory;
     private readonly string _preferencesPath;
@@ -151,6 +152,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         new ChatModeOption(ChatInteractionMode.DatasetQuestion, "Ask about exported data"),
     };
     private ChatInteractionMode _selectedChatMode = ChatInteractionMode.GeneralAssistant;
+    private int _chatTranscriptLoadState;
 
     public MainViewModel(IDialogService dialogs)
         : this(dialogs, new WooScraper(), new ShopifyScraper(), new HttpClient())
@@ -200,6 +202,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         _settingsDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "WcScraper");
         _preferencesPath = Path.Combine(_settingsDirectory, "preferences.json");
         _chatKeyPath = Path.Combine(_settingsDirectory, "chat.key");
+        _chatTranscriptStore = new ChatTranscriptStore(_settingsDirectory);
         var dispatcher = Application.Current?.Dispatcher ?? Dispatcher.CurrentDispatcher;
         _runPlanner = new RunPlanner(ExecuteRunPlanAsync, dispatcher);
         _runPlans = _runPlanner.Plans;
@@ -219,11 +222,14 @@ public sealed class MainViewModel : INotifyPropertyChanged
         LaunchWizardCommand = new RelayCommand(OnLaunchWizard, CanLaunchWizard);
         SendChatCommand = new RelayCommand(async () => await OnSendChatAsync(), CanSendChat);
         CancelChatCommand = new RelayCommand(OnCancelChat, CanCancelChat);
+        SaveChatTranscriptCommand = new RelayCommand(async () => await OnSaveChatTranscriptAsync(), CanSaveChatTranscript);
+        ClearChatHistoryCommand = new RelayCommand(async () => await OnClearChatHistoryAsync(), CanClearChatHistory);
         UseAiRecommendationCommand = new RelayCommand<string?>(OnUseAiRecommendation);
         CopyAutomationScriptCommand = new RelayCommand<AutomationScriptDisplay>(OnCopyAutomationScript);
         ApproveRunPlanCommand = new RelayCommand<RunPlan>(OnApproveRunPlan, CanApproveRunPlan);
         DismissRunPlanCommand = new RelayCommand<RunPlan>(OnDismissRunPlan, CanDismissRunPlan);
         ChatMessages = new ObservableCollection<ChatMessage>();
+        ChatMessages.CollectionChanged += OnChatMessagesCollectionChanged;
         LatestRunAiRecommendations.CollectionChanged += (_, __) => OnPropertyChanged(nameof(HasAiRecommendations));
         _latestAutomationScripts.CollectionChanged += (_, __) => OnPropertyChanged(nameof(HasAutomationScripts));
         _latestAutomationScriptWarnings.CollectionChanged += (_, __) => OnPropertyChanged(nameof(HasAutomationScriptWarnings));
@@ -232,6 +238,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         LoadChatApiKey();
         UpdateChatConfigurationStatus();
         _artifactIndexingService.IndexChanged += OnArtifactIndexChanged;
+        _ = EnsureChatTranscriptLoadedAsync();
 
         _assistantToggleBindings = new Dictionary<string, (Func<bool>, Action<bool>)>(StringComparer.OrdinalIgnoreCase)
         {
@@ -1031,8 +1038,12 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
     public ObservableCollection<ChatMessage> ChatMessages { get; }
 
+    public bool HasChatMessages => ChatMessages.Count > 0;
+
     public RelayCommand SendChatCommand { get; }
     public RelayCommand CancelChatCommand { get; }
+    public RelayCommand SaveChatTranscriptCommand { get; }
+    public RelayCommand ClearChatHistoryCommand { get; }
 
     public string ChatApiEndpoint
     {
@@ -1400,6 +1411,10 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
             _isAssistantPanelExpanded = value;
             OnPropertyChanged();
+            if (value)
+            {
+                _ = EnsureChatTranscriptLoadedAsync();
+            }
         }
     }
 
@@ -1574,6 +1589,12 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private bool CanCancelChat()
         => IsChatBusy;
 
+    private bool CanSaveChatTranscript()
+        => HasChatMessages;
+
+    private bool CanClearChatHistory()
+        => HasChatMessages;
+
     private void OnCancelChat()
     {
         var cts = _chatCts;
@@ -1591,6 +1612,52 @@ public sealed class MainViewModel : INotifyPropertyChanged
         catch (ObjectDisposedException)
         {
         }
+    }
+
+    private async Task OnSaveChatTranscriptAsync()
+    {
+        if (!HasChatMessages)
+        {
+            return;
+        }
+
+        try
+        {
+            var defaultFileName = Path.GetFileName(_chatTranscriptStore.CurrentMarkdownPath);
+            var filter = "Markdown (*.md)|*.md|JSON Lines (*.jsonl)|*.jsonl|All files (*.*)|*.*";
+            var target = _dialogs.SaveFile(filter, defaultFileName, _chatTranscriptStore.TranscriptDirectory);
+            if (string.IsNullOrWhiteSpace(target))
+            {
+                return;
+            }
+
+            var format = string.Equals(Path.GetExtension(target), ".jsonl", StringComparison.OrdinalIgnoreCase)
+                ? ChatTranscriptFormat.Jsonl
+                : ChatTranscriptFormat.Markdown;
+
+            await _chatTranscriptStore.SaveTranscriptAsync(target, format).ConfigureAwait(false);
+            Append($"Saved chat transcript to {target}");
+        }
+        catch (Exception ex)
+        {
+            Append($"Unable to save chat transcript: {ex.Message}");
+        }
+    }
+
+    private Task OnClearChatHistoryAsync()
+    {
+        try
+        {
+            ChatMessages.Clear();
+            _chatTranscriptStore.StartNewSession();
+            ChatStatusMessage = "Chat history cleared. Start a new conversation.";
+        }
+        catch (Exception ex)
+        {
+            Append($"Unable to reset chat transcript: {ex.Message}");
+        }
+
+        return Task.CompletedTask;
     }
 
     private bool CanExplainLogs()
@@ -1653,6 +1720,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         var userMessage = new ChatMessage(ChatMessageRole.User, trimmed);
         ChatMessages.Add(userMessage);
         ChatInput = string.Empty;
+        await TryAppendTranscriptAsync(userMessage);
 
         var history = ChatMessages.ToList();
         var assistantMessage = new ChatMessage(ChatMessageRole.Assistant, string.Empty);
@@ -1787,6 +1855,61 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 ChatStatusMessage = "Assistant response cancelled.";
             }
         }
+
+        await TryAppendTranscriptAsync(assistantMessage);
+    }
+
+    private async Task TryAppendTranscriptAsync(ChatMessage message)
+    {
+        try
+        {
+            await _chatTranscriptStore.AppendAsync(message).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            Append($"Unable to write chat transcript: {ex.Message}");
+        }
+    }
+
+    private Task EnsureChatTranscriptLoadedAsync()
+    {
+        if (Interlocked.CompareExchange(ref _chatTranscriptLoadState, 1, 0) != 0)
+        {
+            return Task.CompletedTask;
+        }
+
+        return Task.Run(async () =>
+        {
+            try
+            {
+                var session = await _chatTranscriptStore.LoadMostRecentTranscriptAsync().ConfigureAwait(false);
+                if (session is null || session.Messages.Count == 0)
+                {
+                    return;
+                }
+
+                ExecuteOnUiThread(() =>
+                {
+                    if (ChatMessages.Count > 0)
+                    {
+                        return;
+                    }
+
+                    ChatMessages.Clear();
+                    foreach (var message in session.Messages)
+                    {
+                        ChatMessages.Add(message);
+                    }
+
+                    var resumedAt = session.CreatedAtUtc.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture);
+                    ChatStatusMessage = $"Resumed chat transcript from {resumedAt} UTC.";
+                });
+            }
+            catch (Exception ex)
+            {
+                Append($"Unable to load chat transcript: {ex.Message}");
+            }
+        });
     }
 
     private bool TryHandleAssistantDirectiveCommand(string? input)
@@ -2916,6 +3039,13 @@ public sealed class MainViewModel : INotifyPropertyChanged
         }
 
         ScheduleLogSummaryDebounced();
+    }
+
+    private void OnChatMessagesCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
+    {
+        SaveChatTranscriptCommand.RaiseCanExecuteChanged();
+        ClearChatHistoryCommand.RaiseCanExecuteChanged();
+        OnPropertyChanged(nameof(HasChatMessages));
     }
 
     private void OnArtifactIndexChanged(object? sender, EventArgs e)
@@ -4762,7 +4892,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 retrySettings.BaseDelay,
                 retrySettings.MaxDelay,
                 artifactPayload,
-                planSnapshots);
+                planSnapshots,
+                ChatTranscriptPath: _chatTranscriptStore.CurrentJsonlPath);
 
             var runSnapshotJson = ManualMigrationRunSummaryFactory.CreateSnapshotJson(reportContext);
             ExecuteOnUiThread(() =>
@@ -6066,6 +6197,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         {
             IsAssistantPanelExpanded = true;
             ChatMessages.Clear();
+            _chatTranscriptStore.StartNewSession();
 
             var contextBuilder = new StringBuilder();
             if (!string.IsNullOrWhiteSpace(goals))
@@ -6088,7 +6220,9 @@ public sealed class MainViewModel : INotifyPropertyChanged
             var contextText = contextBuilder.ToString().Trim();
             if (contextText.Length > 0)
             {
-                ChatMessages.Add(new ChatMessage(ChatMessageRole.System, contextText));
+                var systemMessage = new ChatMessage(ChatMessageRole.System, contextText);
+                ChatMessages.Add(systemMessage);
+                _ = TryAppendTranscriptAsync(systemMessage);
             }
 
             if (!string.IsNullOrWhiteSpace(narrative))
@@ -6102,7 +6236,9 @@ public sealed class MainViewModel : INotifyPropertyChanged
                     messageBuilder.Append(aiBriefPath);
                 }
 
-                ChatMessages.Add(new ChatMessage(ChatMessageRole.Assistant, messageBuilder.ToString()));
+                var assistantSummary = new ChatMessage(ChatMessageRole.Assistant, messageBuilder.ToString());
+                ChatMessages.Add(assistantSummary);
+                _ = TryAppendTranscriptAsync(assistantSummary);
             }
 
             ChatInput = string.Empty;

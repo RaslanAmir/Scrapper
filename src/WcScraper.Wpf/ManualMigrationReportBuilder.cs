@@ -56,6 +56,12 @@ internal sealed class ManualMigrationReportBuilder
             builder.AppendLine($"- **Output Folder:** `{context.OutputFolder}`");
         }
 
+        if (!string.IsNullOrWhiteSpace(context.ChatTranscriptPath))
+        {
+            var transcriptPath = MarkdownEscape(context.ChatTranscriptPath);
+            builder.AppendLine($"- **Chat transcript:** `{transcriptPath}` (Markdown copy stored alongside)");
+        }
+
         if (!string.IsNullOrWhiteSpace(context.RunDeltaNarrativeRelativePath))
         {
             var deltaPath = MarkdownEscape(context.RunDeltaNarrativeRelativePath);
@@ -1214,7 +1220,8 @@ internal sealed record ManualMigrationReportContext(
     string? RunDeltaNarrativeRelativePath = null,
     ManualMigrationEntityCounts? EntityCounts = null,
     ManualMigrationFileSystemStats? FileSystemStats = null,
-    IReadOnlyList<RunPlanSnapshot>? RunPlans = null);
+    IReadOnlyList<RunPlanSnapshot>? RunPlans = null,
+    string? ChatTranscriptPath = null);
 
 internal sealed record ManualMigrationAutomationScriptSet(
     string? Summary,
