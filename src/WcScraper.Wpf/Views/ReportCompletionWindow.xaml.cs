@@ -29,6 +29,9 @@ public partial class ReportCompletionWindow : Window
     private void OnOpenRunDelta(object? sender, RoutedEventArgs e)
         => TryOpenPath(_info.RunDeltaPath);
 
+    private void OnOpenExportVerification(object? sender, RoutedEventArgs e)
+        => TryOpenPath(_info.ExportVerificationPath);
+
     private void OnAskFollowUp(object sender, RoutedEventArgs e)
     {
         try

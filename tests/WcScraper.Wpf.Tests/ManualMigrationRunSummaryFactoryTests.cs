@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Text.Json;
 using WcScraper.Core;
 using WcScraper.Wpf.Reporting;
@@ -80,6 +81,18 @@ public class ManualMigrationRunSummaryFactoryTests
             httpRetryBaseDelay: TimeSpan.FromSeconds(1),
             httpRetryMaxDelay: TimeSpan.FromSeconds(10));
 
+        var directorySnapshots = new[]
+        {
+            new ManualMigrationDirectorySnapshot("output", ".", 4, 4096),
+            new ManualMigrationDirectorySnapshot(Path.Combine("output", "media"), "media", 2, 2048)
+        };
+
+        context = context with
+        {
+            EntityCounts = new ManualMigrationEntityCounts(5, 2, 3, 4, 1),
+            FileSystemStats = new ManualMigrationFileSystemStats(directorySnapshots, 4, 4096)
+        };
+
         var json = ManualMigrationRunSummaryFactory.CreateSnapshotJson(context);
         using var document = JsonDocument.Parse(json);
         var root = document.RootElement;
@@ -101,5 +114,13 @@ public class ManualMigrationRunSummaryFactoryTests
         Assert.Equal(3, retryElement.GetProperty("attempts").GetInt32());
 
         Assert.Equal(2, root.GetProperty("logHighlights").GetArrayLength());
+
+        var countsElement = root.GetProperty("entityCounts");
+        Assert.Equal(5, countsElement.GetProperty("products").GetInt32());
+        Assert.Equal(4, countsElement.GetProperty("designAssets").GetInt32());
+
+        var fsElement = root.GetProperty("fileSystem");
+        Assert.Equal(4, fsElement.GetProperty("totalFiles").GetInt32());
+        Assert.Equal(2, fsElement.GetProperty("directories").GetArrayLength());
     }
 }
