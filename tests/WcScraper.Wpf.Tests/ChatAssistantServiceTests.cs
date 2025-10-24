@@ -117,6 +117,10 @@ public static class ChatAssistantServiceTests
 
         var captured = Assert.Single(snapshots);
         Assert.Equal(usage, captured);
+        Assert.Equal(10, settings.ConsumedPromptTokens);
+        Assert.Equal(5, settings.ConsumedCompletionTokens);
+        Assert.Equal(15, settings.ConsumedTotalTokens);
+        Assert.Equal(0m, settings.ConsumedCostUsd);
     }
 
     [Fact]
@@ -136,5 +140,28 @@ public static class ChatAssistantServiceTests
         Assert.Equal(2, snapshots.Count);
         Assert.Contains(new ChatUsageSnapshot(5, 3, 8), snapshots);
         Assert.Contains(new ChatUsageSnapshot(7, 2, 9), snapshots);
+        Assert.Equal(12, settings.ConsumedPromptTokens);
+        Assert.Equal(5, settings.ConsumedCompletionTokens);
+        Assert.Equal(17, settings.ConsumedTotalTokens);
+        Assert.Equal(0m, settings.ConsumedCostUsd);
+    }
+
+    [Fact]
+    public static void ReportUsage_WithPricing_TracksCost()
+    {
+        var settings = new ChatSessionSettings(
+            "https://example.invalid",
+            "key",
+            "model",
+            systemPrompt: null,
+            PromptTokenCostPerThousandUsd: 0.5m,
+            CompletionTokenCostPerThousandUsd: 1.5m);
+
+        ChatAssistantService.ReportUsage(settings, new ChatUsageSnapshot(2_000, 1_000, 3_000));
+
+        Assert.Equal(2_000, settings.ConsumedPromptTokens);
+        Assert.Equal(1_000, settings.ConsumedCompletionTokens);
+        Assert.Equal(3_000, settings.ConsumedTotalTokens);
+        Assert.Equal(2.5m, settings.ConsumedCostUsd);
     }
 }
