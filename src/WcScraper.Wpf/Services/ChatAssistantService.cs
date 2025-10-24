@@ -1273,7 +1273,7 @@ public sealed class ChatAssistantService
                     }
 
                     string? justification = null;
-                    var requiresConfirmation = false;
+                    var actionRequiresConfirmation = false;
                     RunPlan? runPlan = null;
                     if (actionElement.ValueKind == JsonValueKind.Object)
                     {
@@ -1282,7 +1282,7 @@ public sealed class ChatAssistantService
                             justification = justificationElement.GetString();
                         }
 
-                        requiresConfirmation = actionElement.TryGetProperty("requires_confirmation", out var actionConfirmationElement)
+                        actionRequiresConfirmation = actionElement.TryGetProperty("requires_confirmation", out var actionConfirmationElement)
                             && actionConfirmationElement.ValueKind == JsonValueKind.True;
 
                         runPlan = TryParseRunPlan(actionElement, summary);
@@ -1297,7 +1297,7 @@ public sealed class ChatAssistantService
                     actions.Add(new AssistantActionDirective(
                         normalizedActionName,
                         string.IsNullOrWhiteSpace(justification) ? null : justification.Trim(),
-                        requiresConfirmation,
+                        actionRequiresConfirmation,
                         runPlan));
                 }
             }
