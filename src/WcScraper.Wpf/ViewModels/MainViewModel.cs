@@ -217,7 +217,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         var dispatcher = Application.Current?.Dispatcher ?? Dispatcher.CurrentDispatcher;
         _runPlanner = new RunPlanner(ExecuteRunPlanAsync, dispatcher);
         _runPlans = _runPlanner.Plans;
-        _runPlans.CollectionChanged += OnRunPlansChanged;
+        ((INotifyCollectionChanged)_runPlans).CollectionChanged += OnRunPlansChanged;
         _runPlanner.PlanQueued += OnRunPlanQueued;
         _runPlanner.PlanExecutionCompleted += OnRunPlanExecutionCompleted;
         BrowseCommand = new RelayCommand(OnBrowse);
