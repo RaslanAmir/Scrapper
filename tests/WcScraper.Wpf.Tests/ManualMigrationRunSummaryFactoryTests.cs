@@ -58,7 +58,7 @@ public class ManualMigrationRunSummaryFactoryTests
             plugins,
             themes,
             publicExtensions,
-            publicExtensionDetection: null,
+            PublicExtensionDetection: null,
             wordPressVersion: "6.4",
             wooCommerceVersion: "8.4",
             pluginBundles: Array.Empty<ExtensionArtifact>(),
