@@ -197,15 +197,10 @@ public sealed class ChatAssistantService
                     continue;
                 }
 
-                if (update.ContentUpdate is { Count: > 0 } contentParts)
+                var contentFragment = update.ContentUpdate;
+                if (!string.IsNullOrEmpty(contentFragment))
                 {
-                    foreach (var part in contentParts)
-                    {
-                        if (part is ChatMessageTextContentItem textContent && !string.IsNullOrEmpty(textContent.Text))
-                        {
-                            yield return textContent.Text;
-                        }
-                    }
+                    yield return contentFragment;
                 }
 
                 if (update.FinishReason is { } reason)
@@ -369,15 +364,10 @@ public sealed class ChatAssistantService
 
         await foreach (var update in streaming.WithCancellation(cancellationToken))
         {
-            if (update.ContentUpdate is { Count: > 0 } contentParts)
+            var contentFragment = update.ContentUpdate;
+            if (!string.IsNullOrEmpty(contentFragment))
             {
-                foreach (var part in contentParts)
-                {
-                    if (part is ChatMessageTextContentItem textContent && !string.IsNullOrEmpty(textContent.Text))
-                    {
-                        yield return textContent.Text;
-                    }
-                }
+                yield return contentFragment;
             }
         }
 
