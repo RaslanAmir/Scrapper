@@ -7013,7 +7013,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
             extension = GuessScriptExtension(script.Language);
         }
 
-        if (!extension.StartsWith('.', StringComparison.Ordinal))
+        if (!extension.StartsWith(".", StringComparison.Ordinal))
         {
             extension = "." + extension.Trim();
         }
