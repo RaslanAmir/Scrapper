@@ -122,6 +122,16 @@ public sealed class ChatAssistantService
         {
             cancellationToken.ThrowIfCancellationRequested();
 
+            if (!HasRemainingBudget(settings, out var budgetWarning))
+            {
+                if (!string.IsNullOrEmpty(budgetWarning))
+                {
+                    settings.DiagnosticLogger?.Invoke(budgetWarning);
+                }
+
+                yield break;
+            }
+
             var options = new ChatCompletionsOptions
             {
                 DeploymentName = settings.Model,
@@ -336,6 +346,16 @@ public sealed class ChatAssistantService
             }
 
             options.Messages.Add(new Azure.AI.OpenAI.ChatMessage(ToChatRole(message.Role), message.Content));
+        }
+
+        if (!HasRemainingBudget(settings, out var datasetBudgetWarning))
+        {
+            if (!string.IsNullOrEmpty(datasetBudgetWarning))
+            {
+                settings.DiagnosticLogger?.Invoke(datasetBudgetWarning);
+            }
+
+            yield break;
         }
 
         var response = await client.GetChatCompletionsStreamingAsync(options, cancellationToken).ConfigureAwait(false);
@@ -2416,12 +2436,68 @@ public sealed class ChatAssistantService
 
     internal static void ReportUsage(ChatSessionSettings settings, ChatUsageSnapshot? usage)
     {
-        if (settings?.UsageReported is null || usage is null)
+        if (settings is null || usage is null)
         {
             return;
         }
 
-        settings.UsageReported(usage);
+        var cost = CalculateUsageCost(settings, usage);
+        settings.ApplyUsageTotals(usage, cost);
+
+        settings.UsageReported?.Invoke(usage);
+    }
+
+    private static decimal CalculateUsageCost(ChatSessionSettings settings, ChatUsageSnapshot usage)
+    {
+        decimal cost = 0m;
+
+        if (settings.PromptTokenCostPerThousandUsd is { } promptRate && promptRate > 0m && usage.PromptTokens > 0)
+        {
+            cost += (usage.PromptTokens / 1000m) * promptRate;
+        }
+
+        if (settings.CompletionTokenCostPerThousandUsd is { } completionRate && completionRate > 0m && usage.CompletionTokens > 0)
+        {
+            cost += (usage.CompletionTokens / 1000m) * completionRate;
+        }
+
+        return cost;
+    }
+
+    private static bool HasRemainingBudget(ChatSessionSettings settings, out string? warningMessage)
+    {
+        if (settings.MaxPromptTokens is { } maxPrompt && settings.ConsumedPromptTokens >= maxPrompt)
+        {
+            warningMessage = string.Format(
+                CultureInfo.InvariantCulture,
+                "Assistant session prompt-token budget reached (consumed {0:N0} of {1:N0}). Aborting request before contacting the API.",
+                settings.ConsumedPromptTokens,
+                maxPrompt);
+            return false;
+        }
+
+        if (settings.MaxTotalTokens is { } maxTotal && settings.ConsumedTotalTokens >= maxTotal)
+        {
+            warningMessage = string.Format(
+                CultureInfo.InvariantCulture,
+                "Assistant session total-token budget reached (consumed {0:N0} of {1:N0}). Aborting request before contacting the API.",
+                settings.ConsumedTotalTokens,
+                maxTotal);
+            return false;
+        }
+
+        if (settings.MaxCostUsd is { } maxCost && settings.ConsumedCostUsd >= maxCost)
+        {
+            warningMessage = string.Format(
+                CultureInfo.InvariantCulture,
+                "Assistant session cost budget reached (spent ${0:F2} of ${1:F2}). Aborting request before contacting the API.",
+                settings.ConsumedCostUsd,
+                maxCost);
+            return false;
+        }
+
+        warningMessage = null;
+        return true;
     }
 
     private static ChatUsageSnapshot? CreateUsageSnapshot(CompletionsUsage? usage)
@@ -2473,8 +2549,45 @@ public sealed record ChatSessionSettings(
     string Model,
     string? SystemPrompt,
     int? ToolCallIterationLimit = null,
+    int? MaxPromptTokens = null,
+    int? MaxTotalTokens = null,
+    decimal? MaxCostUsd = null,
+    decimal? PromptTokenCostPerThousandUsd = null,
+    decimal? CompletionTokenCostPerThousandUsd = null,
     Action<string>? DiagnosticLogger = null,
-    Action<ChatUsageSnapshot>? UsageReported = null);
+    Action<ChatUsageSnapshot>? UsageReported = null)
+{
+    public long ConsumedPromptTokens { get; private set; }
+
+    public long ConsumedCompletionTokens { get; private set; }
+
+    public decimal ConsumedCostUsd { get; private set; }
+
+    public long ConsumedTotalTokens => ConsumedPromptTokens + ConsumedCompletionTokens;
+
+    internal void ApplyUsageTotals(ChatUsageSnapshot usage, decimal incrementalCostUsd)
+    {
+        if (usage is null)
+        {
+            return;
+        }
+
+        if (usage.PromptTokens > 0)
+        {
+            ConsumedPromptTokens += usage.PromptTokens;
+        }
+
+        if (usage.CompletionTokens > 0)
+        {
+            ConsumedCompletionTokens += usage.CompletionTokens;
+        }
+
+        if (incrementalCostUsd > 0)
+        {
+            ConsumedCostUsd += incrementalCostUsd;
+        }
+    }
+}
 
 public sealed record AssistantDirectiveBatch(
     string Summary,

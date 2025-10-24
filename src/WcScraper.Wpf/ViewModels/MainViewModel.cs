@@ -121,6 +121,11 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private int _chatPromptTokenTotal;
     private int _chatCompletionTokenTotal;
     private int _chatTotalTokenTotal;
+    private int? _chatMaxPromptTokens;
+    private int? _chatMaxTotalTokens;
+    private decimal? _chatMaxCostUsd;
+    private decimal? _chatPromptTokenUsdPerThousand;
+    private decimal? _chatCompletionTokenUsdPerThousand;
     private readonly TimeSpan _logSummaryDebounce = TimeSpan.FromSeconds(6);
     private readonly object _logSummarySync = new();
     private Timer? _logSummaryTimer;
@@ -1266,6 +1271,86 @@ public sealed class MainViewModel : INotifyPropertyChanged
         }
     }
 
+    public int? ChatMaxPromptTokens
+    {
+        get => _chatMaxPromptTokens;
+        set
+        {
+            if (_chatMaxPromptTokens == value)
+            {
+                return;
+            }
+
+            _chatMaxPromptTokens = value;
+            OnPropertyChanged();
+            SavePreferences();
+        }
+    }
+
+    public int? ChatMaxTotalTokens
+    {
+        get => _chatMaxTotalTokens;
+        set
+        {
+            if (_chatMaxTotalTokens == value)
+            {
+                return;
+            }
+
+            _chatMaxTotalTokens = value;
+            OnPropertyChanged();
+            SavePreferences();
+        }
+    }
+
+    public decimal? ChatMaxCostUsd
+    {
+        get => _chatMaxCostUsd;
+        set
+        {
+            if (_chatMaxCostUsd == value)
+            {
+                return;
+            }
+
+            _chatMaxCostUsd = value;
+            OnPropertyChanged();
+            SavePreferences();
+        }
+    }
+
+    public decimal? ChatPromptTokenUsdPerThousand
+    {
+        get => _chatPromptTokenUsdPerThousand;
+        set
+        {
+            if (_chatPromptTokenUsdPerThousand == value)
+            {
+                return;
+            }
+
+            _chatPromptTokenUsdPerThousand = value;
+            OnPropertyChanged();
+            SavePreferences();
+        }
+    }
+
+    public decimal? ChatCompletionTokenUsdPerThousand
+    {
+        get => _chatCompletionTokenUsdPerThousand;
+        set
+        {
+            if (_chatCompletionTokenUsdPerThousand == value)
+            {
+                return;
+            }
+
+            _chatCompletionTokenUsdPerThousand = value;
+            OnPropertyChanged();
+            SavePreferences();
+        }
+    }
+
     // Selectable terms for filters
     public ObservableCollection<SelectableTerm> CategoryChoices { get; } = new();
     public ObservableCollection<SelectableTerm> TagChoices { get; } = new();
@@ -1814,6 +1899,11 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 ChatApiKey,
                 ChatModel,
                 ChatSystemPrompt,
+                MaxPromptTokens: ChatMaxPromptTokens,
+                MaxTotalTokens: ChatMaxTotalTokens,
+                MaxCostUsd: ChatMaxCostUsd,
+                PromptTokenCostPerThousandUsd: ChatPromptTokenUsdPerThousand,
+                CompletionTokenCostPerThousandUsd: ChatCompletionTokenUsdPerThousand,
                 DiagnosticLogger: Append,
                 UsageReported: OnChatUsageReported);
 
@@ -3082,6 +3172,11 @@ public sealed class MainViewModel : INotifyPropertyChanged
             {
                 _chatSystemPrompt = snapshot.ChatSystemPrompt!;
             }
+            _chatMaxPromptTokens = snapshot.ChatMaxPromptTokens;
+            _chatMaxTotalTokens = snapshot.ChatMaxTotalTokens;
+            _chatMaxCostUsd = snapshot.ChatMaxCostUsd;
+            _chatPromptTokenUsdPerThousand = snapshot.ChatPromptTokenUsdPerThousand;
+            _chatCompletionTokenUsdPerThousand = snapshot.ChatCompletionTokenUsdPerThousand;
             _enableHttpRetries = snapshot.EnableHttpRetries;
             if (snapshot.HttpRetryAttempts >= 0)
             {
@@ -3225,6 +3320,11 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 ChatApiKey,
                 ChatModel,
                 ChatSystemPrompt,
+                MaxPromptTokens: ChatMaxPromptTokens,
+                MaxTotalTokens: ChatMaxTotalTokens,
+                MaxCostUsd: ChatMaxCostUsd,
+                PromptTokenCostPerThousandUsd: ChatPromptTokenUsdPerThousand,
+                CompletionTokenCostPerThousandUsd: ChatCompletionTokenUsdPerThousand,
                 DiagnosticLogger: Append,
                 UsageReported: OnChatUsageReported);
             var summary = await _chatAssistantService.SummarizeLogsAsync(session, logSnapshot, cancellationToken).ConfigureAwait(false);
@@ -3396,6 +3496,11 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 ChatApiEndpoint = ChatApiEndpoint,
                 ChatModel = ChatModel,
                 ChatSystemPrompt = ChatSystemPrompt,
+                ChatMaxPromptTokens = ChatMaxPromptTokens,
+                ChatMaxTotalTokens = ChatMaxTotalTokens,
+                ChatMaxCostUsd = ChatMaxCostUsd,
+                ChatPromptTokenUsdPerThousand = ChatPromptTokenUsdPerThousand,
+                ChatCompletionTokenUsdPerThousand = ChatCompletionTokenUsdPerThousand,
                 EnableHttpRetries = EnableHttpRetries,
                 HttpRetryAttempts = HttpRetryAttempts,
                 HttpRetryBaseDelaySeconds = HttpRetryBaseDelaySeconds,
@@ -4996,6 +5101,11 @@ public sealed class MainViewModel : INotifyPropertyChanged
                     ChatApiKey,
                     ChatModel,
                     ChatSystemPrompt,
+                    MaxPromptTokens: ChatMaxPromptTokens,
+                    MaxTotalTokens: ChatMaxTotalTokens,
+                    MaxCostUsd: ChatMaxCostUsd,
+                    PromptTokenCostPerThousandUsd: ChatPromptTokenUsdPerThousand,
+                    CompletionTokenCostPerThousandUsd: ChatCompletionTokenUsdPerThousand,
                     DiagnosticLogger: Append,
                     UsageReported: OnChatUsageReported);
             }
@@ -8189,6 +8299,11 @@ public sealed class MainViewModel : INotifyPropertyChanged
         public string? ChatApiEndpoint { get; set; }
         public string? ChatModel { get; set; }
         public string? ChatSystemPrompt { get; set; }
+        public int? ChatMaxPromptTokens { get; set; }
+        public int? ChatMaxTotalTokens { get; set; }
+        public decimal? ChatMaxCostUsd { get; set; }
+        public decimal? ChatPromptTokenUsdPerThousand { get; set; }
+        public decimal? ChatCompletionTokenUsdPerThousand { get; set; }
         public bool EnableHttpRetries { get; set; }
         public int HttpRetryAttempts { get; set; }
         public double HttpRetryBaseDelaySeconds { get; set; }

@@ -400,6 +400,11 @@ public sealed class OnboardingWizardViewModel : INotifyPropertyChanged, IDisposa
             apiKey,
             model,
             _mainViewModel.ChatSystemPrompt,
+            MaxPromptTokens: _mainViewModel.ChatMaxPromptTokens,
+            MaxTotalTokens: _mainViewModel.ChatMaxTotalTokens,
+            MaxCostUsd: _mainViewModel.ChatMaxCostUsd,
+            PromptTokenCostPerThousandUsd: _mainViewModel.ChatPromptTokenUsdPerThousand,
+            CompletionTokenCostPerThousandUsd: _mainViewModel.ChatCompletionTokenUsdPerThousand,
             UsageReported: _mainViewModel.OnChatUsageReported);
     }
 
