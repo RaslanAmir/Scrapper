@@ -27,7 +27,7 @@ public sealed class WordPressDirectoryClientTests
         var logMessages = new List<string>();
         var log = new Progress<string>(message => logMessages.Add(message));
 
-        var result = await client.GetPluginAsync("test-plugin", log: log).ConfigureAwait(false);
+        var result = await client.GetPluginAsync("test-plugin", log: log);
 
         Assert.NotNull(result);
         Assert.Equal("test-plugin", result!.Slug);
