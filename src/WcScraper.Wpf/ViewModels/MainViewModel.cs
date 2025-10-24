@@ -203,6 +203,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         ReplicateCommand = new RelayCommand(async () => await OnReplicateStoreAsync(), () => !IsRunning && CanReplicate);
         OpenLogCommand = new RelayCommand(OnOpenLog);
         ExplainLogsCommand = new RelayCommand(async () => await OnExplainLatestLogsAsync(), CanExplainLogs);
+        LaunchWizardCommand = new RelayCommand(OnLaunchWizard, CanLaunchWizard);
         SendChatCommand = new RelayCommand(async () => await OnSendChatAsync(), CanSendChat);
         UseAiRecommendationCommand = new RelayCommand<string?>(OnUseAiRecommendation);
         CopyAutomationScriptCommand = new RelayCommand<AutomationScriptDisplay>(OnCopyAutomationScript);
@@ -1032,6 +1033,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
             OnPropertyChanged(nameof(HasChatConfiguration));
             SavePreferences();
             SendChatCommand.RaiseCanExecuteChanged();
+            LaunchWizardCommand?.RaiseCanExecuteChanged();
             UpdateChatConfigurationStatus();
         }
     }
@@ -1052,6 +1054,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
             OnPropertyChanged(nameof(HasChatConfiguration));
             SavePreferences();
             SendChatCommand.RaiseCanExecuteChanged();
+            LaunchWizardCommand?.RaiseCanExecuteChanged();
             UpdateChatConfigurationStatus();
         }
     }
@@ -1109,6 +1112,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
             OnPropertyChanged();
             OnPropertyChanged(nameof(HasChatConfiguration));
             SendChatCommand.RaiseCanExecuteChanged();
+            LaunchWizardCommand?.RaiseCanExecuteChanged();
             UpdateChatConfigurationStatus();
         }
     }
@@ -1408,6 +1412,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public RelayCommand ReplicateCommand { get; }
     public RelayCommand OpenLogCommand { get; }
     public RelayCommand ExplainLogsCommand { get; }
+    public RelayCommand LaunchWizardCommand { get; }
     public ICommand UseAiRecommendationCommand { get; }
     public ICommand CopyAutomationScriptCommand { get; }
 
@@ -1416,6 +1421,122 @@ public sealed class MainViewModel : INotifyPropertyChanged
         var chosen = _dialogs.BrowseForFolder(OutputFolder);
         if (!string.IsNullOrWhiteSpace(chosen))
             OutputFolder = chosen;
+    }
+
+    private bool CanLaunchWizard() => HasChatConfiguration;
+
+    private void OnLaunchWizard()
+    {
+        try
+        {
+            var result = _dialogs.ShowOnboardingWizard(this, _chatAssistantService);
+            if (result is null)
+            {
+                return;
+            }
+
+            ApplyWizardSettings(result);
+        }
+        catch (Exception ex)
+        {
+            Append($"AI Setup Wizard failed: {ex.Message}");
+        }
+    }
+
+    public void ApplyWizardSettings(OnboardingWizardSettings settings)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+
+        var applied = settings.EnsureValid();
+
+        ExportCsv = applied.ExportCsv;
+        ExportShopify = applied.ExportShopify;
+        ExportWoo = applied.ExportWoo;
+        ExportReviews = applied.ExportReviews;
+        ExportXlsx = applied.ExportXlsx;
+        ExportJsonl = applied.ExportJsonl;
+        ExportPluginsCsv = applied.ExportPluginsCsv;
+        ExportPluginsJsonl = applied.ExportPluginsJsonl;
+        ExportThemesCsv = applied.ExportThemesCsv;
+        ExportThemesJsonl = applied.ExportThemesJsonl;
+        ExportPublicExtensionFootprints = applied.ExportPublicExtensionFootprints;
+        ExportPublicDesignSnapshot = applied.ExportPublicDesignSnapshot;
+        ExportPublicDesignScreenshots = applied.ExportPublicDesignScreenshots;
+        ExportStoreConfiguration = applied.ExportStoreConfiguration;
+        ImportStoreConfiguration = applied.ImportStoreConfiguration;
+
+        EnableHttpRetries = applied.EnableHttpRetries;
+        HttpRetryAttempts = applied.HttpRetryAttempts;
+        HttpRetryBaseDelaySeconds = applied.HttpRetryBaseDelaySeconds;
+        HttpRetryMaxDelaySeconds = applied.HttpRetryMaxDelaySeconds;
+
+        if (!string.IsNullOrWhiteSpace(applied.WordPressUsernamePlaceholder))
+        {
+            WordPressUsername = applied.WordPressUsernamePlaceholder;
+        }
+
+        if (!string.IsNullOrWhiteSpace(applied.WordPressApplicationPasswordPlaceholder))
+        {
+            WordPressApplicationPassword = applied.WordPressApplicationPasswordPlaceholder;
+        }
+
+        if (!string.IsNullOrWhiteSpace(applied.ShopifyStoreUrlPlaceholder))
+        {
+            ShopifyStoreUrl = applied.ShopifyStoreUrlPlaceholder;
+        }
+
+        if (!string.IsNullOrWhiteSpace(applied.ShopifyAdminAccessTokenPlaceholder))
+        {
+            ShopifyAdminAccessToken = applied.ShopifyAdminAccessTokenPlaceholder;
+        }
+
+        if (!string.IsNullOrWhiteSpace(applied.ShopifyStorefrontAccessTokenPlaceholder))
+        {
+            ShopifyStorefrontAccessToken = applied.ShopifyStorefrontAccessTokenPlaceholder;
+        }
+
+        if (!string.IsNullOrWhiteSpace(applied.ShopifyApiKeyPlaceholder))
+        {
+            ShopifyApiKey = applied.ShopifyApiKeyPlaceholder;
+        }
+
+        if (!string.IsNullOrWhiteSpace(applied.ShopifyApiSecretPlaceholder))
+        {
+            ShopifyApiSecret = applied.ShopifyApiSecretPlaceholder;
+        }
+
+        var summary = string.IsNullOrWhiteSpace(applied.Summary)
+            ? BuildWizardSummary(applied)
+            : applied.Summary!.Trim();
+
+        Append($"AI Setup Wizard applied configuration:\n{summary}");
+    }
+
+    private static string BuildWizardSummary(OnboardingWizardSettings settings)
+    {
+        var builder = new StringBuilder();
+        builder.AppendLine("Exports:");
+        builder.AppendLine($"- Generic CSV: {settings.ExportCsv}");
+        builder.AppendLine($"- Shopify CSV: {settings.ExportShopify}");
+        builder.AppendLine($"- WooCommerce CSV: {settings.ExportWoo}");
+        builder.AppendLine($"- Reviews CSV: {settings.ExportReviews}");
+        builder.AppendLine($"- XLSX: {settings.ExportXlsx}");
+        builder.AppendLine($"- JSONL: {settings.ExportJsonl}");
+        builder.AppendLine($"- Plugins CSV: {settings.ExportPluginsCsv}");
+        builder.AppendLine($"- Plugins JSONL: {settings.ExportPluginsJsonl}");
+        builder.AppendLine($"- Themes CSV: {settings.ExportThemesCsv}");
+        builder.AppendLine($"- Themes JSONL: {settings.ExportThemesJsonl}");
+        builder.AppendLine($"- Public extension footprints: {settings.ExportPublicExtensionFootprints}");
+        builder.AppendLine($"- Public design snapshot: {settings.ExportPublicDesignSnapshot}");
+        builder.AppendLine($"- Public design screenshots: {settings.ExportPublicDesignScreenshots}");
+        builder.AppendLine($"- Store configuration export: {settings.ExportStoreConfiguration}");
+        builder.AppendLine($"- Store configuration import: {settings.ImportStoreConfiguration}");
+        builder.AppendLine("Retry strategy:");
+        builder.AppendLine($"- Enabled: {settings.EnableHttpRetries}");
+        builder.AppendLine($"- Attempts: {settings.HttpRetryAttempts}");
+        builder.AppendLine($"- Base delay (s): {settings.HttpRetryBaseDelaySeconds:0.###}");
+        builder.AppendLine($"- Max delay (s): {settings.HttpRetryMaxDelaySeconds:0.###}");
+        return builder.ToString();
     }
 
     private void OnOpenLog()
