@@ -7289,10 +7289,19 @@ public sealed class MainViewModel : INotifyPropertyChanged
             .Select(plugin => new { plugin.Slug, plugin.Name, plugin.Version, plugin.Status })
             .ToList();
 
-        var pluginRemoved = previous?.Plugins.Values
-            .Where(plugin => !current.Plugins.ContainsKey(plugin.Slug))
-            .Select(plugin => new { plugin.Slug, plugin.Name, plugin.Version, plugin.Status })
-            .ToList() ?? new List<object>();
+        IEnumerable<object> pluginRemoved;
+        if (previous is null)
+        {
+            pluginRemoved = Array.Empty<object>();
+        }
+        else
+        {
+            pluginRemoved = previous.Plugins.Values
+                .Where(plugin => !current.Plugins.ContainsKey(plugin.Slug))
+                .Select(plugin => new { plugin.Slug, plugin.Name, plugin.Version, plugin.Status })
+                .Cast<object>()
+                .ToArray();
+        }
 
         var pluginUpdated = new List<object>();
         if (previous is not null)
@@ -7321,10 +7330,19 @@ public sealed class MainViewModel : INotifyPropertyChanged
             .Select(theme => new { theme.Slug, theme.Name, theme.Version, theme.Status })
             .ToList();
 
-        var themeRemoved = previous?.Themes.Values
-            .Where(theme => !current.Themes.ContainsKey(theme.Slug))
-            .Select(theme => new { theme.Slug, theme.Name, theme.Version, theme.Status })
-            .ToList() ?? new List<object>();
+        IEnumerable<object> themeRemoved;
+        if (previous is null)
+        {
+            themeRemoved = Array.Empty<object>();
+        }
+        else
+        {
+            themeRemoved = previous.Themes.Values
+                .Where(theme => !current.Themes.ContainsKey(theme.Slug))
+                .Select(theme => new { theme.Slug, theme.Name, theme.Version, theme.Status })
+                .Cast<object>()
+                .ToArray();
+        }
 
         var themeUpdated = new List<object>();
         if (previous is not null)
@@ -7361,18 +7379,27 @@ public sealed class MainViewModel : INotifyPropertyChanged
             })
             .ToList();
 
-        var extensionRemoved = previous?.PublicExtensions.Values
-            .Where(extension => !current.PublicExtensions.ContainsKey(extension.Key))
-            .Select(extension => new
-            {
-                extension.Slug,
-                extension.Type,
-                extension.VersionHint,
-                extension.DirectoryVersion,
-                extension.DirectoryStatus,
-                extension.DirectoryTitle
-            })
-            .ToList() ?? new List<object>();
+        IEnumerable<object> extensionRemoved;
+        if (previous is null)
+        {
+            extensionRemoved = Array.Empty<object>();
+        }
+        else
+        {
+            extensionRemoved = previous.PublicExtensions.Values
+                .Where(extension => !current.PublicExtensions.ContainsKey(extension.Key))
+                .Select(extension => new
+                {
+                    extension.Slug,
+                    extension.Type,
+                    extension.VersionHint,
+                    extension.DirectoryVersion,
+                    extension.DirectoryStatus,
+                    extension.DirectoryTitle
+                })
+                .Cast<object>()
+                .ToArray();
+        }
 
         var extensionUpdated = new List<object>();
         if (previous is not null)
