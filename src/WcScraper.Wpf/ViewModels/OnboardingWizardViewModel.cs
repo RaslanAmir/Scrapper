@@ -395,7 +395,12 @@ public sealed class OnboardingWizardViewModel : INotifyPropertyChanged, IDisposa
             return null;
         }
 
-        return new ChatSessionSettings(endpoint, apiKey, model, _mainViewModel.ChatSystemPrompt);
+        return new ChatSessionSettings(
+            endpoint,
+            apiKey,
+            model,
+            _mainViewModel.ChatSystemPrompt,
+            UsageReported: _mainViewModel.OnChatUsageReported);
     }
 
     private string BuildSystemPrompt()
