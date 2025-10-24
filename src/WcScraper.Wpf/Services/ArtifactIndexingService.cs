@@ -152,17 +152,17 @@ public sealed class ArtifactIndexingService : IArtifactIndexingService
         OnIndexChanged();
     }
 
-    public async Task<IReadOnlyList<ArtifactSearchResult>> SearchAsync(string query, int take, CancellationToken cancellationToken = default)
+    public Task<IReadOnlyList<ArtifactSearchResult>> SearchAsync(string query, int take, CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(query) || take <= 0)
         {
-            return Array.Empty<ArtifactSearchResult>();
+            return Task.FromResult<IReadOnlyList<ArtifactSearchResult>>(Array.Empty<ArtifactSearchResult>());
         }
 
         var vector = BuildVector(query);
         if (vector.Magnitude <= 0)
         {
-            return Array.Empty<ArtifactSearchResult>();
+            return Task.FromResult<IReadOnlyList<ArtifactSearchResult>>(Array.Empty<ArtifactSearchResult>());
         }
 
         List<ArtifactDataset> snapshot;
@@ -172,7 +172,7 @@ public sealed class ArtifactIndexingService : IArtifactIndexingService
         {
             if (_datasets.Count == 0)
             {
-                return Array.Empty<ArtifactSearchResult>();
+                return Task.FromResult<IReadOnlyList<ArtifactSearchResult>>(Array.Empty<ArtifactSearchResult>());
             }
 
             snapshot = _datasets.Values.ToList();
@@ -208,15 +208,17 @@ public sealed class ArtifactIndexingService : IArtifactIndexingService
 
         if (scores.Count == 0)
         {
-            return Array.Empty<ArtifactSearchResult>();
+            return Task.FromResult<IReadOnlyList<ArtifactSearchResult>>(Array.Empty<ArtifactSearchResult>());
         }
 
-        return scores
+        var orderedResults = scores
             .OrderByDescending(result => result.Score)
             .ThenBy(result => result.DatasetName, StringComparer.OrdinalIgnoreCase)
             .ThenBy(result => result.RowNumber)
             .Take(take)
             .ToList();
+
+        return Task.FromResult<IReadOnlyList<ArtifactSearchResult>>(orderedResults);
     }
 
     public IReadOnlyList<AiIndexedDatasetReference> GetIndexedDatasets()
