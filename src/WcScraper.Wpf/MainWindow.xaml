@@ -364,6 +364,7 @@
                                     <RowDefinition Height="Auto"/>
                                     <RowDefinition Height="Auto"/>
                                     <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
                                     <RowDefinition Height="*"/>
                                     <RowDefinition Height="Auto"/>
                                     <RowDefinition Height="Auto"/>
@@ -382,7 +383,13 @@
                                            FontWeight="SemiBold"
                                            TextWrapping="Wrap"
                                            Margin="0,8,0,0"/>
-                                <StackPanel Grid.Row="2" Orientation="Horizontal" Margin="0,8,0,0" HorizontalAlignment="Right">
+                                <StackPanel Grid.Row="2" Orientation="Horizontal" Margin="0,8,0,0" HorizontalAlignment="Left">
+                                    <TextBlock Text="{Binding TotalPromptTokens, StringFormat=Prompt tokens: {0:N0}}" />
+                                    <TextBlock Text="{Binding TotalCompletionTokens, StringFormat=Completion tokens: {0:N0}}" Margin="16,0,0,0" />
+                                    <TextBlock Text="{Binding TotalTokens, StringFormat=Total tokens: {0:N0}}" Margin="16,0,0,0" />
+                                    <TextBlock Text="{Binding TotalCostUsd, StringFormat=Cost: ${0:F2}}" Margin="16,0,0,0" />
+                                </StackPanel>
+                                <StackPanel Grid.Row="3" Orientation="Horizontal" Margin="0,8,0,0" HorizontalAlignment="Right">
                                     <Button Content="Save transcript"
                                             Command="{Binding SaveChatTranscriptCommand}"
                                             Padding="12,4"/>
@@ -391,7 +398,7 @@
                                             Padding="12,4"
                                             Margin="8,0,0,0"/>
                                 </StackPanel>
-                                <Border Grid.Row="3" BorderBrush="#FFD9D9D9" BorderThickness="1" Padding="8" Margin="0,8,0,8">
+                                <Border Grid.Row="4" BorderBrush="#FFD9D9D9" BorderThickness="1" Padding="8" Margin="0,8,0,8">
                                     <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
                                         <ItemsControl ItemsSource="{Binding ChatMessages}">
                                             <ItemsControl.ItemTemplate>
@@ -424,14 +431,14 @@
                                         </ItemsControl>
                                     </ScrollViewer>
                                 </Border>
-                                <TextBox Grid.Row="4"
+                                <TextBox Grid.Row="5"
                                          Text="{Binding ChatInput, UpdateSourceTrigger=PropertyChanged}"
                                          AcceptsReturn="True"
                                          Height="80"
                                          TextWrapping="Wrap"
                                          VerticalScrollBarVisibility="Auto"
                                          Margin="0,0,0,8"/>
-                                <StackPanel Grid.Row="5" Orientation="Horizontal" HorizontalAlignment="Right">
+                                <StackPanel Grid.Row="6" Orientation="Horizontal" HorizontalAlignment="Right">
                                     <Button Content="Send"
                                             Command="{Binding SendChatCommand}"
                                             Padding="16,6"/>
@@ -985,6 +992,18 @@
                 <StatusBarItem Content="{Binding Path=Logs.Count, StringFormat=Messages: {0}}" />
                 <StatusBarItem>
                     <Button Content="Open Logs" Command="{Binding OpenLogCommand}" Padding="12,4" />
+                </StatusBarItem>
+                <StatusBarItem>
+                    <TextBlock Text="{Binding TotalPromptTokens, StringFormat=Prompt: {0:N0}}" />
+                </StatusBarItem>
+                <StatusBarItem>
+                    <TextBlock Text="{Binding TotalCompletionTokens, StringFormat=Completion: {0:N0}}" />
+                </StatusBarItem>
+                <StatusBarItem>
+                    <TextBlock Text="{Binding TotalTokens, StringFormat=Total: {0:N0}}" />
+                </StatusBarItem>
+                <StatusBarItem>
+                    <TextBlock Text="{Binding TotalCostUsd, StringFormat=Cost: ${0:F2}}" />
                 </StatusBarItem>
                 <StatusBarItem>
                     <TextBlock Text="{Binding IsRunning, StringFormat=Running: {0}}" />
