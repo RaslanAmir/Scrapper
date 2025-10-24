@@ -10,7 +10,8 @@ public static class ChatAssistantServiceTests
     [Fact]
     public static void ParseAssistantDirectivePayload_WithValidResponse_ReturnsBatch()
     {
-        const string payload = """```
+        const string payload = """
+```
 {
   \"summary\": \"Enable design snapshot\",
   \"changes\": [
@@ -40,7 +41,8 @@ public static class ChatAssistantServiceTests
   \"requires_confirmation\": true,
   \"risk_note\": \"Capturing public design snapshots increases runtime.\"
 }
-```""";
+```
+""";
 
         var result = ChatAssistantService.ParseAssistantDirectivePayload(payload);
         Assert.NotNull(result);
