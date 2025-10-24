@@ -5270,7 +5270,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 retrySettings.BaseDelay,
                 retrySettings.MaxDelay,
                 artifactPayload,
-                planSnapshots,
+                RunPlans: planSnapshots,
                 ChatTranscriptPath: _chatTranscriptStore.CurrentJsonlPath);
 
             var runSnapshotJson = ManualMigrationRunSummaryFactory.CreateSnapshotJson(reportContext);
