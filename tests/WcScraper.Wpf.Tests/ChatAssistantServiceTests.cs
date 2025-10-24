@@ -111,7 +111,7 @@ public static class ChatAssistantServiceTests
             "https://example.invalid",
             "key",
             "model",
-            systemPrompt: null,
+            SystemPrompt: null,
             UsageReported: snapshots.Add);
 
         var usage = new ChatUsageSnapshot(10, 5, 15);
@@ -133,7 +133,7 @@ public static class ChatAssistantServiceTests
             "https://example.invalid",
             "key",
             "model",
-            systemPrompt: null,
+            SystemPrompt: null,
             UsageReported: snapshots.Add);
 
         ChatAssistantService.ReportUsage(settings, new ChatUsageSnapshot(5, 3, 8));
@@ -155,7 +155,7 @@ public static class ChatAssistantServiceTests
             "https://example.invalid",
             "key",
             "model",
-            systemPrompt: null,
+            SystemPrompt: null,
             PromptTokenCostPerThousandUsd: 0.5m,
             CompletionTokenCostPerThousandUsd: 1.5m);
 
