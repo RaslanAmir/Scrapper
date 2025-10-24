@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Net.Http;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
@@ -2099,6 +2100,196 @@ public sealed class ChatAssistantService
         return trimmed.Substring(firstBrace, lastBrace - firstBrace + 1);
     }
 
+    public static ChatAssistantErrorGuidance CreateErrorGuidance(Exception exception)
+    {
+        if (exception is null)
+        {
+            throw new ArgumentNullException(nameof(exception));
+        }
+
+        if (exception is AggregateException aggregate && aggregate.InnerException is not null)
+        {
+            return CreateErrorGuidance(aggregate.InnerException);
+        }
+
+        if (exception is RequestFailedException requestFailed)
+        {
+            return CreateRequestFailedGuidance(requestFailed);
+        }
+
+        if (exception is ArgumentException argumentException)
+        {
+            return CreateArgumentGuidance(argumentException);
+        }
+
+        if (exception is HttpRequestException)
+        {
+            return new ChatAssistantErrorGuidance(
+                "The assistant endpoint could not be reached.",
+                new[]
+                {
+                    "Verify the API endpoint URL is correct and reachable from this machine.",
+                    "Confirm your network or VPN connection allows access to the Azure/OpenAI resource.",
+                    "Try again once connectivity has been restored."
+                });
+        }
+
+        if (exception.InnerException is not null)
+        {
+            return CreateErrorGuidance(exception.InnerException);
+        }
+
+        return new ChatAssistantErrorGuidance(
+            "The assistant request failed unexpectedly.",
+            new[]
+            {
+                "Review the application logs for detailed diagnostics.",
+                "Retry the request. If it continues to fail, verify the assistant configuration."
+            });
+    }
+
+    private static ChatAssistantErrorGuidance CreateArgumentGuidance(ArgumentException exception)
+    {
+        var message = exception.Message ?? string.Empty;
+
+        if (message.Contains("API key", StringComparison.OrdinalIgnoreCase))
+        {
+            return new ChatAssistantErrorGuidance(
+                "An API key is required before the assistant can respond.",
+                new[]
+                {
+                    "Open the assistant settings and paste a valid Azure/OpenAI API key.",
+                    "Save the settings, then resend the prompt."
+                });
+        }
+
+        if (message.Contains("endpoint", StringComparison.OrdinalIgnoreCase))
+        {
+            return new ChatAssistantErrorGuidance(
+                "The assistant endpoint URL is missing.",
+                new[]
+                {
+                    "Provide the Azure/OpenAI endpoint URL in the assistant settings.",
+                    "Ensure the URL is absolute, including the https:// prefix.",
+                    "Retry the prompt after saving the updated endpoint."
+                });
+        }
+
+        if (message.Contains("absolute URI", StringComparison.OrdinalIgnoreCase))
+        {
+            return new ChatAssistantErrorGuidance(
+                "The assistant endpoint must be an absolute URI.",
+                new[]
+                {
+                    "Update the assistant endpoint to include the full https:// URL.",
+                    "Confirm the hostname matches your Azure/OpenAI resource.",
+                    "Retry the request once the endpoint is corrected."
+                });
+        }
+
+        if (message.Contains("model", StringComparison.OrdinalIgnoreCase) || message.Contains("deployment", StringComparison.OrdinalIgnoreCase))
+        {
+            return new ChatAssistantErrorGuidance(
+                "A deployment or model name must be configured before chatting.",
+                new[]
+                {
+                    "Enter the deployment or model identifier in the assistant settings.",
+                    "Ensure the value matches an existing deployment on the configured endpoint.",
+                    "Send the prompt again after saving the change."
+                });
+        }
+
+        return new ChatAssistantErrorGuidance(
+            "The assistant configuration is invalid.",
+            new[]
+            {
+                "Review the assistant settings for missing or incorrect values.",
+                "Correct the configuration and resend the request."
+            });
+    }
+
+    private static ChatAssistantErrorGuidance CreateRequestFailedGuidance(RequestFailedException exception)
+    {
+        switch (exception.Status)
+        {
+            case 400:
+                return new ChatAssistantErrorGuidance(
+                    "The assistant rejected the request as invalid.",
+                    new[]
+                    {
+                        "Shorten or simplify the prompt if it is very large.",
+                        "Check the logs for the full error message from Azure/OpenAI.",
+                        "Retry after adjusting the request parameters."
+                    });
+
+            case 401:
+            case 403:
+                return new ChatAssistantErrorGuidance(
+                    "The assistant service rejected the API key.",
+                    new[]
+                    {
+                        "Paste a valid Azure/OpenAI key in the assistant settings.",
+                        "Confirm the key has access to the configured deployment.",
+                        "Resend the prompt once the key has been updated."
+                    });
+
+            case 404:
+                return new ChatAssistantErrorGuidance(
+                    "The requested deployment was not found at the endpoint.",
+                    new[]
+                    {
+                        "Verify the assistant endpoint URL matches your Azure/OpenAI resource.",
+                        "Check that the deployment or model name is correct and published.",
+                        "Retry the prompt after correcting the configuration."
+                    });
+
+            case 429:
+                return new ChatAssistantErrorGuidance(
+                    "The assistant is temporarily rate limited.",
+                    new[]
+                    {
+                        "Wait a few seconds before retrying the request.",
+                        "Reduce concurrent requests or review Azure/OpenAI quota settings if the issue persists."
+                    });
+
+            case 500:
+            case 502:
+            case 503:
+            case 504:
+                return new ChatAssistantErrorGuidance(
+                    "The assistant service is currently unavailable.",
+                    new[]
+                    {
+                        "Retry the prompt after a short delay.",
+                        "Check the Azure/OpenAI service status if outages continue."
+                    });
+        }
+
+        if (exception.Status == 0)
+        {
+            return new ChatAssistantErrorGuidance(
+                "The assistant service did not return a response.",
+                new[]
+                {
+                    "Verify the endpoint URL and network connectivity.",
+                    "Inspect the logs for transport-level errors.",
+                    "Retry once connectivity issues are resolved."
+                });
+        }
+
+        var headline = exception.Status > 0
+            ? $"The assistant request failed with status code {exception.Status}."
+            : "The assistant request failed.";
+
+        return new ChatAssistantErrorGuidance(
+            headline,
+            new[]
+            {
+                "Review the logs for the detailed Azure/OpenAI error payload.",
+                "Retry after correcting any configuration or service issues."
+            });
+    }
+
     private sealed class AutomationScriptPayload
     {
         public string? Summary { get; set; }
@@ -2299,3 +2490,24 @@ public sealed record ChatSessionContext(
     string? AdditionalDesignSnapshotPages,
     int IndexedDatasetCount,
     IReadOnlyList<string> IndexedDatasetNames);
+
+public sealed record ChatAssistantErrorGuidance(string Headline, IReadOnlyList<string> Steps)
+{
+    public string ToMessage()
+    {
+        var builder = new StringBuilder();
+        builder.AppendLine(Headline);
+
+        if (Steps is { Count: > 0 })
+        {
+            builder.AppendLine();
+            builder.AppendLine("Next steps:");
+            for (var i = 0; i < Steps.Count; i++)
+            {
+                builder.Append(i + 1).Append('.').Append(' ').AppendLine(Steps[i]);
+            }
+        }
+
+        return builder.ToString().TrimEnd();
+    }
+}
