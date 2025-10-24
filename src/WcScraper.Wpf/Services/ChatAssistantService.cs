@@ -2506,9 +2506,9 @@ public sealed class ChatAssistantService
             return null;
         }
 
-        var promptTokens = usage.PromptTokens ?? 0;
-        var completionTokens = usage.CompletionTokens ?? 0;
-        var totalTokens = usage.TotalTokens ?? 0;
+        var promptTokens = usage.PromptTokens;
+        var completionTokens = usage.CompletionTokens;
+        var totalTokens = usage.TotalTokens;
 
         return new ChatUsageSnapshot(promptTokens, completionTokens, totalTokens);
     }
