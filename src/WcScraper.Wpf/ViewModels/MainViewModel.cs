@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Collections.Specialized;
 using System.ComponentModel;
+using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Linq;
@@ -125,6 +126,10 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private string _latestRunSnapshotJson = string.Empty;
     private string _latestRunAiNarrative = string.Empty;
     private string? _latestRunAiBriefPath;
+    private string? _latestStoreOutputFolder;
+    private string? _latestManualReportPath;
+    private string? _latestManualBundlePath;
+    private string? _latestRunDeltaPath;
     private bool _isAssistantPanelExpanded;
     private string _latestRunAiRecommendationSummary = string.Empty;
     private AiArtifactAnnotation? _latestRunAiAnnotation;
@@ -1662,6 +1667,15 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 }
             }
 
+            foreach (var action in directives.Actions)
+            {
+                Append($"  Pending action {action.Name} ({FormatActionPreviewMetadata(action)})");
+                if (!string.IsNullOrWhiteSpace(action.Justification))
+                {
+                    Append($"    Reason: {action.Justification}");
+                }
+            }
+
             Append($"Type {ApplyAssistantDirectivesCommand} to apply or {DiscardAssistantDirectivesCommand} to cancel.");
             ChatStatusMessage = "Assistant directives pending confirmation.";
             return;
@@ -1679,7 +1693,12 @@ public sealed class MainViewModel : INotifyPropertyChanged
             ApplyAssistantRetryDirective(directives.Retry);
         }
 
-        if (directives.Toggles.Count == 0 && directives.Retry is null && directives.CredentialReminders.Count > 0)
+        foreach (var action in directives.Actions)
+        {
+            ApplyAssistantAction(action);
+        }
+
+        if (directives.Toggles.Count == 0 && directives.Retry is null && directives.Actions.Count == 0 && directives.CredentialReminders.Count > 0)
         {
             Append("No configuration changes were applied.");
         }
@@ -1705,6 +1724,11 @@ public sealed class MainViewModel : INotifyPropertyChanged
         }
 
         if (directives.Retry is not null && IsRiskyRetry(directives.Retry))
+        {
+            return true;
+        }
+
+        if (directives.Actions.Any(IsRiskyAction))
         {
             return true;
         }
@@ -1747,6 +1771,16 @@ public sealed class MainViewModel : INotifyPropertyChanged
         return false;
     }
 
+    private static bool IsRiskyAction(AssistantActionDirective action)
+    {
+        if (action.RequiresConfirmation)
+        {
+            return true;
+        }
+
+        return string.Equals(action.Name, "start_run", StringComparison.OrdinalIgnoreCase);
+    }
+
     private static string FormatTogglePreviewMetadata(AssistantToggleDirective toggle)
     {
         var parts = new List<string>();
@@ -1768,6 +1802,22 @@ public sealed class MainViewModel : INotifyPropertyChanged
         if (parts.Count == 0)
         {
             return "risk unspecified";
+        }
+
+        return string.Join(", ", parts);
+    }
+
+    private static string FormatActionPreviewMetadata(AssistantActionDirective action)
+    {
+        var parts = new List<string>();
+        if (action.RequiresConfirmation)
+        {
+            parts.Add("confirmation requested");
+        }
+
+        if (parts.Count == 0)
+        {
+            return "no additional metadata";
         }
 
         return string.Join(", ", parts);
@@ -1919,6 +1969,175 @@ public sealed class MainViewModel : INotifyPropertyChanged
         {
             Append("Retry directive justification: " + directive.Justification);
         }
+    }
+
+    private void ApplyAssistantAction(AssistantActionDirective action)
+    {
+        if (string.IsNullOrWhiteSpace(action.Name))
+        {
+            Append("Assistant action skipped: action name was not provided.");
+            return;
+        }
+
+        var normalizedName = action.Name.Trim();
+        Append($"Assistant action requested: {normalizedName}.");
+        if (!string.IsNullOrWhiteSpace(action.Justification))
+        {
+            Append($"Reason: {action.Justification}");
+        }
+
+        var loweredName = normalizedName.ToLowerInvariant();
+
+        switch (loweredName)
+        {
+            case "start_run":
+                if (IsRunning)
+                {
+                    Append("Assistant action start_run skipped: a run is already in progress.");
+                    return;
+                }
+
+                if (!RunCommand.CanExecute(null))
+                {
+                    Append("Assistant action start_run skipped: run command is unavailable.");
+                    return;
+                }
+
+                if (!ConfirmAssistantAction("The assistant wants to start a new migration run. Start the run now?", action.Justification))
+                {
+                    Append("Assistant action start_run canceled by operator.");
+                    return;
+                }
+
+                Append("Assistant action start_run executed: run command invoked.");
+                RunCommand.Execute(null);
+                return;
+
+            case "open_output_folder":
+                if (action.RequiresConfirmation && !ConfirmAssistantAction("Open the configured output folder?", action.Justification))
+                {
+                    Append("Assistant action open_output_folder canceled by operator.");
+                    return;
+                }
+
+                TryOpenAssistantPath(normalizedName, ResolveBaseOutputFolder());
+                return;
+
+            case "open_run_folder":
+                if (action.RequiresConfirmation && !ConfirmAssistantAction("Open the most recent run folder?", action.Justification))
+                {
+                    Append("Assistant action open_run_folder canceled by operator.");
+                    return;
+                }
+
+                TryOpenAssistantPath(normalizedName, _latestStoreOutputFolder);
+                return;
+
+            case "open_manual_bundle":
+                if (action.RequiresConfirmation && !ConfirmAssistantAction("Open the latest manual bundle archive?", action.Justification))
+                {
+                    Append("Assistant action open_manual_bundle canceled by operator.");
+                    return;
+                }
+
+                TryOpenAssistantPath(normalizedName, _latestManualBundlePath);
+                return;
+
+            case "open_manual_report":
+                if (action.RequiresConfirmation && !ConfirmAssistantAction("Open the latest manual migration report?", action.Justification))
+                {
+                    Append("Assistant action open_manual_report canceled by operator.");
+                    return;
+                }
+
+                TryOpenAssistantPath(normalizedName, _latestManualReportPath);
+                return;
+
+            case "open_run_delta":
+                if (action.RequiresConfirmation && !ConfirmAssistantAction("Open the latest run delta summary?", action.Justification))
+                {
+                    Append("Assistant action open_run_delta canceled by operator.");
+                    return;
+                }
+
+                TryOpenAssistantPath(normalizedName, _latestRunDeltaPath);
+                return;
+
+            case "open_ai_brief":
+                if (action.RequiresConfirmation && !ConfirmAssistantAction("Open the latest AI migration brief?", action.Justification))
+                {
+                    Append("Assistant action open_ai_brief canceled by operator.");
+                    return;
+                }
+
+                TryOpenAssistantPath(normalizedName, LatestRunAiBriefPath);
+                return;
+        }
+
+        if (action.RequiresConfirmation && !ConfirmAssistantAction($"The assistant requested action \"{normalizedName}\". Continue?", action.Justification))
+        {
+            Append($"Assistant action {normalizedName} canceled by operator.");
+            return;
+        }
+
+        Append($"Assistant action {normalizedName} is not recognized. No changes applied.");
+    }
+
+    private void TryOpenAssistantPath(string actionName, string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            Append($"Assistant action {actionName} skipped: no path available.");
+            return;
+        }
+
+        try
+        {
+            if (!File.Exists(path) && !Directory.Exists(path))
+            {
+                Append($"Assistant action {actionName} skipped: path not found ({path}).");
+                return;
+            }
+
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = path,
+                UseShellExecute = true,
+            };
+            Process.Start(startInfo);
+            Append($"Assistant action {actionName} opened {path}.");
+        }
+        catch (Exception ex)
+        {
+            Append($"Assistant action {actionName} failed to open {path}: {ex.Message}");
+        }
+    }
+
+    private static bool ConfirmAssistantAction(string prompt, string? justification)
+    {
+        var builder = new StringBuilder();
+        builder.Append(prompt);
+        if (!string.IsNullOrWhiteSpace(justification))
+        {
+            builder.AppendLine();
+            builder.AppendLine();
+            builder.Append("Reason: ");
+            builder.Append(justification.Trim());
+        }
+
+        var text = builder.ToString();
+
+        if (Application.Current?.Dispatcher is Dispatcher dispatcher)
+        {
+            if (dispatcher.CheckAccess())
+            {
+                return MessageBox.Show(text, "Confirm assistant action", MessageBoxButton.YesNo, MessageBoxImage.Question) == MessageBoxResult.Yes;
+            }
+
+            return dispatcher.Invoke(() => MessageBox.Show(text, "Confirm assistant action", MessageBoxButton.YesNo, MessageBoxImage.Question) == MessageBoxResult.Yes);
+        }
+
+        return MessageBox.Show(text, "Confirm assistant action", MessageBoxButton.YesNo, MessageBoxImage.Question) == MessageBoxResult.Yes;
     }
 
     private static bool IsDelayWithinRange(double value)
@@ -2663,6 +2882,10 @@ public sealed class MainViewModel : INotifyPropertyChanged
         _wooScraper.HttpPolicy = retryPolicy;
         _wpDirectoryClient.RetryPolicy = retryPolicy;
 
+        _latestManualBundlePath = null;
+        _latestManualReportPath = null;
+        _latestRunDeltaPath = null;
+
         ResetProvisioningContext();
 
         try
@@ -2689,6 +2912,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
             Directory.CreateDirectory(storeOutputFolder);
             var historyDirectory = GetRunHistoryDirectory(storeOutputFolder);
             var timestamp = DateTime.UtcNow.ToString("yyyyMMdd_HHmmss");
+
+            _latestStoreOutputFolder = storeOutputFolder;
 
             _artifactIndexingService.ResetForRun(storeId, timestamp);
             UpdateChatConfigurationStatus();
@@ -4223,6 +4448,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                         Append($"Run delta summary: {deltaNarrativePath}");
                         deltaRelativePath = TryGetStoreRelativePath(storeOutputFolder, deltaNarrativePath)
                             ?? RunDeltaNarrativeFileName;
+                        _latestRunDeltaPath = deltaNarrativePath;
                     }
                 }
             }
@@ -4238,6 +4464,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
             var reportPath = Path.Combine(storeOutputFolder, "manual-migration-report.md");
             await File.WriteAllTextAsync(reportPath, report, Encoding.UTF8);
             Append($"Manual migration report: {reportPath}");
+            _latestManualReportPath = reportPath;
 
             UpdateAiRecommendations(reportResult.Annotation);
             if (!string.IsNullOrWhiteSpace(reportResult.AnnotationError))
@@ -4246,6 +4473,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
             }
 
             var manualBundleArchivePath = TryCreateManualBundle(storeOutputFolder, baseOutputFolder, storeId, timestamp, reportPath);
+            _latestManualBundlePath = string.IsNullOrWhiteSpace(manualBundleArchivePath) ? null : manualBundleArchivePath;
             if (!string.IsNullOrWhiteSpace(manualBundleArchivePath))
             {
                 Append($"Manual bundle archive: {manualBundleArchivePath}");

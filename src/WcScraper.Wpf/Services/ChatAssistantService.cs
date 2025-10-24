@@ -395,6 +395,7 @@ public sealed class ChatAssistantService
         systemPrompt.AppendLine("  ],");
         systemPrompt.AppendLine("  \"retry\": {\"enable\": true, \"attempts\": 4, \"base_delay_seconds\": 1.5, \"max_delay_seconds\": 40, \"justification\": \"why\"},");
         systemPrompt.AppendLine("  \"credential_reminders\": [{\"credential\": \"WordPress\", \"message\": \"Ask for admin password\"}],");
+        systemPrompt.AppendLine("  \"actions\": [\"start_run\", \"open_manual_bundle\"],");
         systemPrompt.AppendLine("  \"requires_confirmation\": false,");
         systemPrompt.AppendLine("  \"risk_note\": \"summarize any risks\"");
         systemPrompt.AppendLine("}");
@@ -962,6 +963,7 @@ public sealed class ChatAssistantService
                 : null;
 
             var toggles = new List<AssistantToggleDirective>();
+            var actions = new List<AssistantActionDirective>();
             if (root.TryGetProperty("changes", out var changesElement) && changesElement.ValueKind == JsonValueKind.Array)
             {
                 foreach (var changeElement in changesElement.EnumerateArray())
@@ -1027,6 +1029,42 @@ public sealed class ChatAssistantService
                         string.IsNullOrWhiteSpace(riskLevel) ? null : riskLevel.Trim(),
                         confidence,
                         toggleRequiresConfirmation));
+                }
+            }
+
+            if (root.TryGetProperty("actions", out var actionsElement) && actionsElement.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var actionElement in actionsElement.EnumerateArray())
+                {
+                    string? actionName = actionElement.ValueKind switch
+                    {
+                        JsonValueKind.String => actionElement.GetString(),
+                        JsonValueKind.Object when actionElement.TryGetProperty("name", out var nameElement) => nameElement.GetString(),
+                        _ => null,
+                    };
+
+                    if (string.IsNullOrWhiteSpace(actionName))
+                    {
+                        continue;
+                    }
+
+                    string? justification = null;
+                    var requiresConfirmation = false;
+                    if (actionElement.ValueKind == JsonValueKind.Object)
+                    {
+                        if (actionElement.TryGetProperty("justification", out var justificationElement))
+                        {
+                            justification = justificationElement.GetString();
+                        }
+
+                        requiresConfirmation = actionElement.TryGetProperty("requires_confirmation", out var actionConfirmationElement)
+                            && actionConfirmationElement.ValueKind == JsonValueKind.True;
+                    }
+
+                    actions.Add(new AssistantActionDirective(
+                        actionName.Trim(),
+                        string.IsNullOrWhiteSpace(justification) ? null : justification.Trim(),
+                        requiresConfirmation));
                 }
             }
 
@@ -1116,7 +1154,7 @@ public sealed class ChatAssistantService
                 }
             }
 
-            if (toggles.Count == 0 && retryDirective is null && reminders.Count == 0)
+            if (toggles.Count == 0 && retryDirective is null && reminders.Count == 0 && actions.Count == 0)
             {
                 return null;
             }
@@ -1130,6 +1168,7 @@ public sealed class ChatAssistantService
                 normalizedSummary,
                 toggles,
                 retryDirective,
+                actions,
                 reminders,
                 requiresConfirmation,
                 normalizedRiskNote);
@@ -1554,6 +1593,7 @@ public sealed record AssistantDirectiveBatch(
     string Summary,
     IReadOnlyList<AssistantToggleDirective> Toggles,
     AssistantRetryDirective? Retry,
+    IReadOnlyList<AssistantActionDirective> Actions,
     IReadOnlyList<AssistantCredentialReminder> CredentialReminders,
     bool RequiresConfirmation,
     string? RiskNote);
@@ -1572,6 +1612,11 @@ public sealed record AssistantRetryDirective(
     double? BaseDelaySeconds,
     double? MaxDelaySeconds,
     string? Justification);
+
+public sealed record AssistantActionDirective(
+    string Name,
+    string? Justification,
+    bool RequiresConfirmation);
 
 public sealed record AssistantCredentialReminder(string Credential, string Message);
 
