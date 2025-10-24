@@ -69,6 +69,12 @@ internal sealed class ManualMigrationReportBuilder
         }
 
         builder.AppendLine($"- **HTTP retries:** {FormatRetrySummary(context)}");
+        var budgetSummary = FormatAssistantBudgetSummary(chatSession);
+        if (budgetSummary is not null)
+        {
+            builder.AppendLine($"- **Assistant budgets:** {budgetSummary}");
+        }
+
         builder.AppendLine("- **Privacy:** Dataset snippets are automatically redacted to mask emails, phone numbers, card numbers, and street addresses before indexing or assistant review.");
         builder.AppendLine();
         if (AppendRunPlanSection(builder, context))
@@ -100,6 +106,37 @@ internal sealed class ManualMigrationReportBuilder
         AppendLogHighlights(builder, context);
 
         return new ManualMigrationReportBuildResult(builder.ToString(), annotation, annotationError);
+    }
+
+    private static string? FormatAssistantBudgetSummary(ChatSessionSettings? chatSession)
+    {
+        if (chatSession is null)
+        {
+            return null;
+        }
+
+        var segments = new List<string>();
+        if (chatSession.MaxPromptTokens is { } promptTokens)
+        {
+            segments.Add($"prompt ≤ {promptTokens:N0} tokens");
+        }
+
+        if (chatSession.MaxTotalTokens is { } totalTokens)
+        {
+            segments.Add($"total ≤ {totalTokens:N0} tokens");
+        }
+
+        if (chatSession.MaxCostUsd is { } costLimit)
+        {
+            segments.Add($"cost ≤ ${costLimit:F2}");
+        }
+
+        if (segments.Count == 0)
+        {
+            return null;
+        }
+
+        return $"{string.Join(", ", segments)} (requests stop automatically to prevent accidental overages).";
     }
 
     private static string FormatRetrySummary(ManualMigrationReportContext context)
