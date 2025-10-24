@@ -64,6 +64,10 @@ internal sealed class ManualMigrationReportBuilder
 
         builder.AppendLine($"- **HTTP retries:** {FormatRetrySummary(context)}");
         builder.AppendLine();
+        if (AppendRunPlanSection(builder, context))
+        {
+            builder.AppendLine();
+        }
         if (AppendRunMetricsSection(builder, context))
         {
             builder.AppendLine();
@@ -135,6 +139,77 @@ internal sealed class ManualMigrationReportBuilder
         }
 
         return $"{bytes:N0} B";
+    }
+
+    private static bool AppendRunPlanSection(StringBuilder builder, ManualMigrationReportContext context)
+    {
+        var plans = context.RunPlans;
+        builder.AppendLine("## Assistant remediation plans");
+        builder.AppendLine();
+
+        if (plans is null || plans.Count == 0)
+        {
+            builder.AppendLine("No assistant-planned remediation runs were queued for this migration.");
+            return true;
+        }
+
+        var orderedPlans = plans
+            .OrderBy(plan => plan.ExecutionOrder ?? int.MaxValue)
+            .ThenBy(plan => plan.CreatedAtUtc)
+            .ToList();
+
+        foreach (var plan in orderedPlans)
+        {
+            builder.AppendLine($"### {MarkdownEscape(plan.Name)}");
+            builder.AppendLine($"- **Status:** {MarkdownEscape(plan.Status.ToString())}");
+            builder.AppendLine($"- **Created:** {plan.CreatedAtUtc:O} (UTC)");
+
+            if (plan.ExecutionOrder is int order)
+            {
+                builder.AppendLine($"- **Execution order:** {order}");
+            }
+
+            if (plan.ExecutionMode == RunPlanExecutionMode.Scheduled && plan.ScheduledForUtc is { } scheduled)
+            {
+                builder.AppendLine($"- **Scheduled:** {scheduled:O} (UTC)");
+            }
+            else
+            {
+                builder.AppendLine("- **Scheduled:** Awaiting operator approval");
+            }
+
+            if (plan.ExecutedAtUtc is { } executed)
+            {
+                builder.AppendLine($"- **Executed:** {executed:O} (UTC)");
+            }
+
+            if (!string.IsNullOrWhiteSpace(plan.ResultNote))
+            {
+                builder.AppendLine($"- **Result:** {MarkdownEscape(plan.ResultNote)}");
+            }
+
+            if (plan.Settings.Count > 0)
+            {
+                builder.AppendLine("- **Overrides:**");
+                foreach (var setting in plan.Settings)
+                {
+                    builder.AppendLine($"  - {MarkdownEscape(setting.Name)} = {MarkdownEscape(setting.DisplayValue)}");
+                }
+            }
+
+            if (plan.PrerequisiteNotes.Count > 0)
+            {
+                builder.AppendLine("- **Prerequisites:**");
+                foreach (var note in plan.PrerequisiteNotes)
+                {
+                    builder.AppendLine($"  - {MarkdownEscape(note)}");
+                }
+            }
+
+            builder.AppendLine();
+        }
+
+        return true;
     }
 
     private static bool AppendRunMetricsSection(StringBuilder builder, ManualMigrationReportContext context)
@@ -1137,7 +1212,8 @@ internal sealed record ManualMigrationReportContext(
     ManualMigrationAutomationScriptSet? AutomationScripts = null,
     string? RunDeltaNarrativeRelativePath = null,
     ManualMigrationEntityCounts? EntityCounts = null,
-    ManualMigrationFileSystemStats? FileSystemStats = null);
+    ManualMigrationFileSystemStats? FileSystemStats = null,
+    IReadOnlyList<RunPlanSnapshot>? RunPlans = null);
 
 internal sealed record ManualMigrationAutomationScriptSet(
     string? Summary,

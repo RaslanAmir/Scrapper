@@ -5,6 +5,7 @@ using System.Linq;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using WcScraper.Core;
+using WcScraper.Wpf.Models;
 
 namespace WcScraper.Wpf.Reporting;
 
@@ -39,7 +40,8 @@ public static class ManualMigrationRunSummaryFactory
                 Math.Round(context.HttpRetryBaseDelay.TotalSeconds, 3),
                 Math.Round(context.HttpRetryMaxDelay.TotalSeconds, 3)),
             BuildLogHighlights(context.LogEntries),
-            BuildMissingCredentialNotes(context.MissingCredentialExports));
+            BuildMissingCredentialNotes(context.MissingCredentialExports),
+            BuildRunPlanSummaries(context.RunPlans));
 
         return JsonSerializer.Serialize(snapshot, s_jsonOptions);
     }
@@ -226,6 +228,28 @@ public static class ManualMigrationRunSummaryFactory
             .ToArray();
     }
 
+    private static IReadOnlyList<RunPlanSnapshotSummary> BuildRunPlanSummaries(IReadOnlyList<RunPlanSnapshot>? plans)
+    {
+        if (plans is null || plans.Count == 0)
+        {
+            return Array.Empty<RunPlanSnapshotSummary>();
+        }
+
+        return plans
+            .Select(plan => new RunPlanSnapshotSummary(
+                plan.Name,
+                plan.Status.ToString(),
+                plan.ExecutionMode.ToString(),
+                plan.ExecutionOrder,
+                plan.CreatedAtUtc,
+                plan.ScheduledForUtc,
+                plan.ExecutedAtUtc,
+                plan.ResultNote,
+                plan.Settings.Select(setting => new RunPlanSettingSnapshot(setting.Name, setting.DisplayValue, setting.Description)).ToArray(),
+                plan.PrerequisiteNotes.ToArray()))
+            .ToArray();
+    }
+
     private static string ResolvePluginSlug(InstalledPlugin plugin)
     {
         if (!string.IsNullOrWhiteSpace(plugin.Slug))
@@ -306,7 +330,8 @@ public static class ManualMigrationRunSummaryFactory
         FileSystemSummary? FileSystem,
         RetrySummary Retry,
         IReadOnlyList<string> LogHighlights,
-        IReadOnlyList<string> MissingCredentialExports);
+        IReadOnlyList<string> MissingCredentialExports,
+        IReadOnlyList<RunPlanSnapshotSummary> RunPlans);
 
     private sealed record PluginSummary(
         string Slug,
@@ -387,4 +412,21 @@ public static class ManualMigrationRunSummaryFactory
         int Attempts,
         double BaseDelaySeconds,
         double MaxDelaySeconds);
+
+    private sealed record RunPlanSnapshotSummary(
+        string Name,
+        string Status,
+        string ExecutionMode,
+        int? ExecutionOrder,
+        DateTimeOffset CreatedAtUtc,
+        DateTimeOffset? ScheduledForUtc,
+        DateTimeOffset? ExecutedAtUtc,
+        string? ResultNote,
+        IReadOnlyList<RunPlanSettingSnapshot> Settings,
+        IReadOnlyList<string> Prerequisites);
+
+    private sealed record RunPlanSettingSnapshot(
+        string Name,
+        string Value,
+        string? Description);
 }

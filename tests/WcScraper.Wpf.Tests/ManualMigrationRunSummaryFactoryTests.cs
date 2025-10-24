@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Text.Json;
 using WcScraper.Core;
+using WcScraper.Wpf.Models;
 using WcScraper.Wpf.Reporting;
 using Xunit;
 
@@ -79,7 +80,8 @@ public class ManualMigrationRunSummaryFactoryTests
             httpRetriesEnabled: true,
             httpRetryAttempts: 3,
             httpRetryBaseDelay: TimeSpan.FromSeconds(1),
-            httpRetryMaxDelay: TimeSpan.FromSeconds(10));
+            httpRetryMaxDelay: TimeSpan.FromSeconds(10),
+            runPlans: Array.Empty<RunPlanSnapshot>());
 
         var directorySnapshots = new[]
         {

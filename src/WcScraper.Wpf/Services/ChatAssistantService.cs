@@ -396,7 +396,10 @@ public sealed class ChatAssistantService
         systemPrompt.AppendLine("  ],");
         systemPrompt.AppendLine("  \"retry\": {\"enable\": true, \"attempts\": 4, \"base_delay_seconds\": 1.5, \"max_delay_seconds\": 40, \"justification\": \"why\"},");
         systemPrompt.AppendLine("  \"credential_reminders\": [{\"credential\": \"WordPress\", \"message\": \"Ask for admin password\"}],");
-        systemPrompt.AppendLine("  \"actions\": [\"start_run\", \"open_manual_bundle\"],");
+        systemPrompt.AppendLine("  \"actions\": [");
+        systemPrompt.AppendLine("    \"start_run\",");
+        systemPrompt.AppendLine("    {\"type\": \"schedule_run\", \"requires_confirmation\": true, \"plan\": {\"run_name\": \"Follow-up remediation\", \"execution_order\": 2, \"timing\": \"scheduled\", \"scheduled_for_utc\": \"2024-05-01T02:00:00Z\", \"settings_overrides\": [{\"name\": \"ExportPublicDesignSnapshot\", \"value\": true, \"description\": \"Capture design HTML before re-run\"}], \"prerequisites\": [\"Confirm credentials\"], \"summary\": \"Queue a remediation run with design capture\"}}");
+        systemPrompt.AppendLine("  ],");
         systemPrompt.AppendLine("  \"requires_confirmation\": false,");
         systemPrompt.AppendLine("  \"risk_note\": \"summarize any risks\"");
         systemPrompt.AppendLine("}");
@@ -1206,7 +1209,8 @@ public sealed class ChatAssistantService
                     string? actionName = actionElement.ValueKind switch
                     {
                         JsonValueKind.String => actionElement.GetString(),
-                        JsonValueKind.Object when actionElement.TryGetProperty("name", out var nameElement) => nameElement.GetString(),
+                        JsonValueKind.Object when actionElement.TryGetProperty("name", out var nameElement) && !string.IsNullOrWhiteSpace(nameElement.GetString()) => nameElement.GetString(),
+                        JsonValueKind.Object when actionElement.TryGetProperty("type", out var typeElement) => typeElement.GetString(),
                         _ => null,
                     };
 
@@ -1217,6 +1221,7 @@ public sealed class ChatAssistantService
 
                     string? justification = null;
                     var requiresConfirmation = false;
+                    RunPlan? runPlan = null;
                     if (actionElement.ValueKind == JsonValueKind.Object)
                     {
                         if (actionElement.TryGetProperty("justification", out var justificationElement))
@@ -1226,12 +1231,21 @@ public sealed class ChatAssistantService
 
                         requiresConfirmation = actionElement.TryGetProperty("requires_confirmation", out var actionConfirmationElement)
                             && actionConfirmationElement.ValueKind == JsonValueKind.True;
+
+                        runPlan = TryParseRunPlan(actionElement, summary);
+                    }
+
+                    var normalizedActionName = actionName.Trim();
+                    if (string.Equals(normalizedActionName, "schedule_run", StringComparison.OrdinalIgnoreCase) && runPlan is null)
+                    {
+                        continue;
                     }
 
                     actions.Add(new AssistantActionDirective(
-                        actionName.Trim(),
+                        normalizedActionName,
                         string.IsNullOrWhiteSpace(justification) ? null : justification.Trim(),
-                        requiresConfirmation));
+                        requiresConfirmation,
+                        runPlan));
                 }
             }
 
@@ -1344,6 +1358,368 @@ public sealed class ChatAssistantService
         {
             return null;
         }
+    }
+
+    private static RunPlan? TryParseRunPlan(JsonElement actionElement, string? directiveSummary)
+    {
+        if (actionElement.ValueKind != JsonValueKind.Object)
+        {
+            return null;
+        }
+
+        var hasPlanProperty = actionElement.TryGetProperty("plan", out var planElementCandidate)
+            && planElementCandidate.ValueKind == JsonValueKind.Object;
+        var typeLabel = actionElement.TryGetProperty("type", out var typeElement) ? typeElement.GetString() : null;
+        var nameLabel = actionElement.TryGetProperty("name", out var nameElement) ? nameElement.GetString() : null;
+        var isScheduleRun = string.Equals(typeLabel, "schedule_run", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(nameLabel, "schedule_run", StringComparison.OrdinalIgnoreCase);
+
+        if (!isScheduleRun)
+        {
+            return null;
+        }
+
+        var planElement = hasPlanProperty ? planElementCandidate : actionElement;
+        if (planElement.ValueKind != JsonValueKind.Object)
+        {
+            return null;
+        }
+
+        var runName = planElement.TryGetProperty("run_name", out var runNameElement)
+            ? runNameElement.GetString()
+            : null;
+        if (string.IsNullOrWhiteSpace(runName) && planElement.TryGetProperty("name", out var altNameElement))
+        {
+            runName = altNameElement.GetString();
+        }
+
+        if (string.IsNullOrWhiteSpace(runName))
+        {
+            runName = "Assistant remediation run";
+        }
+
+        var executionMode = RunPlanExecutionMode.Immediate;
+        if (planElement.TryGetProperty("timing", out var timingElement))
+        {
+            var timing = timingElement.GetString();
+            if (!string.IsNullOrWhiteSpace(timing)
+                && timing.IndexOf("schedule", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                executionMode = RunPlanExecutionMode.Scheduled;
+            }
+        }
+
+        bool? runImmediatelyFlag = null;
+        if (planElement.TryGetProperty("run_immediately", out var runImmediatelyElement)
+            && TryReadBool(runImmediatelyElement, out var runImmediately))
+        {
+            runImmediatelyFlag = runImmediately;
+        }
+
+        DateTimeOffset? scheduledForUtc = null;
+        if (planElement.TryGetProperty("scheduled_for_utc", out var scheduledElement))
+        {
+            var scheduledText = scheduledElement.GetString();
+            if (!string.IsNullOrWhiteSpace(scheduledText)
+                && DateTimeOffset.TryParse(scheduledText, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out var parsedScheduled))
+            {
+                scheduledForUtc = parsedScheduled;
+            }
+        }
+
+        if (scheduledForUtc is null && TryReadDoubleProperty(planElement, "delay_seconds", out var delaySeconds))
+        {
+            scheduledForUtc = DateTimeOffset.UtcNow.AddSeconds(delaySeconds);
+        }
+        else if (scheduledForUtc is null && TryReadDoubleProperty(planElement, "delay_minutes", out var delayMinutes))
+        {
+            scheduledForUtc = DateTimeOffset.UtcNow.AddMinutes(delayMinutes);
+        }
+
+        if (runImmediatelyFlag is false || scheduledForUtc is not null)
+        {
+            executionMode = RunPlanExecutionMode.Scheduled;
+        }
+
+        var overrides = new List<RunPlanSettingOverride>();
+        if (planElement.TryGetProperty("settings_overrides", out var overridesElement)
+            && overridesElement.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var overrideElement in overridesElement.EnumerateArray())
+            {
+                if (TryParseRunPlanOverride(overrideElement, out var setting))
+                {
+                    overrides.Add(setting);
+                }
+            }
+        }
+
+        var prerequisites = new List<string>();
+        AppendPlanNotes(planElement, prerequisites, "prerequisites", "prerequisite_notes", "notes");
+
+        int? executionOrder = null;
+        if (TryReadIntProperty(planElement, "execution_order", out var parsedOrder))
+        {
+            executionOrder = parsedOrder;
+        }
+
+        var planSummary = directiveSummary;
+        if (planElement.TryGetProperty("summary", out var planSummaryElement))
+        {
+            var summaryText = planSummaryElement.GetString();
+            if (!string.IsNullOrWhiteSpace(summaryText))
+            {
+                planSummary = summaryText;
+            }
+        }
+
+        return new RunPlan(
+            Guid.NewGuid(),
+            runName.Trim(),
+            executionMode,
+            DateTimeOffset.UtcNow,
+            scheduledForUtc,
+            overrides,
+            prerequisites,
+            string.IsNullOrWhiteSpace(planSummary) ? null : planSummary.Trim(),
+            executionOrder);
+    }
+
+    private static bool TryParseRunPlanOverride(JsonElement overrideElement, out RunPlanSettingOverride setting)
+    {
+        setting = default!;
+        if (overrideElement.ValueKind != JsonValueKind.Object)
+        {
+            return false;
+        }
+
+        var name = overrideElement.TryGetProperty("name", out var nameElement) ? nameElement.GetString() : null;
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            return false;
+        }
+
+        if (!overrideElement.TryGetProperty("value", out var valueElement))
+        {
+            return false;
+        }
+
+        var description = overrideElement.TryGetProperty("description", out var descriptionElement)
+            ? descriptionElement.GetString()
+            : null;
+
+        RunPlanSettingValueKind? kind = null;
+        bool? boolValue = null;
+        double? numberValue = null;
+        string? textValue = null;
+
+        if (overrideElement.TryGetProperty("value_type", out var valueTypeElement))
+        {
+            var typeLabel = valueTypeElement.GetString();
+            switch (typeLabel?.Trim().ToLowerInvariant())
+            {
+                case "boolean":
+                case "bool":
+                    if (TryReadBool(valueElement, out var parsedBool))
+                    {
+                        kind = RunPlanSettingValueKind.Boolean;
+                        boolValue = parsedBool;
+                    }
+                    break;
+                case "number":
+                case "double":
+                case "float":
+                    if (TryReadDouble(valueElement, out var parsedNumber))
+                    {
+                        kind = RunPlanSettingValueKind.Number;
+                        numberValue = parsedNumber;
+                    }
+                    break;
+                case "text":
+                case "string":
+                    var parsedText = ExtractString(valueElement);
+                    if (!string.IsNullOrWhiteSpace(parsedText))
+                    {
+                        kind = RunPlanSettingValueKind.Text;
+                        textValue = parsedText;
+                    }
+                    break;
+            }
+        }
+
+        if (kind is null)
+        {
+            if (TryReadBool(valueElement, out var fallbackBool))
+            {
+                kind = RunPlanSettingValueKind.Boolean;
+                boolValue = fallbackBool;
+            }
+            else if (TryReadDouble(valueElement, out var fallbackNumber))
+            {
+                kind = RunPlanSettingValueKind.Number;
+                numberValue = fallbackNumber;
+            }
+            else
+            {
+                var fallbackText = ExtractString(valueElement);
+                if (!string.IsNullOrWhiteSpace(fallbackText))
+                {
+                    kind = RunPlanSettingValueKind.Text;
+                    textValue = fallbackText;
+                }
+            }
+        }
+
+        if (kind is null)
+        {
+            return false;
+        }
+
+        setting = new RunPlanSettingOverride(
+            name.Trim(),
+            kind.Value,
+            boolValue,
+            numberValue,
+            string.IsNullOrWhiteSpace(textValue) ? null : textValue,
+            string.IsNullOrWhiteSpace(description) ? null : description?.Trim());
+
+        return true;
+    }
+
+    private static void AppendPlanNotes(JsonElement planElement, List<string> destination, params string[] propertyNames)
+    {
+        foreach (var propertyName in propertyNames)
+        {
+            if (!planElement.TryGetProperty(propertyName, out var noteElement))
+            {
+                continue;
+            }
+
+            switch (noteElement.ValueKind)
+            {
+                case JsonValueKind.Array:
+                    foreach (var entry in noteElement.EnumerateArray())
+                    {
+                        if (entry.ValueKind == JsonValueKind.String)
+                        {
+                            var text = entry.GetString();
+                            if (!string.IsNullOrWhiteSpace(text))
+                            {
+                                destination.Add(text.Trim());
+                            }
+                        }
+                    }
+                    break;
+                case JsonValueKind.String:
+                    var single = noteElement.GetString();
+                    if (!string.IsNullOrWhiteSpace(single))
+                    {
+                        destination.Add(single.Trim());
+                    }
+                    break;
+            }
+        }
+    }
+
+    private static bool TryReadBool(JsonElement element, out bool value)
+    {
+        switch (element.ValueKind)
+        {
+            case JsonValueKind.True:
+                value = true;
+                return true;
+            case JsonValueKind.False:
+                value = false;
+                return true;
+            case JsonValueKind.String:
+                if (bool.TryParse(element.GetString(), out var parsedStringBool))
+                {
+                    value = parsedStringBool;
+                    return true;
+                }
+                break;
+            case JsonValueKind.Number:
+                if (element.TryGetInt32(out var intValue))
+                {
+                    value = intValue != 0;
+                    return true;
+                }
+                break;
+        }
+
+        value = default;
+        return false;
+    }
+
+    private static bool TryReadDouble(JsonElement element, out double value)
+    {
+        switch (element.ValueKind)
+        {
+            case JsonValueKind.Number:
+                if (element.TryGetDouble(out var number))
+                {
+                    value = number;
+                    return true;
+                }
+                break;
+            case JsonValueKind.String:
+                if (double.TryParse(element.GetString(), NumberStyles.Float, CultureInfo.InvariantCulture, out var parsedNumber))
+                {
+                    value = parsedNumber;
+                    return true;
+                }
+                break;
+        }
+
+        value = default;
+        return false;
+    }
+
+    private static bool TryReadDoubleProperty(JsonElement element, string propertyName, out double value)
+    {
+        value = default;
+        if (!element.TryGetProperty(propertyName, out var propertyElement))
+        {
+            return false;
+        }
+
+        return TryReadDouble(propertyElement, out value);
+    }
+
+    private static bool TryReadIntProperty(JsonElement element, string propertyName, out int value)
+    {
+        value = default;
+        if (!element.TryGetProperty(propertyName, out var propertyElement))
+        {
+            return false;
+        }
+
+        if (propertyElement.ValueKind == JsonValueKind.Number && propertyElement.TryGetInt32(out var numberValue))
+        {
+            value = numberValue;
+            return true;
+        }
+
+        if (propertyElement.ValueKind == JsonValueKind.String
+            && int.TryParse(propertyElement.GetString(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedValue))
+        {
+            value = parsedValue;
+            return true;
+        }
+
+        return false;
+    }
+
+    private static string? ExtractString(JsonElement element)
+    {
+        return element.ValueKind switch
+        {
+            JsonValueKind.String => element.GetString(),
+            JsonValueKind.Number when element.TryGetDouble(out var number) => number.ToString("0.###", CultureInfo.InvariantCulture),
+            JsonValueKind.True => "true",
+            JsonValueKind.False => "false",
+            _ => null,
+        };
     }
 
     private static ExportVerificationResult? ParseExportVerificationPayload(string? response)
@@ -1869,7 +2245,8 @@ public sealed record AssistantRetryDirective(
 public sealed record AssistantActionDirective(
     string Name,
     string? Justification,
-    bool RequiresConfirmation);
+    bool RequiresConfirmation,
+    RunPlan? Plan);
 
 public sealed record AssistantCredentialReminder(string Credential, string Message);
 
