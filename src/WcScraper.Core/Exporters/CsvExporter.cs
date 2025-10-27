@@ -6,27 +6,110 @@ namespace WcScraper.Core.Exporters;
 
 public static class CsvExporter
 {
-    public static void Write(string path, IEnumerable<IDictionary<string, object?>> rows)
+    /// <summary>
+    /// Writes the provided rows to a CSV file by buffering them in a temporary backing store, capturing
+    /// the union of column headers in insertion order in a single pass, rewinding the buffer to emit the
+    /// header row followed by each buffered record, and optionally flushing the output writer after every
+    /// <paramref name="flushEvery"/> rows. The output is written with a BOM-aware UTF-8 encoding.
+    /// </summary>
+    public static void Write(string path, IEnumerable<IDictionary<string, object?>> rows, int? flushEvery = null)
     {
-        var list = rows.ToList();
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         using var fs = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.None);
         using var sw = new StreamWriter(fs, new UTF8Encoding(encoderShouldEmitUTF8Identifier: true));
+        Write(sw, rows, flushEvery);
+    }
 
-        if (!list.Any())
+    public static void Write(StreamWriter writer, IEnumerable<IDictionary<string, object?>> rows, int? flushEvery = null)
+    {
+        if (writer is null)
         {
-            sw.WriteLine("");
-            return;
+            throw new ArgumentNullException(nameof(writer));
         }
 
-        // Headers
-        var headers = list.First().Keys.ToList();
-        sw.WriteLine(string.Join(",", headers.Select(Quote)));
+        string? tempPath = null;
+        var flushBatch = flushEvery.HasValue && flushEvery.Value > 0 ? flushEvery.Value : (int?)null;
 
-        foreach (var row in list)
+        try
         {
-            var line = string.Join(",", headers.Select(h => Quote(Format(row.TryGetValue(h, out var v) ? v : null))));
-            sw.WriteLine(line);
+            tempPath = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+            using var tempStream = new FileStream(tempPath, FileMode.Create, FileAccess.ReadWrite, FileShare.None, 4096, FileOptions.SequentialScan);
+            using var tempWriter = new BinaryWriter(tempStream, Encoding.UTF8, leaveOpen: true);
+
+            var headers = new List<string>();
+            var headerSet = new HashSet<string>(StringComparer.Ordinal);
+            var rowCount = 0;
+
+            foreach (var row in rows)
+            {
+                if (row is null)
+                {
+                    continue;
+                }
+
+                var formattedRow = new Dictionary<string, string>(StringComparer.Ordinal);
+                foreach (var kvp in row)
+                {
+                    if (headerSet.Add(kvp.Key))
+                    {
+                        headers.Add(kvp.Key);
+                    }
+
+                    formattedRow[kvp.Key] = Format(kvp.Value);
+                }
+
+                var buffer = JsonSerializer.SerializeToUtf8Bytes(formattedRow);
+                tempWriter.Write(buffer.Length);
+                tempWriter.Write(buffer);
+                rowCount++;
+            }
+
+            tempWriter.Flush();
+            tempStream.Position = 0;
+
+            if (rowCount == 0)
+            {
+                writer.WriteLine("");
+                return;
+            }
+
+            writer.WriteLine(string.Join(",", headers.Select(Quote)));
+
+            using var tempReader = new BinaryReader(tempStream, Encoding.UTF8, leaveOpen: true);
+            var flushCounter = 0;
+
+            while (tempStream.Position < tempStream.Length)
+            {
+                var length = tempReader.ReadInt32();
+                var buffer = tempReader.ReadBytes(length);
+                var formattedRow = JsonSerializer.Deserialize<Dictionary<string, string>>(buffer) ?? new Dictionary<string, string>(StringComparer.Ordinal);
+
+                var line = string.Join(",", headers.Select(header => Quote(formattedRow.TryGetValue(header, out var value) ? value ?? string.Empty : string.Empty)));
+
+                writer.WriteLine(line);
+
+                if (flushBatch.HasValue)
+                {
+                    flushCounter++;
+                    if (flushCounter >= flushBatch.Value)
+                    {
+                        writer.Flush();
+                        flushCounter = 0;
+                    }
+                }
+            }
+
+            if (flushBatch.HasValue && flushCounter > 0)
+            {
+                writer.Flush();
+            }
+        }
+        finally
+        {
+            if (tempPath is not null && File.Exists(tempPath))
+            {
+                File.Delete(tempPath);
+            }
         }
     }
 
