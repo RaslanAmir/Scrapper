@@ -13,6 +13,8 @@ using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Web;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace WcScraper.Core;
 
@@ -20,6 +22,8 @@ public sealed class WooScraper : IDisposable
 {
     private readonly HttpClient _http;
     private readonly bool _ownsClient;
+    private readonly ILogger<WooScraper> _logger;
+    private readonly ILoggerFactory _loggerFactory;
     private HttpRetryPolicy _httpPolicy;
     private List<TermItem> _lastProductCategoryTerms = new();
     private readonly JsonSerializerOptions _jsonOptions = new()
@@ -30,8 +34,16 @@ public sealed class WooScraper : IDisposable
 
     public PublicExtensionDetectionSummary? LastPublicExtensionDetection { get; private set; }
 
-    public WooScraper(HttpClient? httpClient = null, bool allowLegacyTls = true, HttpRetryPolicy? httpPolicy = null)
+    public WooScraper(
+        HttpClient? httpClient = null,
+        bool allowLegacyTls = true,
+        HttpRetryPolicy? httpPolicy = null,
+        ILogger<WooScraper>? logger = null,
+        ILoggerFactory? loggerFactory = null)
     {
+        _loggerFactory = loggerFactory ?? NullLoggerFactory.Instance;
+        _logger = logger ?? _loggerFactory.CreateLogger<WooScraper>();
+
         if (httpClient is null)
         {
             var handler = new SocketsHttpHandler();
@@ -52,11 +64,12 @@ public sealed class WooScraper : IDisposable
 
         _http.DefaultRequestHeaders.UserAgent.ParseAdd("wc-local-scraper-wpf/0.1 (+https://localhost)");
         _http.Timeout = TimeSpan.FromSeconds(30);
-        _httpPolicy = httpPolicy ?? new HttpRetryPolicy();
+        _httpPolicy = httpPolicy ?? new HttpRetryPolicy(logger: _loggerFactory.CreateLogger<HttpRetryPolicy>());
     }
 
     public void Dispose()
     {
+        _logger.LogTrace("Disposing WooScraper (owns client: {OwnsClient})", _ownsClient);
         if (_ownsClient)
         {
             _http.Dispose();
@@ -272,7 +285,14 @@ public sealed class WooScraper : IDisposable
         IProgress<string>? log = null,
         IEnumerable<string>? additionalPageUrls = null,
         CancellationToken cancellationToken = default)
-        => FrontEndDesignSnapshot.CaptureAsync(_http, baseUrl, additionalPageUrls, log, cancellationToken, _httpPolicy);
+        => FrontEndDesignSnapshot.CaptureAsync(
+            _http,
+            baseUrl,
+            additionalPageUrls,
+            log,
+            cancellationToken,
+            _httpPolicy,
+            _loggerFactory);
 
     public async Task<List<WordPressMediaItem>> FetchWordPressMediaAsync(
         string baseUrl,
@@ -393,7 +413,10 @@ public sealed class WooScraper : IDisposable
 
         LastPublicExtensionDetection = null;
 
-        using var detector = new PublicExtensionDetector(_http, _httpPolicy);
+        using var detector = new PublicExtensionDetector(
+            _http,
+            _httpPolicy,
+            loggerFactory: _loggerFactory);
 
         try
         {

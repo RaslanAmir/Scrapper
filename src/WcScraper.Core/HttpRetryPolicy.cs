@@ -5,6 +5,8 @@ using System.Net;
 using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace WcScraper.Core;
 
@@ -14,6 +16,7 @@ public sealed class HttpRetryPolicy
     private readonly TimeSpan _baseDelay;
     private readonly TimeSpan? _maxDelay;
     private readonly ISet<HttpStatusCode> _retryableStatusCodes;
+    private readonly ILogger<HttpRetryPolicy> _logger;
 
     private static readonly HttpStatusCode[] DefaultRetryableStatusCodes =
     {
@@ -30,7 +33,8 @@ public sealed class HttpRetryPolicy
         int maxRetries = 3,
         TimeSpan? baseDelay = null,
         TimeSpan? maxDelay = null,
-        IEnumerable<HttpStatusCode>? retryableStatusCodes = null)
+        IEnumerable<HttpStatusCode>? retryableStatusCodes = null,
+        ILogger<HttpRetryPolicy>? logger = null)
     {
         if (maxRetries < 0)
         {
@@ -51,6 +55,7 @@ public sealed class HttpRetryPolicy
 
         _maxDelay = maxDelay;
         _retryableStatusCodes = new HashSet<HttpStatusCode>(retryableStatusCodes ?? DefaultRetryableStatusCodes);
+        _logger = logger ?? NullLogger<HttpRetryPolicy>.Instance;
     }
 
     public Task<HttpResponseMessage> SendAsync(
@@ -181,9 +186,14 @@ public sealed class HttpRetryPolicy
         return exception is HttpRequestException or IOException or TaskCanceledException;
     }
 
-    private static void NotifyRetry(Action<HttpRetryAttempt>? onRetry, int attempt, TimeSpan delay, string reason)
+    private void NotifyRetry(Action<HttpRetryAttempt>? onRetry, int attempt, TimeSpan delay, string reason)
     {
         onRetry?.Invoke(new HttpRetryAttempt(attempt, delay, reason));
+        _logger.LogWarning(
+            "Retrying HTTP operation in {Delay} (attempt {Attempt}): {Reason}",
+            delay,
+            attempt,
+            reason);
     }
 }
 

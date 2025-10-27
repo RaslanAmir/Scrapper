@@ -7,6 +7,8 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace WcScraper.Core;
 
@@ -16,12 +18,20 @@ public sealed class WordPressDirectoryClient
     private const string ThemeEndpoint = "https://api.wordpress.org/themes/info/1.2/";
     private static readonly Regex DirectorySlugRegex = new("^[a-z0-9-]+$", RegexOptions.CultureInvariant | RegexOptions.Compiled);
     private readonly HttpClient _httpClient;
+    private readonly ILogger<WordPressDirectoryClient> _logger;
+    private readonly ILoggerFactory _loggerFactory;
     private HttpRetryPolicy _retryPolicy;
 
-    public WordPressDirectoryClient(HttpClient httpClient, HttpRetryPolicy? retryPolicy = null)
+    public WordPressDirectoryClient(
+        HttpClient httpClient,
+        HttpRetryPolicy? retryPolicy = null,
+        ILogger<WordPressDirectoryClient>? logger = null,
+        ILoggerFactory? loggerFactory = null)
     {
         _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
-        _retryPolicy = retryPolicy ?? new HttpRetryPolicy();
+        _loggerFactory = loggerFactory ?? NullLoggerFactory.Instance;
+        _logger = logger ?? _loggerFactory.CreateLogger<WordPressDirectoryClient>();
+        _retryPolicy = retryPolicy ?? new HttpRetryPolicy(logger: _loggerFactory.CreateLogger<HttpRetryPolicy>());
     }
 
     public HttpRetryPolicy RetryPolicy
@@ -87,6 +97,7 @@ public sealed class WordPressDirectoryClient
         }
 
         var requestUri = BuildRequestUri(endpoint, action, slug);
+        _logger.LogDebug("Requesting WordPress directory entry for '{Slug}' via {Endpoint}", slug, endpoint);
         using var response = await _retryPolicy.SendAsync(
                 () => _httpClient.GetAsync(requestUri, cancellationToken),
                 cancellationToken,

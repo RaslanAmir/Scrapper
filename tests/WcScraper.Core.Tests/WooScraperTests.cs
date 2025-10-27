@@ -4,6 +4,7 @@ using System.Net.Http;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Extensions.Logging.Abstractions;
 using WcScraper.Core;
 using Xunit;
 
@@ -84,7 +85,7 @@ public sealed class WooScraperTests
             Content = new StringContent(payload, Encoding.UTF8, "application/json")
         });
         using var client = new HttpClient(handler);
-        var scraper = new WooScraper(client, allowLegacyTls: false);
+        var scraper = new WooScraper(client, allowLegacyTls: false, loggerFactory: NullLoggerFactory.Instance);
 
         var products = await scraper.FetchStoreProductsAsync("https://example.com");
 
@@ -143,7 +144,7 @@ public sealed class WooScraperTests
             Content = new StringContent(payload, Encoding.UTF8, "application/json")
         });
         using var client = new HttpClient(handler);
-        var scraper = new WooScraper(client, allowLegacyTls: false);
+        var scraper = new WooScraper(client, allowLegacyTls: false, loggerFactory: NullLoggerFactory.Instance);
 
         var products = await scraper.FetchStoreProductsAsync("https://example.com");
 
@@ -215,7 +216,7 @@ public sealed class WooScraperTests
         });
 
         using var client = new HttpClient(handler);
-        var scraper = new WooScraper(client, allowLegacyTls: false);
+        var scraper = new WooScraper(client, allowLegacyTls: false, loggerFactory: NullLoggerFactory.Instance);
 
         var products = await scraper.FetchStoreProductsAsync("https://example.com");
 
@@ -289,7 +290,7 @@ public sealed class WooScraperTests
         });
 
         using var client = new HttpClient(handler);
-        var scraper = new WooScraper(client, allowLegacyTls: false);
+        var scraper = new WooScraper(client, allowLegacyTls: false, loggerFactory: NullLoggerFactory.Instance);
 
         var products = await scraper.FetchStoreProductsAsync("https://example.com");
 
