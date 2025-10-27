@@ -8,6 +8,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging.Abstractions;
 using WcScraper.Core;
+using WcScraper.Core.Telemetry;
 using Xunit;
 
 namespace WcScraper.Core.Tests;
@@ -24,18 +25,26 @@ public sealed class WordPressDirectoryClientTests
         });
         using var httpClient = new HttpClient(handler, disposeHandler: false);
         var retryPolicy = new HttpRetryPolicy(maxRetries: 1, baseDelay: TimeSpan.FromMilliseconds(1), maxDelay: TimeSpan.FromMilliseconds(5));
-        var client = new WordPressDirectoryClient(httpClient, retryPolicy, loggerFactory: NullLoggerFactory.Instance);
-        var logMessages = new List<string>();
-        var log = new Progress<string>(message => logMessages.Add(message));
+        var instrumentation = new TestInstrumentation();
+        var client = new WordPressDirectoryClient(
+            httpClient,
+            retryPolicy,
+            loggerFactory: NullLoggerFactory.Instance,
+            instrumentation: instrumentation);
 
-        var result = await client.GetPluginAsync("test-plugin", log: log);
+        var result = await client.GetPluginAsync("test-plugin");
 
         Assert.NotNull(result);
         Assert.Equal("test-plugin", result!.Slug);
         Assert.Equal("Test Plugin", result.Title);
         Assert.Equal(2, handler.CallCount);
-        Assert.Single(logMessages);
-        Assert.Contains("Retrying WordPress.org request for slug 'test-plugin'", logMessages[0]);
+        Assert.Single(instrumentation.RetryContexts);
+        var retry = instrumentation.RetryContexts[0];
+        Assert.Equal("WordPressDirectory.plugin_information", retry.OperationName);
+        Assert.Equal("plugin", retry.EntityType);
+        Assert.Equal(1, retry.RetryAttempt);
+        Assert.NotNull(retry.RetryDelay);
+        Assert.False(string.IsNullOrWhiteSpace(retry.RetryReason));
     }
 
     private static HttpResponseMessage CreateTooManyRequestsResponse()
@@ -95,6 +104,39 @@ public sealed class WordPressDirectoryClientTests
             }
 
             base.Dispose(disposing);
+        }
+    }
+
+    private sealed class TestInstrumentation : IScraperInstrumentation
+    {
+        public List<ScraperOperationContext> RetryContexts { get; } = new();
+
+        public IDisposable BeginScope(ScraperOperationContext context) => NullScope.Instance;
+
+        public void RecordRequestStart(ScraperOperationContext context)
+        {
+        }
+
+        public void RecordRequestSuccess(ScraperOperationContext context, TimeSpan duration, HttpStatusCode? statusCode = null, int retryCount = 0)
+        {
+        }
+
+        public void RecordRequestFailure(ScraperOperationContext context, TimeSpan duration, Exception exception, HttpStatusCode? statusCode = null, int retryCount = 0)
+        {
+        }
+
+        public void RecordRetry(ScraperOperationContext context)
+        {
+            RetryContexts.Add(context);
+        }
+
+        private sealed class NullScope : IDisposable
+        {
+            public static readonly NullScope Instance = new();
+
+            public void Dispose()
+            {
+            }
         }
     }
 }

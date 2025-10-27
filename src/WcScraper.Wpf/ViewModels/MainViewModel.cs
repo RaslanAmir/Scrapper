@@ -8,6 +8,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Net;
 using System.Net.Http;
 using System.Runtime.CompilerServices;
 using System.Text;
@@ -20,9 +21,11 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Input;
+using Microsoft.Extensions.Logging.Abstractions;
 using WcScraper.Core;
 using WcScraper.Core.Exporters;
 using WcScraper.Core.Shopify;
+using WcScraper.Core.Telemetry;
 using WcScraper.Wpf.Models;
 using WcScraper.Wpf.Reporting;
 using WcScraper.Wpf.Services;
@@ -38,6 +41,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private readonly WooProvisioningService _wooProvisioningService;
     private readonly HeadlessBrowserScreenshotService _designScreenshotService;
     private readonly WordPressDirectoryClient _wpDirectoryClient;
+    private readonly IScraperInstrumentation _uiInstrumentation;
     private readonly ChatAssistantService _chatAssistantService;
     private readonly ChatTranscriptStore _chatTranscriptStore;
     private readonly IArtifactIndexingService _artifactIndexingService;
@@ -204,7 +208,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
         _shopifyScraper = shopifyScraper;
         _httpClient = httpClient;
         _wooProvisioningService = new WooProvisioningService();
-        _wpDirectoryClient = new WordPressDirectoryClient(_httpClient);
+        _uiInstrumentation = new UiScraperInstrumentation(Append);
+        _wpDirectoryClient = new WordPressDirectoryClient(_httpClient, instrumentation: _uiInstrumentation);
         _designScreenshotService = designScreenshotService ?? throw new ArgumentNullException(nameof(designScreenshotService));
         _artifactIndexingService = artifactIndexingService ?? throw new ArgumentNullException(nameof(artifactIndexingService));
         _chatAssistantService = chatAssistantService ?? throw new ArgumentNullException(nameof(chatAssistantService));
@@ -6254,8 +6259,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
             {
                 log.Report($"Looking up {footprint.Type} slug '{slug}' on WordPress.org…");
                 entry = footprint.Type.Equals("theme", StringComparison.OrdinalIgnoreCase)
-                    ? await _wpDirectoryClient.GetThemeAsync(slug, log: log).ConfigureAwait(false)
-                    : await _wpDirectoryClient.GetPluginAsync(slug, log: log).ConfigureAwait(false);
+                    ? await _wpDirectoryClient.GetThemeAsync(slug).ConfigureAwait(false)
+                    : await _wpDirectoryClient.GetPluginAsync(slug).ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or IOException)
             {
@@ -6670,6 +6675,76 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private void Append(string message)
     {
         System.Windows.Application.Current?.Dispatcher.Invoke(() => Logs.Add(message));
+    }
+
+    private sealed class UiScraperInstrumentation : IScraperInstrumentation
+    {
+        private readonly Action<string> _append;
+        private readonly IScraperInstrumentation _inner;
+
+        public UiScraperInstrumentation(Action<string> append)
+        {
+            _append = append ?? throw new ArgumentNullException(nameof(append));
+            _inner = new ScraperInstrumentation(NullLogger.Instance);
+        }
+
+        public IDisposable BeginScope(ScraperOperationContext context) => _inner.BeginScope(context);
+
+        public void RecordRequestStart(ScraperOperationContext context)
+        {
+            _append(FormatMessage(context, "Starting", suffix: $"({FormatUrl(context)})"));
+            _inner.RecordRequestStart(context);
+        }
+
+        public void RecordRequestSuccess(ScraperOperationContext context, TimeSpan duration, HttpStatusCode? statusCode = null, int retryCount = 0)
+        {
+            var statusLabel = statusCode is { } code ? ((int)code).ToString(CultureInfo.InvariantCulture) : "n/a";
+            var message = $"Completed in {duration.TotalMilliseconds:F0}ms (status: {statusLabel}, retries: {retryCount})";
+            _append(FormatMessage(context, "Completed", suffix: message));
+            _inner.RecordRequestSuccess(context, duration, statusCode, retryCount);
+        }
+
+        public void RecordRequestFailure(ScraperOperationContext context, TimeSpan duration, Exception exception, HttpStatusCode? statusCode = null, int retryCount = 0)
+        {
+            var statusLabel = statusCode is { } code ? ((int)code).ToString(CultureInfo.InvariantCulture) : "n/a";
+            var message = $"Failed after {duration.TotalMilliseconds:F0}ms (status: {statusLabel}, retries: {retryCount}): {exception.Message}";
+            _append(FormatMessage(context, "Failed", suffix: message));
+            _inner.RecordRequestFailure(context, duration, exception, statusCode, retryCount);
+        }
+
+        public void RecordRetry(ScraperOperationContext context)
+        {
+            if (context.RetryAttempt is not { } attempt)
+            {
+                _append(FormatMessage(context, "Retrying"));
+            }
+            else
+            {
+                var delayMs = context.RetryDelay?.TotalMilliseconds ?? 0d;
+                var reason = string.IsNullOrWhiteSpace(context.RetryReason) ? "unspecified" : context.RetryReason;
+                var message = $"Retrying in {delayMs:F0}ms (attempt {attempt}): {reason}";
+                _append(FormatMessage(context, "Retrying", suffix: message));
+            }
+
+            _inner.RecordRetry(context);
+        }
+
+        private static string FormatEntity(ScraperOperationContext context) =>
+            string.IsNullOrWhiteSpace(context.EntityType) ? "resource" : context.EntityType!;
+
+        private static string FormatUrl(ScraperOperationContext context) =>
+            string.IsNullOrWhiteSpace(context.Url) ? "n/a" : context.Url!;
+
+        private static string FormatMessage(ScraperOperationContext context, string action, string? suffix = null)
+        {
+            var message = $"[{context.OperationName}] {action} {FormatEntity(context)}";
+            if (!string.IsNullOrWhiteSpace(suffix))
+            {
+                message = $"{message} {suffix}";
+            }
+
+            return message;
+        }
     }
 
     private static string BuildMediaRelativePath(WordPressMediaItem item)

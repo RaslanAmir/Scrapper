@@ -22,17 +22,20 @@ public sealed class WordPressDirectoryClient
     private readonly HttpClient _httpClient;
     private readonly ILogger<WordPressDirectoryClient> _logger;
     private readonly ILoggerFactory _loggerFactory;
+    private readonly IScraperInstrumentation _instrumentation;
     private HttpRetryPolicy _retryPolicy;
 
     public WordPressDirectoryClient(
         HttpClient httpClient,
         HttpRetryPolicy? retryPolicy = null,
         ILogger<WordPressDirectoryClient>? logger = null,
+        IScraperInstrumentation? instrumentation = null,
         ILoggerFactory? loggerFactory = null)
     {
         _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
         _loggerFactory = loggerFactory ?? NullLoggerFactory.Instance;
         _logger = logger ?? _loggerFactory.CreateLogger<WordPressDirectoryClient>();
+        _instrumentation = instrumentation ?? ScraperInstrumentation.Create(_logger);
         _retryPolicy = retryPolicy ?? new HttpRetryPolicy(logger: _loggerFactory.CreateLogger<HttpRetryPolicy>());
     }
 
@@ -69,19 +72,17 @@ public sealed class WordPressDirectoryClient
 
     public async Task<WordPressDirectoryEntry?> GetPluginAsync(
         string slug,
-        CancellationToken cancellationToken = default,
-        IProgress<string>? log = null)
+        CancellationToken cancellationToken = default)
     {
-        return await GetAsync(PluginEndpoint, "plugin_information", slug, ParsePluginAsync, cancellationToken, log)
+        return await GetAsync(PluginEndpoint, "plugin_information", slug, ParsePluginAsync, cancellationToken)
             .ConfigureAwait(false);
     }
 
     public async Task<WordPressDirectoryEntry?> GetThemeAsync(
         string slug,
-        CancellationToken cancellationToken = default,
-        IProgress<string>? log = null)
+        CancellationToken cancellationToken = default)
     {
-        return await GetAsync(ThemeEndpoint, "theme_information", slug, ParseThemeAsync, cancellationToken, log)
+        return await GetAsync(ThemeEndpoint, "theme_information", slug, ParseThemeAsync, cancellationToken)
             .ConfigureAwait(false);
     }
 
@@ -90,8 +91,7 @@ public sealed class WordPressDirectoryClient
         string action,
         string slug,
         Func<Stream, CancellationToken, Task<WordPressDirectoryEntry?>> parser,
-        CancellationToken cancellationToken,
-        IProgress<string>? log)
+        CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(slug))
         {
@@ -102,8 +102,17 @@ public sealed class WordPressDirectoryClient
         var requestName = $"WordPressDirectory.{action}";
         _logger.LogDebug("Requesting WordPress directory entry for '{Slug}' via {Endpoint}", slug, endpoint);
 
-        using var _ = _logger.BeginRequestScope(requestName, slug, requestUri);
-        _logger.RecordRequestStart(requestName, slug, requestUri);
+        var entityType = action switch
+        {
+            "plugin_information" => "plugin",
+            "theme_information" => "theme",
+            _ => action
+        };
+
+        var context = new ScraperOperationContext(requestName, requestUri, entityType: entityType);
+
+        using var scope = _instrumentation.BeginScope(context);
+        _instrumentation.RecordRequestStart(context);
 
         var stopwatch = Stopwatch.StartNew();
         var retryCount = 0;
@@ -117,15 +126,22 @@ public sealed class WordPressDirectoryClient
                     attempt =>
                     {
                         retryCount = attempt.AttemptNumber;
-                        _logger.RecordRetryAttempt(requestName, slug, attempt);
-                        ReportRetry(log, slug, attempt);
+                        var retryContext = context with
+                        {
+                            RetryAttempt = attempt.AttemptNumber,
+                            RetryDelay = attempt.Delay,
+                            RetryReason = attempt.Reason
+                        };
+
+                        using var retryScope = _instrumentation.BeginScope(retryContext);
+                        _instrumentation.RecordRetry(retryContext);
                     })
                 .ConfigureAwait(false);
 
             if (response.StatusCode == HttpStatusCode.NotFound)
             {
                 stopwatch.Stop();
-                _logger.RecordRequestSuccess(requestName, slug, stopwatch.Elapsed, retryCount, response.StatusCode);
+                _instrumentation.RecordRequestSuccess(context, stopwatch.Elapsed, response.StatusCode, retryCount);
                 return null;
             }
 
@@ -135,40 +151,20 @@ public sealed class WordPressDirectoryClient
             var entry = await parser(stream, cancellationToken).ConfigureAwait(false);
 
             stopwatch.Stop();
-            _logger.RecordRequestSuccess(requestName, slug, stopwatch.Elapsed, retryCount, response.StatusCode);
+            _instrumentation.RecordRequestSuccess(context, stopwatch.Elapsed, response.StatusCode, retryCount);
             return entry;
         }
         catch (Exception ex)
         {
             stopwatch.Stop();
             var statusCode = response?.StatusCode ?? (ex as HttpRequestException)?.StatusCode;
-            _logger.RecordRequestFailure(requestName, slug, stopwatch.Elapsed, ex, retryCount, statusCode);
+            _instrumentation.RecordRequestFailure(context, stopwatch.Elapsed, ex, statusCode, retryCount);
             throw;
         }
         finally
         {
             response?.Dispose();
         }
-    }
-
-    private static void ReportRetry(IProgress<string>? log, string slug, HttpRetryAttempt attempt)
-    {
-        if (log is null)
-        {
-            return;
-        }
-
-        string delay;
-        if (attempt.Delay.TotalSeconds >= 1)
-        {
-            delay = $"{attempt.Delay.TotalSeconds:F1}s";
-        }
-        else
-        {
-            delay = $"{Math.Max(1, attempt.Delay.TotalMilliseconds):F0}ms";
-        }
-
-        log.Report($"Retrying WordPress.org request for slug '{slug}' in {delay} (attempt {attempt.AttemptNumber}): {attempt.Reason}");
     }
 
     private static string BuildRequestUri(string endpoint, string action, string slug)
