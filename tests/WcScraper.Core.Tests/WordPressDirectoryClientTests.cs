@@ -1,14 +1,16 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
+using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
-using Microsoft.Extensions.Logging.Abstractions;
 using WcScraper.Core;
 using WcScraper.Core.Telemetry;
+using WcScraper.Core.Tests.Telemetry;
 using Xunit;
 
 namespace WcScraper.Core.Tests;
@@ -16,35 +18,208 @@ namespace WcScraper.Core.Tests;
 public sealed class WordPressDirectoryClientTests
 {
     [Fact]
-    public async Task GetPluginAsync_RetriesAndLogsOnTooManyRequests()
+    public async Task GetPluginAsync_RecordsTelemetryForNotFoundResponse()
     {
+        using var telemetry = new TelemetryTestContext();
         using var handler = new SequenceHandler(new[]
         {
             CreateTooManyRequestsResponse(),
-            CreatePluginResponse()
+            new HttpResponseMessage(HttpStatusCode.NotFound)
         });
         using var httpClient = new HttpClient(handler, disposeHandler: false);
-        var retryPolicy = new HttpRetryPolicy(maxRetries: 1, baseDelay: TimeSpan.FromMilliseconds(1), maxDelay: TimeSpan.FromMilliseconds(5));
-        var instrumentation = new TestInstrumentation();
+        var retryPolicy = new HttpRetryPolicy(
+            maxRetries: 1,
+            baseDelay: TimeSpan.FromMilliseconds(1),
+            maxDelay: TimeSpan.FromMilliseconds(5),
+            logger: telemetry.LoggerFactory.CreateLogger<HttpRetryPolicy>());
+        var logger = telemetry.LoggerFactory.CreateLogger<WordPressDirectoryClient>();
+        var instrumentation = new ScraperInstrumentation(logger);
+
         var client = new WordPressDirectoryClient(
             httpClient,
             retryPolicy,
-            loggerFactory: NullLoggerFactory.Instance,
-            instrumentation: instrumentation);
+            logger: logger,
+            instrumentation: instrumentation,
+            loggerFactory: telemetry.LoggerFactory);
 
-        var result = await client.GetPluginAsync("test-plugin");
+        var result = await client.GetPluginAsync("missing-plugin");
+
+        Assert.Null(result);
+        Assert.Equal(2, handler.CallCount);
+
+        AssertScopes(
+            telemetry.LoggerFactory.Scopes,
+            "WordPressDirectory.plugin_information",
+            "plugin",
+            handler.RequestUris,
+            retryExpected: true);
+
+        var successMeasurement = Assert.Single(telemetry.MeterListener.CounterMeasurements
+            .Where(m => string.Equals(m.InstrumentName, "scraper.request.success", StringComparison.Ordinal)));
+
+        Assert.Equal(1, successMeasurement.Value);
+        Assert.Equal("WordPressDirectory.plugin_information", Assert.IsType<string>(successMeasurement.Tags["operation"]));
+        Assert.Equal(handler.RequestUris.Last().ToString(), Assert.IsType<string>(successMeasurement.Tags["url"]));
+        Assert.Equal("plugin", Assert.IsType<string>(successMeasurement.Tags["entity"]));
+        Assert.Equal(404, Convert.ToInt32(successMeasurement.Tags["http.status_code"], CultureInfo.InvariantCulture));
+        Assert.Equal(1, Convert.ToInt32(successMeasurement.Tags["retry.count"], CultureInfo.InvariantCulture));
+
+        Assert.Empty(telemetry.MeterListener.CounterMeasurements
+            .Where(m => string.Equals(m.InstrumentName, "scraper.request.failure", StringComparison.Ordinal)));
+
+        var durationMeasurement = Assert.Single(telemetry.MeterListener.HistogramMeasurements
+            .Where(m => string.Equals(m.InstrumentName, "scraper.request.duration", StringComparison.Ordinal)));
+
+        Assert.True(durationMeasurement.Value >= 0);
+        Assert.Equal("WordPressDirectory.plugin_information", Assert.IsType<string>(durationMeasurement.Tags["operation"]));
+        Assert.Equal(handler.RequestUris.Last().ToString(), Assert.IsType<string>(durationMeasurement.Tags["url"]));
+        Assert.Equal("plugin", Assert.IsType<string>(durationMeasurement.Tags["entity"]));
+        Assert.Equal(404, Convert.ToInt32(durationMeasurement.Tags["http.status_code"], CultureInfo.InvariantCulture));
+        Assert.Equal(1, Convert.ToInt32(durationMeasurement.Tags["retry.count"], CultureInfo.InvariantCulture));
+    }
+
+    [Fact]
+    public async Task GetThemeAsync_RecordsTelemetryForSuccessfulResponse()
+    {
+        using var telemetry = new TelemetryTestContext();
+        using var handler = new SequenceHandler(new[]
+        {
+            CreateTooManyRequestsResponse(),
+            CreateThemeResponse()
+        });
+        using var httpClient = new HttpClient(handler, disposeHandler: false);
+        var retryPolicy = new HttpRetryPolicy(
+            maxRetries: 1,
+            baseDelay: TimeSpan.FromMilliseconds(1),
+            maxDelay: TimeSpan.FromMilliseconds(5),
+            logger: telemetry.LoggerFactory.CreateLogger<HttpRetryPolicy>());
+        var logger = telemetry.LoggerFactory.CreateLogger<WordPressDirectoryClient>();
+        var instrumentation = new ScraperInstrumentation(logger);
+
+        var client = new WordPressDirectoryClient(
+            httpClient,
+            retryPolicy,
+            logger: logger,
+            instrumentation: instrumentation,
+            loggerFactory: telemetry.LoggerFactory);
+
+        var result = await client.GetThemeAsync("test-theme");
 
         Assert.NotNull(result);
-        Assert.Equal("test-plugin", result!.Slug);
-        Assert.Equal("Test Plugin", result.Title);
+        Assert.Equal("test-theme", result!.Slug);
+        Assert.Equal("Test Theme", result.Title);
         Assert.Equal(2, handler.CallCount);
-        Assert.Single(instrumentation.RetryContexts);
-        var retry = instrumentation.RetryContexts[0];
-        Assert.Equal("WordPressDirectory.plugin_information", retry.OperationName);
-        Assert.Equal("plugin", retry.EntityType);
-        Assert.Equal(1, retry.RetryAttempt);
-        Assert.NotNull(retry.RetryDelay);
-        Assert.False(string.IsNullOrWhiteSpace(retry.RetryReason));
+
+        AssertScopes(
+            telemetry.LoggerFactory.Scopes,
+            "WordPressDirectory.theme_information",
+            "theme",
+            handler.RequestUris,
+            retryExpected: true);
+
+        var successMeasurement = Assert.Single(telemetry.MeterListener.CounterMeasurements
+            .Where(m => string.Equals(m.InstrumentName, "scraper.request.success", StringComparison.Ordinal)));
+
+        Assert.Equal(1, successMeasurement.Value);
+        Assert.Equal("WordPressDirectory.theme_information", Assert.IsType<string>(successMeasurement.Tags["operation"]));
+        Assert.Equal(handler.RequestUris.Last().ToString(), Assert.IsType<string>(successMeasurement.Tags["url"]));
+        Assert.Equal("theme", Assert.IsType<string>(successMeasurement.Tags["entity"]));
+        Assert.Equal(200, Convert.ToInt32(successMeasurement.Tags["http.status_code"], CultureInfo.InvariantCulture));
+        Assert.Equal(1, Convert.ToInt32(successMeasurement.Tags["retry.count"], CultureInfo.InvariantCulture));
+
+        Assert.Empty(telemetry.MeterListener.CounterMeasurements
+            .Where(m => string.Equals(m.InstrumentName, "scraper.request.failure", StringComparison.Ordinal)));
+
+        var durationMeasurement = Assert.Single(telemetry.MeterListener.HistogramMeasurements
+            .Where(m => string.Equals(m.InstrumentName, "scraper.request.duration", StringComparison.Ordinal)));
+
+        Assert.True(durationMeasurement.Value >= 0);
+        Assert.Equal("WordPressDirectory.theme_information", Assert.IsType<string>(durationMeasurement.Tags["operation"]));
+        Assert.Equal(handler.RequestUris.Last().ToString(), Assert.IsType<string>(durationMeasurement.Tags["url"]));
+        Assert.Equal("theme", Assert.IsType<string>(durationMeasurement.Tags["entity"]));
+        Assert.Equal(200, Convert.ToInt32(durationMeasurement.Tags["http.status_code"], CultureInfo.InvariantCulture));
+        Assert.Equal(1, Convert.ToInt32(durationMeasurement.Tags["retry.count"], CultureInfo.InvariantCulture));
+    }
+
+    private static void AssertScopes(
+        IReadOnlyCollection<ScopeRecord> scopes,
+        string expectedOperation,
+        string expectedEntity,
+        IReadOnlyList<Uri> requestUris,
+        bool retryExpected)
+    {
+        Assert.NotEmpty(requestUris);
+
+        var baseScope = scopes.FirstOrDefault(scope =>
+            string.Equals(scope.Category, typeof(WordPressDirectoryClient).FullName, StringComparison.Ordinal) &&
+            scope.Values.TryGetValue("Operation", out var operation) &&
+            string.Equals(Convert.ToString(operation, CultureInfo.InvariantCulture), expectedOperation, StringComparison.Ordinal));
+
+        Assert.NotNull(baseScope);
+        Assert.Equal(expectedOperation, Assert.IsType<string>(baseScope!.Values["Operation"]));
+        Assert.Equal(requestUris.First().ToString(), Assert.IsType<string>(baseScope.Values["Url"]));
+        Assert.Equal(expectedEntity, Assert.IsType<string>(baseScope.Values["EntityType"]));
+
+        if (retryExpected)
+        {
+            var retryScope = scopes.FirstOrDefault(scope =>
+                string.Equals(scope.Category, typeof(WordPressDirectoryClient).FullName, StringComparison.Ordinal) &&
+                scope.Values.TryGetValue("RetryAttempt", out _) &&
+                scope.Values.TryGetValue("Operation", out var operation) &&
+                string.Equals(Convert.ToString(operation, CultureInfo.InvariantCulture), expectedOperation, StringComparison.Ordinal));
+
+            Assert.NotNull(retryScope);
+            Assert.Equal(1, Convert.ToInt32(retryScope!.Values["RetryAttempt"], CultureInfo.InvariantCulture));
+            Assert.True(TryGetDelayMilliseconds(retryScope.Values, out var delayMs) && delayMs > 0);
+            Assert.False(string.IsNullOrWhiteSpace(Convert.ToString(retryScope.Values["RetryReason"], CultureInfo.InvariantCulture)));
+        }
+    }
+
+    private static bool TryGetDelayMilliseconds(IReadOnlyDictionary<string, object?> values, out double delayMs)
+    {
+        if (values.TryGetValue("RetryDelayMs", out var delayValue) && ConvertToDouble(delayValue, out delayMs))
+        {
+            return true;
+        }
+
+        if (values.TryGetValue("RetryDelay", out delayValue) && ConvertToDouble(delayValue, out delayMs))
+        {
+            return true;
+        }
+
+        delayMs = 0;
+        return false;
+    }
+
+    private static bool ConvertToDouble(object? value, out double result)
+    {
+        switch (value)
+        {
+            case null:
+                result = 0;
+                return false;
+            case double d:
+                result = d;
+                return true;
+            case float f:
+                result = f;
+                return true;
+            case int i:
+                result = i;
+                return true;
+            case long l:
+                result = l;
+                return true;
+            case TimeSpan ts:
+                result = ts.TotalMilliseconds;
+                return true;
+            case string s when double.TryParse(s, NumberStyles.Float | NumberStyles.AllowThousands, CultureInfo.InvariantCulture, out var parsed):
+                result = parsed;
+                return true;
+            default:
+                result = 0;
+                return false;
+        }
     }
 
     private static HttpResponseMessage CreateTooManyRequestsResponse()
@@ -54,17 +229,18 @@ public sealed class WordPressDirectoryClientTests
         return response;
     }
 
-    private static HttpResponseMessage CreatePluginResponse()
+    private static HttpResponseMessage CreateThemeResponse()
     {
         const string payload = """
         {
-            "slug": "test-plugin",
-            "name": "Test Plugin",
+            "slug": "test-theme",
+            "name": "Test Theme",
             "version": "1.0.0",
             "homepage": "https://example.com",
             "download_link": "https://example.com/download"
         }
         """;
+
         return new HttpResponseMessage(HttpStatusCode.OK)
         {
             Content = new StringContent(payload, Encoding.UTF8, "application/json")
@@ -82,9 +258,16 @@ public sealed class WordPressDirectoryClientTests
 
         public int CallCount { get; private set; }
 
+        public List<Uri> RequestUris { get; } = new();
+
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             CallCount++;
+            if (request.RequestUri is { } uri)
+            {
+                RequestUris.Add(uri);
+            }
+
             if (_responses.Count == 0)
             {
                 return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound));
@@ -104,39 +287,6 @@ public sealed class WordPressDirectoryClientTests
             }
 
             base.Dispose(disposing);
-        }
-    }
-
-    private sealed class TestInstrumentation : IScraperInstrumentation
-    {
-        public List<ScraperOperationContext> RetryContexts { get; } = new();
-
-        public IDisposable BeginScope(ScraperOperationContext context) => NullScope.Instance;
-
-        public void RecordRequestStart(ScraperOperationContext context)
-        {
-        }
-
-        public void RecordRequestSuccess(ScraperOperationContext context, TimeSpan duration, HttpStatusCode? statusCode = null, int retryCount = 0)
-        {
-        }
-
-        public void RecordRequestFailure(ScraperOperationContext context, TimeSpan duration, Exception exception, HttpStatusCode? statusCode = null, int retryCount = 0)
-        {
-        }
-
-        public void RecordRetry(ScraperOperationContext context)
-        {
-            RetryContexts.Add(context);
-        }
-
-        private sealed class NullScope : IDisposable
-        {
-            public static readonly NullScope Instance = new();
-
-            public void Dispose()
-            {
-            }
         }
     }
 }
