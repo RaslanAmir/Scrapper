@@ -15,6 +15,7 @@ using System.Threading.Tasks;
 using System.Web;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using WcScraper.Core.Telemetry;
 
 namespace WcScraper.Core;
 
@@ -24,6 +25,7 @@ public sealed class WooScraper : IDisposable
     private readonly bool _ownsClient;
     private readonly ILogger<WooScraper> _logger;
     private readonly ILoggerFactory _loggerFactory;
+    private readonly ScraperInstrumentationOptions _instrumentationOptions;
     private HttpRetryPolicy _httpPolicy;
     private List<TermItem> _lastProductCategoryTerms = new();
     private readonly JsonSerializerOptions _jsonOptions = new()
@@ -39,9 +41,14 @@ public sealed class WooScraper : IDisposable
         bool allowLegacyTls = true,
         HttpRetryPolicy? httpPolicy = null,
         ILogger<WooScraper>? logger = null,
-        ILoggerFactory? loggerFactory = null)
+        ILoggerFactory? loggerFactory = null,
+        ScraperInstrumentationOptions? instrumentationOptions = null)
     {
-        _loggerFactory = loggerFactory ?? NullLoggerFactory.Instance;
+        var providedInstrumentationOptions = instrumentationOptions ?? ScraperInstrumentationOptions.SharedDefaults;
+        _loggerFactory = loggerFactory
+            ?? providedInstrumentationOptions.LoggerFactory
+            ?? NullLoggerFactory.Instance;
+        _instrumentationOptions = providedInstrumentationOptions.WithFallbackLoggerFactory(_loggerFactory);
         _logger = logger ?? _loggerFactory.CreateLogger<WooScraper>();
 
         if (httpClient is null)
@@ -64,7 +71,9 @@ public sealed class WooScraper : IDisposable
 
         _http.DefaultRequestHeaders.UserAgent.ParseAdd("wc-local-scraper-wpf/0.1 (+https://localhost)");
         _http.Timeout = TimeSpan.FromSeconds(30);
-        _httpPolicy = httpPolicy ?? new HttpRetryPolicy(logger: _loggerFactory.CreateLogger<HttpRetryPolicy>());
+        _httpPolicy = httpPolicy ?? new HttpRetryPolicy(
+            logger: _loggerFactory.CreateLogger<HttpRetryPolicy>(),
+            instrumentationOptions: _instrumentationOptions);
     }
 
     public void Dispose()
@@ -416,7 +425,8 @@ public sealed class WooScraper : IDisposable
         using var detector = new PublicExtensionDetector(
             _http,
             _httpPolicy,
-            loggerFactory: _loggerFactory);
+            loggerFactory: _loggerFactory,
+            instrumentationOptions: _instrumentationOptions);
 
         try
         {

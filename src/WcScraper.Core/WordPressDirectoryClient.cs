@@ -23,6 +23,7 @@ public sealed class WordPressDirectoryClient
     private readonly ILogger<WordPressDirectoryClient> _logger;
     private readonly ILoggerFactory _loggerFactory;
     private readonly IScraperInstrumentation _instrumentation;
+    private readonly ScraperInstrumentationOptions _instrumentationOptions;
     private HttpRetryPolicy _retryPolicy;
 
     public WordPressDirectoryClient(
@@ -30,13 +31,21 @@ public sealed class WordPressDirectoryClient
         HttpRetryPolicy? retryPolicy = null,
         ILogger<WordPressDirectoryClient>? logger = null,
         IScraperInstrumentation? instrumentation = null,
-        ILoggerFactory? loggerFactory = null)
+        ILoggerFactory? loggerFactory = null,
+        ScraperInstrumentationOptions? instrumentationOptions = null)
     {
         _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
-        _loggerFactory = loggerFactory ?? NullLoggerFactory.Instance;
+        var providedInstrumentationOptions = instrumentationOptions ?? ScraperInstrumentationOptions.SharedDefaults;
+        _loggerFactory = loggerFactory
+            ?? providedInstrumentationOptions.LoggerFactory
+            ?? NullLoggerFactory.Instance;
+        _instrumentationOptions = providedInstrumentationOptions.WithFallbackLoggerFactory(_loggerFactory);
         _logger = logger ?? _loggerFactory.CreateLogger<WordPressDirectoryClient>();
-        _instrumentation = instrumentation ?? ScraperInstrumentation.Create(_logger);
-        _retryPolicy = retryPolicy ?? new HttpRetryPolicy(logger: _loggerFactory.CreateLogger<HttpRetryPolicy>());
+        _instrumentation = instrumentation
+            ?? ScraperInstrumentation.Create(_instrumentationOptions.WithFallbackLoggerFactory(_loggerFactory));
+        _retryPolicy = retryPolicy ?? new HttpRetryPolicy(
+            logger: _loggerFactory.CreateLogger<HttpRetryPolicy>(),
+            instrumentationOptions: _instrumentationOptions);
     }
 
     public HttpRetryPolicy RetryPolicy

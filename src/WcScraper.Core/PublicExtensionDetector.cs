@@ -11,6 +11,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using WcScraper.Core.Telemetry;
 
 namespace WcScraper.Core;
 
@@ -48,6 +49,7 @@ public sealed class PublicExtensionDetector : IDisposable
     private readonly bool _ownsClient;
     private readonly ILogger<PublicExtensionDetector> _logger;
     private readonly ILoggerFactory _loggerFactory;
+    private readonly ScraperInstrumentationOptions _instrumentationOptions;
     private readonly HttpRetryPolicy _httpPolicy;
 
     private VersionEvidence _wordpressVersion = VersionEvidence.None;
@@ -75,9 +77,14 @@ public sealed class PublicExtensionDetector : IDisposable
         HttpClient? httpClient = null,
         HttpRetryPolicy? httpRetryPolicy = null,
         ILogger<PublicExtensionDetector>? logger = null,
-        ILoggerFactory? loggerFactory = null)
+        ILoggerFactory? loggerFactory = null,
+        ScraperInstrumentationOptions? instrumentationOptions = null)
     {
-        _loggerFactory = loggerFactory ?? NullLoggerFactory.Instance;
+        var providedInstrumentationOptions = instrumentationOptions ?? ScraperInstrumentationOptions.SharedDefaults;
+        _loggerFactory = loggerFactory
+            ?? providedInstrumentationOptions.LoggerFactory
+            ?? NullLoggerFactory.Instance;
+        _instrumentationOptions = providedInstrumentationOptions.WithFallbackLoggerFactory(_loggerFactory);
         _logger = logger ?? _loggerFactory.CreateLogger<PublicExtensionDetector>();
 
         if (httpClient is null)
@@ -94,7 +101,9 @@ public sealed class PublicExtensionDetector : IDisposable
             _ownsClient = false;
         }
 
-        _httpPolicy = httpRetryPolicy ?? new HttpRetryPolicy(logger: _loggerFactory.CreateLogger<HttpRetryPolicy>());
+        _httpPolicy = httpRetryPolicy ?? new HttpRetryPolicy(
+            logger: _loggerFactory.CreateLogger<HttpRetryPolicy>(),
+            instrumentationOptions: _instrumentationOptions);
     }
 
     public void Dispose()

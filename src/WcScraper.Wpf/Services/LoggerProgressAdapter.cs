@@ -22,7 +22,9 @@ public sealed class LoggerProgressAdapter : IProgress<string>
         Action<string>? callback = null,
         ScraperOperationContext? operationContext = null,
         IReadOnlyDictionary<string, object?>? additionalContext = null,
-        LogLevel level = LogLevel.Information)
+        LogLevel level = LogLevel.Information,
+        IScraperInstrumentation? instrumentation = null,
+        ScraperInstrumentationOptions? instrumentationOptions = null)
     {
         _logger = logger ?? NullLogger.Instance;
         _callback = callback;
@@ -31,7 +33,10 @@ public sealed class LoggerProgressAdapter : IProgress<string>
         if (operationContext is { } context)
         {
             _operationContext = context;
-            _instrumentation = ScraperInstrumentation.Create(_logger);
+            _instrumentation = instrumentation
+                ?? (instrumentationOptions is not null
+                    ? ScraperInstrumentation.Create(instrumentationOptions)
+                    : ScraperInstrumentation.Create(_logger));
         }
 
         if (additionalContext is { Count: > 0 })
@@ -53,7 +58,9 @@ public sealed class LoggerProgressAdapter : IProgress<string>
         string? url = null,
         string? entityType = null,
         IReadOnlyDictionary<string, object?>? additionalContext = null,
-        LogLevel level = LogLevel.Information)
+        LogLevel level = LogLevel.Information,
+        IScraperInstrumentation? instrumentation = null,
+        ScraperInstrumentationOptions? instrumentationOptions = null)
     {
         if (string.IsNullOrWhiteSpace(operationName))
         {
@@ -61,7 +68,7 @@ public sealed class LoggerProgressAdapter : IProgress<string>
         }
 
         var context = new ScraperOperationContext(operationName, url, entityType);
-        return new LoggerProgressAdapter(logger, callback, context, additionalContext, level);
+        return new LoggerProgressAdapter(logger, callback, context, additionalContext, level, instrumentation, instrumentationOptions);
     }
 
     public void Report(string value)

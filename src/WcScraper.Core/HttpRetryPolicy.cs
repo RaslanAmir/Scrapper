@@ -35,7 +35,8 @@ public sealed class HttpRetryPolicy
         TimeSpan? baseDelay = null,
         TimeSpan? maxDelay = null,
         IEnumerable<HttpStatusCode>? retryableStatusCodes = null,
-        ILogger<HttpRetryPolicy>? logger = null)
+        ILogger<HttpRetryPolicy>? logger = null,
+        ScraperInstrumentationOptions? instrumentationOptions = null)
     {
         if (maxRetries < 0)
         {
@@ -56,7 +57,9 @@ public sealed class HttpRetryPolicy
 
         _maxDelay = maxDelay;
         _retryableStatusCodes = new HashSet<HttpStatusCode>(retryableStatusCodes ?? DefaultRetryableStatusCodes);
-        _logger = logger ?? NullLogger<HttpRetryPolicy>.Instance;
+        _logger = logger
+            ?? instrumentationOptions?.LoggerFactory?.CreateLogger<HttpRetryPolicy>()
+            ?? NullLogger<HttpRetryPolicy>.Instance;
     }
 
     public Task<HttpResponseMessage> SendAsync(
