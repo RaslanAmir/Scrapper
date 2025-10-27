@@ -19,40 +19,30 @@ public static class ScraperTelemetry
 
     public const string MeterName = "WcScraper.Core";
 
-    private static readonly Lazy<Meter> MeterHolder = new(() => new Meter(MeterName, GetVersion()), LazyThreadSafetyMode.ExecutionAndPublication);
-    private static readonly Lazy<Histogram<double>> RequestDurationHolder = new(() => Meter.CreateHistogram<double>(
-            "scraper.request.duration",
-            unit: "ms",
-            description: "Duration of scraper HTTP requests in milliseconds."),
-        LazyThreadSafetyMode.ExecutionAndPublication);
-    private static readonly Lazy<Counter<long>> RequestSuccessHolder = new(() => Meter.CreateCounter<long>(
-            "scraper.request.success",
-            description: "Number of successful scraper requests."),
-        LazyThreadSafetyMode.ExecutionAndPublication);
-    private static readonly Lazy<Counter<long>> RequestFailureHolder = new(() => Meter.CreateCounter<long>(
-            "scraper.request.failure",
-            description: "Number of failed scraper requests."),
-        LazyThreadSafetyMode.ExecutionAndPublication);
-    private static readonly Lazy<Counter<long>> RetryAttemptsHolder = new(() => Meter.CreateCounter<long>(
-            "scraper.request.retry.attempt",
-            description: "Retry attempts scheduled for scraper requests."),
-        LazyThreadSafetyMode.ExecutionAndPublication);
-    private static readonly Lazy<Counter<long>> RetryOutcomeHolder = new(() => Meter.CreateCounter<long>(
-            "scraper.request.retry.outcome",
-            description: "Retry outcomes for scraper requests."),
-        LazyThreadSafetyMode.ExecutionAndPublication);
+    private static readonly Lazy<Instruments> InstrumentsHolder = new(() => new Instruments(CreateMeter()), LazyThreadSafetyMode.ExecutionAndPublication);
 
-    public static Meter Meter => MeterHolder.Value;
+    public static Meter Meter => InstrumentsHolder.Value.Meter;
 
-    public static Histogram<double> RequestDuration => RequestDurationHolder.Value;
+    public static Histogram<double> RequestDuration => InstrumentsHolder.Value.RequestDuration;
 
-    public static Counter<long> RequestSuccesses => RequestSuccessHolder.Value;
+    public static Counter<long> RequestSuccesses => InstrumentsHolder.Value.RequestSuccesses;
 
-    public static Counter<long> RequestFailures => RequestFailureHolder.Value;
+    public static Counter<long> RequestFailures => InstrumentsHolder.Value.RequestFailures;
 
-    public static Counter<long> RetryAttempts => RetryAttemptsHolder.Value;
+    public static Counter<long> RetryAttempts => InstrumentsHolder.Value.RetryAttempts;
 
-    public static Counter<long> RetryOutcomes => RetryOutcomeHolder.Value;
+    public static Counter<long> RetryOutcomes => InstrumentsHolder.Value.RetryOutcomes;
+
+    internal static Instruments GetInstruments(MeterProvider? meterProvider)
+    {
+        if (meterProvider is null)
+        {
+            return InstrumentsHolder.Value;
+        }
+
+        var meter = meterProvider.GetMeter(MeterName, GetVersion());
+        return new Instruments(meter);
+    }
 
     internal static TagList CreateRequestTags(ScraperOperationContext context, HttpStatusCode? statusCode, int retryCount)
     {
@@ -130,9 +120,57 @@ public static class ScraperTelemetry
         return tags;
     }
 
+    private static Meter CreateMeter() => new(MeterName, GetVersion());
+
+    private static Histogram<double> CreateRequestDurationInstrument(Meter meter) => meter.CreateHistogram<double>(
+        "scraper.request.duration",
+        unit: "ms",
+        description: "Duration of scraper HTTP requests in milliseconds.");
+
+    private static Counter<long> CreateRequestSuccessInstrument(Meter meter) => meter.CreateCounter<long>(
+        "scraper.request.success",
+        description: "Number of successful scraper requests.");
+
+    private static Counter<long> CreateRequestFailureInstrument(Meter meter) => meter.CreateCounter<long>(
+        "scraper.request.failure",
+        description: "Number of failed scraper requests.");
+
+    private static Counter<long> CreateRetryAttemptInstrument(Meter meter) => meter.CreateCounter<long>(
+        "scraper.request.retry.attempt",
+        description: "Retry attempts scheduled for scraper requests.");
+
+    private static Counter<long> CreateRetryOutcomeInstrument(Meter meter) => meter.CreateCounter<long>(
+        "scraper.request.retry.outcome",
+        description: "Retry outcomes for scraper requests.");
+
     private static string GetVersion()
     {
         var version = typeof(ScraperTelemetry).Assembly.GetName().Version;
         return version?.ToString() ?? "1.0.0";
+    }
+
+    internal sealed class Instruments
+    {
+        public Instruments(Meter meter)
+        {
+            Meter = meter ?? throw new ArgumentNullException(nameof(meter));
+            RequestDuration = CreateRequestDurationInstrument(meter);
+            RequestSuccesses = CreateRequestSuccessInstrument(meter);
+            RequestFailures = CreateRequestFailureInstrument(meter);
+            RetryAttempts = CreateRetryAttemptInstrument(meter);
+            RetryOutcomes = CreateRetryOutcomeInstrument(meter);
+        }
+
+        public Meter Meter { get; }
+
+        public Histogram<double> RequestDuration { get; }
+
+        public Counter<long> RequestSuccesses { get; }
+
+        public Counter<long> RequestFailures { get; }
+
+        public Counter<long> RetryAttempts { get; }
+
+        public Counter<long> RetryOutcomes { get; }
     }
 }
