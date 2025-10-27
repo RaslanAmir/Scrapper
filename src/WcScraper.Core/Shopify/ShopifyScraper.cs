@@ -10,6 +10,8 @@ using System.Text.Json.Serialization;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Web;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using WcScraper.Core;
 
 namespace WcScraper.Core.Shopify;
@@ -18,13 +20,20 @@ public sealed class ShopifyScraper : IDisposable
 {
     private readonly HttpClient _http;
     private readonly bool _ownsClient;
+    private readonly ILogger<ShopifyScraper> _logger;
     private readonly JsonSerializerOptions _jsonOptions = new()
     {
         PropertyNameCaseInsensitive = true
     };
 
-    public ShopifyScraper(HttpClient? httpClient = null)
+    public ShopifyScraper(
+        HttpClient? httpClient = null,
+        ILogger<ShopifyScraper>? logger = null,
+        ILoggerFactory? loggerFactory = null)
     {
+        loggerFactory ??= NullLoggerFactory.Instance;
+        _logger = logger ?? loggerFactory.CreateLogger<ShopifyScraper>();
+
         if (httpClient is null)
         {
             _http = new HttpClient();
@@ -42,6 +51,7 @@ public sealed class ShopifyScraper : IDisposable
 
     public void Dispose()
     {
+        _logger.LogTrace("Disposing ShopifyScraper (owns client: {OwnsClient})", _ownsClient);
         if (_ownsClient)
         {
             _http.Dispose();
@@ -100,6 +110,7 @@ public sealed class ShopifyScraper : IDisposable
             request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
             ApplyAuthentication(request, settings);
             log?.Report($"GET {uri}");
+            _logger.LogDebug("Fetching Shopify REST products page with URI {Uri}", uri);
 
             using var response = await _http.SendAsync(request, cancellationToken).ConfigureAwait(false);
             response.EnsureSuccessStatusCode();
@@ -136,6 +147,7 @@ public sealed class ShopifyScraper : IDisposable
             using var request = new HttpRequestMessage(HttpMethod.Get, uri);
             request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
             log?.Report($"GET {uri}");
+            _logger.LogDebug("Fetching Shopify public products page with URI {Uri}", uri);
 
             using var response = await _http.SendAsync(request, cancellationToken).ConfigureAwait(false);
             response.EnsureSuccessStatusCode();

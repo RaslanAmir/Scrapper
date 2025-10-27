@@ -5,6 +5,7 @@ using System.Net;
 using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Extensions.Logging.Abstractions;
 using WcScraper.Core;
 using Xunit;
 
@@ -40,7 +41,7 @@ public class PublicExtensionDetectorTests
         });
 
         using var client = new HttpClient(handler, disposeHandler: true);
-        using var detector = new PublicExtensionDetector(client);
+        using var detector = new PublicExtensionDetector(client, loggerFactory: NullLoggerFactory.Instance);
 
         var logMessages = new List<string>();
         var progress = new Progress<string>(message => logMessages.Add(message));
@@ -81,7 +82,7 @@ public class PublicExtensionDetectorTests
         });
 
         using var client = new HttpClient(handler, disposeHandler: true);
-        using var detector = new PublicExtensionDetector(client);
+        using var detector = new PublicExtensionDetector(client, loggerFactory: NullLoggerFactory.Instance);
 
         var logMessages = new List<string>();
         var progress = new Progress<string>(message => logMessages.Add(message));
@@ -116,7 +117,7 @@ public class PublicExtensionDetectorTests
         });
 
         using var client = new HttpClient(handler, disposeHandler: true);
-        using var detector = new PublicExtensionDetector(client);
+        using var detector = new PublicExtensionDetector(client, loggerFactory: NullLoggerFactory.Instance);
 
         var logMessages = new List<string>();
         var progress = new Progress<string>(message => logMessages.Add(message));

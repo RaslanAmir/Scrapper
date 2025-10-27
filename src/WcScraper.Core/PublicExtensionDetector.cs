@@ -9,6 +9,8 @@ using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace WcScraper.Core;
 
@@ -44,6 +46,8 @@ public sealed class PublicExtensionDetector : IDisposable
 
     private readonly HttpClient _httpClient;
     private readonly bool _ownsClient;
+    private readonly ILogger<PublicExtensionDetector> _logger;
+    private readonly ILoggerFactory _loggerFactory;
     private readonly HttpRetryPolicy _httpPolicy;
 
     private VersionEvidence _wordpressVersion = VersionEvidence.None;
@@ -67,8 +71,15 @@ public sealed class PublicExtensionDetector : IDisposable
 
     public string? WooCommerceVersion => _wooCommerceVersion.Version;
 
-    public PublicExtensionDetector(HttpClient? httpClient = null, HttpRetryPolicy? httpRetryPolicy = null)
+    public PublicExtensionDetector(
+        HttpClient? httpClient = null,
+        HttpRetryPolicy? httpRetryPolicy = null,
+        ILogger<PublicExtensionDetector>? logger = null,
+        ILoggerFactory? loggerFactory = null)
     {
+        _loggerFactory = loggerFactory ?? NullLoggerFactory.Instance;
+        _logger = logger ?? _loggerFactory.CreateLogger<PublicExtensionDetector>();
+
         if (httpClient is null)
         {
             _httpClient = new HttpClient(new SocketsHttpHandler(), disposeHandler: true)
@@ -83,11 +94,12 @@ public sealed class PublicExtensionDetector : IDisposable
             _ownsClient = false;
         }
 
-        _httpPolicy = httpRetryPolicy ?? new HttpRetryPolicy();
+        _httpPolicy = httpRetryPolicy ?? new HttpRetryPolicy(logger: _loggerFactory.CreateLogger<HttpRetryPolicy>());
     }
 
     public void Dispose()
     {
+        _logger.LogTrace("Disposing PublicExtensionDetector (owns client: {OwnsClient})", _ownsClient);
         if (_ownsClient)
         {
             _httpClient.Dispose();

@@ -7,6 +7,8 @@ using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace WcScraper.Core;
 
@@ -66,7 +68,8 @@ public static class FrontEndDesignSnapshot
         IEnumerable<string>? additionalPageUrls = null,
         IProgress<string>? log = null,
         CancellationToken cancellationToken = default,
-        HttpRetryPolicy? retryPolicy = null)
+        HttpRetryPolicy? retryPolicy = null,
+        ILoggerFactory? loggerFactory = null)
     {
         if (httpClient is null) throw new ArgumentNullException(nameof(httpClient));
         if (string.IsNullOrWhiteSpace(baseUrl)) throw new ArgumentException("Base URL is required.", nameof(baseUrl));
@@ -74,7 +77,8 @@ public static class FrontEndDesignSnapshot
         baseUrl = WooScraper.CleanBaseUrl(baseUrl);
         var homeUrl = baseUrl + "/";
 
-        retryPolicy ??= new HttpRetryPolicy();
+        loggerFactory ??= NullLoggerFactory.Instance;
+        retryPolicy ??= new HttpRetryPolicy(logger: loggerFactory.CreateLogger<HttpRetryPolicy>());
 
         var pageUrls = BuildPageUrlList(homeUrl, additionalPageUrls);
         var processedUrls = new List<string>(pageUrls.Count);

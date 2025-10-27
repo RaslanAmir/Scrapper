@@ -6,6 +6,7 @@ using System.Net.Http.Headers;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Extensions.Logging.Abstractions;
 using WcScraper.Core;
 using Xunit;
 
@@ -23,7 +24,7 @@ public sealed class WordPressDirectoryClientTests
         });
         using var httpClient = new HttpClient(handler, disposeHandler: false);
         var retryPolicy = new HttpRetryPolicy(maxRetries: 1, baseDelay: TimeSpan.FromMilliseconds(1), maxDelay: TimeSpan.FromMilliseconds(5));
-        var client = new WordPressDirectoryClient(httpClient, retryPolicy);
+        var client = new WordPressDirectoryClient(httpClient, retryPolicy, loggerFactory: NullLoggerFactory.Instance);
         var logMessages = new List<string>();
         var log = new Progress<string>(message => logMessages.Add(message));
 
