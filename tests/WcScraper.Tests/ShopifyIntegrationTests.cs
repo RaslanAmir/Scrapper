@@ -112,8 +112,7 @@ public sealed class ShopifyIntegrationTests
         Assert.Single(storeProducts);
 
         var shopifyGenericRows = Mappers.ToGenericRows(storeProducts)
-            .Select(ToGenericDictionary)
-            .ToList();
+            .Select(ToGenericDictionary);
 
         var wooStoreProducts = new[]
         {
@@ -158,8 +157,7 @@ public sealed class ShopifyIntegrationTests
         };
 
         var wooGenericRows = Mappers.ToGenericRows(wooStoreProducts)
-            .Select(ToGenericDictionary)
-            .ToList();
+            .Select(ToGenericDictionary);
 
         var shopifyPath = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid():N}-shopify.csv");
         var wooPath = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid():N}-woo.csv");

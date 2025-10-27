@@ -113,7 +113,7 @@ public static class CsvExporter
         }
     }
 
-    public static void WritePlugins(string path, IEnumerable<InstalledPlugin> plugins)
+    public static void WritePlugins(string path, IEnumerable<InstalledPlugin> plugins, int? flushEvery = null)
     {
         Write(path, plugins
             .Select(p => new Dictionary<string, object?>
@@ -131,10 +131,11 @@ public static class CsvExporter
                 ["option_keys"] = p.OptionKeys.Count > 0 ? string.Join(";", p.OptionKeys) : null,
                 ["asset_manifest"] = p.AssetManifest is not null ? p.AssetManifest.ToJsonString() : null,
                 ["asset_paths"] = p.AssetPaths.Count > 0 ? string.Join(";", p.AssetPaths) : null
-            }));
+            }),
+            flushEvery);
     }
 
-    public static void WriteThemes(string path, IEnumerable<InstalledTheme> themes)
+    public static void WriteThemes(string path, IEnumerable<InstalledTheme> themes, int? flushEvery = null)
     {
         Write(path, themes
             .Select(t => new Dictionary<string, object?>
@@ -153,7 +154,8 @@ public static class CsvExporter
                 ["option_keys"] = t.OptionKeys.Count > 0 ? string.Join(";", t.OptionKeys) : null,
                 ["asset_manifest"] = t.AssetManifest is not null ? t.AssetManifest.ToJsonString() : null,
                 ["asset_paths"] = t.AssetPaths.Count > 0 ? string.Join(";", t.AssetPaths) : null
-            }));
+            }),
+            flushEvery);
     }
 
     private static string Format(object? v)

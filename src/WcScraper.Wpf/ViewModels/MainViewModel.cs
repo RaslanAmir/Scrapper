@@ -4574,6 +4574,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 variation.ImageFilePaths = relativePaths;
             }
 
+            // Project generic rows lazily so CSV/JSONL exporters can stream directly without materializing.
             var genericDicts = genericRows.Select(r => new Dictionary<string, object?>
             {
                 ["id"] = r.Id,
@@ -4605,12 +4606,22 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 ["images"] = r.Images,
                 ["image_alts"] = r.ImageAlts,
                 ["image_file_paths"] = r.ImageFilePaths,
-            }).ToList();
+            });
+
+            List<Dictionary<string, object?>>? genericDictBuffer = null;
+            List<Dictionary<string, object?>> GetGenericDictBuffer()
+            {
+                genericDictBuffer ??= genericDicts.ToList();
+                return genericDictBuffer;
+            }
+
+            int? DetermineFlushCadence(int count)
+                => count > 1000 ? 250 : (int?)null;
 
             if (ExportCsv)
             {
                 var path = Path.Combine(storeOutputFolder, $"{storeId}_{timestamp}_products.csv");
-                CsvExporter.Write(path, genericDicts);
+                CsvExporter.Write(path, genericDicts, DetermineFlushCadence(genericRows.Count));
                 Append($"Wrote {path}");
                 await IndexArtifactIfSupportedAsync(path);
             }
@@ -4619,14 +4630,14 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 var path = Path.Combine(storeOutputFolder, $"{storeId}_{timestamp}_products.xlsx");
                 var excelRows = SelectedPlatform == PlatformMode.Shopify && shopifyDetailDicts is { Count: > 0 }
                     ? shopifyDetailDicts
-                    : genericDicts;
+                    : GetGenericDictBuffer();
                 XlsxExporter.Write(path, excelRows);
                 Append($"Wrote {path}");
             }
             if (ExportJsonl)
             {
                 var path = Path.Combine(storeOutputFolder, $"{storeId}_{timestamp}_products.jsonl");
-                JsonlExporter.Write(path, genericDicts);
+                JsonlExporter.Write(path, genericDicts, DetermineFlushCadence(genericRows.Count));
                 Append($"Wrote {path}");
                 await IndexArtifactIfSupportedAsync(path);
             }
@@ -4636,7 +4647,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 if (plugins.Count > 0)
                 {
                     var path = Path.Combine(storeOutputFolder, $"{storeId}_{timestamp}_plugins.csv");
-                    CsvExporter.WritePlugins(path, plugins);
+                    CsvExporter.WritePlugins(path, plugins, DetermineFlushCadence(plugins.Count));
                     Append($"Wrote {path}");
                     await IndexArtifactIfSupportedAsync(path);
                 }
@@ -4651,7 +4662,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 if (plugins.Count > 0)
                 {
                     var path = Path.Combine(storeOutputFolder, $"{storeId}_{timestamp}_plugins.jsonl");
-                    JsonlExporter.WritePlugins(path, plugins);
+                    JsonlExporter.WritePlugins(path, plugins, DetermineFlushCadence(plugins.Count));
                     Append($"Wrote {path}");
                     await IndexArtifactIfSupportedAsync(path);
                 }
@@ -4666,7 +4677,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 if (themes.Count > 0)
                 {
                     var path = Path.Combine(storeOutputFolder, $"{storeId}_{timestamp}_themes.csv");
-                    CsvExporter.WriteThemes(path, themes);
+                    CsvExporter.WriteThemes(path, themes, DetermineFlushCadence(themes.Count));
                     Append($"Wrote {path}");
                     await IndexArtifactIfSupportedAsync(path);
                 }
@@ -4681,7 +4692,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 if (themes.Count > 0)
                 {
                     var path = Path.Combine(storeOutputFolder, $"{storeId}_{timestamp}_themes.jsonl");
-                    JsonlExporter.WriteThemes(path, themes);
+                    JsonlExporter.WriteThemes(path, themes, DetermineFlushCadence(themes.Count));
                     Append($"Wrote {path}");
                     await IndexArtifactIfSupportedAsync(path);
                 }
