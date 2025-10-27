@@ -122,3 +122,57 @@ dotnet test WcScraper.sln
 
 The solution file wires up both the existing unit tests and the new integration coverage so the command above will exercise all
 Shopify and WooCommerce scenarios in CI.
+
+## Instrumenting the scrapers with Serilog and OpenTelemetry
+
+The scraper components accept a `ScraperInstrumentationOptions` instance so you can plug in your own logging, metrics, and tracing pipeline. The example below wires Serilog, an OpenTelemetry `MeterProvider`, and an `ActivitySource` into `WooScraper` so request scopes, counters, and activities flow through your preferred observability stack.
+
+```csharp
+using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using Microsoft.Extensions.Logging;
+using OpenTelemetry;
+using OpenTelemetry.Metrics;
+using OpenTelemetry.Trace;
+using Serilog;
+using WcScraper.Core;
+using WcScraper.Core.Telemetry;
+
+var collectedMetrics = new List<Metric>();
+var collectedActivities = new List<Activity>();
+
+var serilogLogger = new LoggerConfiguration()
+    .Enrich.FromLogContext()
+    .WriteTo.Console()
+    .CreateLogger();
+
+using var loggerFactory = LoggerFactory.Create(builder =>
+{
+    builder.AddSerilog(serilogLogger, dispose: false);
+});
+
+using var meterProvider = Sdk.CreateMeterProviderBuilder()
+    .AddMeter(ScraperTelemetry.MeterName)
+    .AddInMemoryExporter(collectedMetrics)
+    .Build();
+
+using var activitySource = new ActivitySource("WcScraper.Core.Sample");
+using var tracerProvider = Sdk.CreateTracerProviderBuilder()
+    .AddSource(activitySource.Name)
+    .AddInMemoryExporter(collectedActivities)
+    .Build();
+
+var instrumentation = new ScraperInstrumentationOptions
+{
+    LoggerFactory = loggerFactory,
+    MeterProvider = meterProvider,
+    ActivitySource = activitySource
+};
+
+using var scraper = new WooScraper(
+    loggerFactory: loggerFactory,
+    instrumentationOptions: instrumentation);
+
+// Pass the instrumentation options into LoggerProgressAdapter when issuing requests.
+```
