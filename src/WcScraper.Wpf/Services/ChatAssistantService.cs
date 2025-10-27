@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.IO;
 using System.Linq;
@@ -2409,7 +2410,7 @@ public sealed class ChatAssistantService
         return builder.ToString();
     }
 
-    private static bool TryCreateRequestMessage(ChatMessage message, out ChatRequestMessage? requestMessage)
+    private static bool TryCreateRequestMessage(ChatMessage message, [NotNullWhen(true)] out ChatRequestMessage? requestMessage)
     {
         requestMessage = message.Role switch
         {
