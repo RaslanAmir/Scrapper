@@ -115,7 +115,7 @@ public static class CsvExporter
 
     public static void WritePlugins(string path, IEnumerable<InstalledPlugin> plugins)
     {
-        var rows = plugins
+        Write(path, plugins
             .Select(p => new Dictionary<string, object?>
             {
                 ["name"] = p.Name,
@@ -131,15 +131,12 @@ public static class CsvExporter
                 ["option_keys"] = p.OptionKeys.Count > 0 ? string.Join(";", p.OptionKeys) : null,
                 ["asset_manifest"] = p.AssetManifest is not null ? p.AssetManifest.ToJsonString() : null,
                 ["asset_paths"] = p.AssetPaths.Count > 0 ? string.Join(";", p.AssetPaths) : null
-            })
-            .ToList();
-
-        Write(path, rows);
+            }));
     }
 
     public static void WriteThemes(string path, IEnumerable<InstalledTheme> themes)
     {
-        var rows = themes
+        Write(path, themes
             .Select(t => new Dictionary<string, object?>
             {
                 ["name"] = t.Name,
@@ -156,10 +153,7 @@ public static class CsvExporter
                 ["option_keys"] = t.OptionKeys.Count > 0 ? string.Join(";", t.OptionKeys) : null,
                 ["asset_manifest"] = t.AssetManifest is not null ? t.AssetManifest.ToJsonString() : null,
                 ["asset_paths"] = t.AssetPaths.Count > 0 ? string.Join(";", t.AssetPaths) : null
-            })
-            .ToList();
-
-        Write(path, rows);
+            }));
     }
 
     private static string Format(object? v)
