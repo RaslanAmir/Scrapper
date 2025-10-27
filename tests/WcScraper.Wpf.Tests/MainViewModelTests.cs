@@ -12,6 +12,8 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using ClosedXML.Excel;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using WcScraper.Core;
 using WcScraper.Core.Shopify;
 using WcScraper.Wpf.Models;
@@ -100,7 +102,14 @@ public class MainViewModelTests
                 var ctor = typeof(MainViewModel).GetConstructor(
                     BindingFlags.NonPublic | BindingFlags.Instance,
                     binder: null,
-                    new[] { typeof(IDialogService), typeof(WooScraper), typeof(ShopifyScraper), typeof(HttpClient) },
+                    new[]
+                    {
+                        typeof(IDialogService),
+                        typeof(WooScraper),
+                        typeof(ShopifyScraper),
+                        typeof(HttpClient),
+                        typeof(ILogger<MainViewModel>)
+                    },
                     modifiers: null);
                 Assert.NotNull(ctor);
 
@@ -109,12 +118,13 @@ public class MainViewModelTests
                     new StubDialogService(),
                     wooScraper,
                     shopifyScraper,
-                    httpClient
+                    httpClient,
+                    NullLogger<MainViewModel>.Instance
                 });
                 viewModel.SelectedPlatform = PlatformMode.Shopify;
 
                 var messages = new List<string>();
-                var logger = new Progress<string>(messages.Add);
+                var logger = new LoggerProgressAdapter(NullLogger.Instance, messages.Add);
 
                 var method = typeof(MainViewModel)
                     .GetMethod("LoadFiltersForStoreAsync", BindingFlags.NonPublic | BindingFlags.Instance);
@@ -170,7 +180,14 @@ public class MainViewModelTests
         var ctor = typeof(MainViewModel).GetConstructor(
             BindingFlags.NonPublic | BindingFlags.Instance,
             binder: null,
-            new[] { typeof(IDialogService), typeof(WooScraper), typeof(ShopifyScraper), typeof(HttpClient) },
+            new[]
+            {
+                typeof(IDialogService),
+                typeof(WooScraper),
+                typeof(ShopifyScraper),
+                typeof(HttpClient),
+                typeof(ILogger<MainViewModel>)
+            },
             modifiers: null);
         Assert.NotNull(ctor);
 
@@ -179,7 +196,8 @@ public class MainViewModelTests
             new StubDialogService(),
             wooScraper,
             shopifyScraper,
-            httpClient
+            httpClient,
+            NullLogger<MainViewModel>.Instance
         });
 
         viewModel.CategoryChoices.Add(new SelectableTerm(new TermItem { Id = 1, Name = "One" }));
@@ -203,7 +221,14 @@ public class MainViewModelTests
         var ctor = typeof(MainViewModel).GetConstructor(
             BindingFlags.NonPublic | BindingFlags.Instance,
             binder: null,
-            new[] { typeof(IDialogService), typeof(WooScraper), typeof(ShopifyScraper), typeof(HttpClient) },
+            new[]
+            {
+                typeof(IDialogService),
+                typeof(WooScraper),
+                typeof(ShopifyScraper),
+                typeof(HttpClient),
+                typeof(ILogger<MainViewModel>)
+            },
             modifiers: null);
         Assert.NotNull(ctor);
 
@@ -212,7 +237,8 @@ public class MainViewModelTests
             new StubDialogService(),
             wooScraper,
             shopifyScraper,
-            httpClient
+            httpClient,
+            NullLogger<MainViewModel>.Instance
         });
 
         viewModel.TagChoices.Add(new SelectableTerm(new TermItem { Id = 1, Name = "Alpha" }) { IsSelected = true });
@@ -235,7 +261,14 @@ public class MainViewModelTests
         var ctor = typeof(MainViewModel).GetConstructor(
             BindingFlags.NonPublic | BindingFlags.Instance,
             binder: null,
-            new[] { typeof(IDialogService), typeof(WooScraper), typeof(ShopifyScraper), typeof(HttpClient) },
+            new[]
+            {
+                typeof(IDialogService),
+                typeof(WooScraper),
+                typeof(ShopifyScraper),
+                typeof(HttpClient),
+                typeof(ILogger<MainViewModel>)
+            },
             modifiers: null);
         Assert.NotNull(ctor);
 
@@ -244,7 +277,8 @@ public class MainViewModelTests
             new StubDialogService(),
             wooScraper,
             shopifyScraper,
-            httpClient
+            httpClient,
+            NullLogger<MainViewModel>.Instance
         });
 
         viewModel.OnChatUsageReported(new ChatUsageSnapshot(12, 8, 20));
@@ -281,7 +315,14 @@ public class MainViewModelTests
         var ctor = typeof(MainViewModel).GetConstructor(
             BindingFlags.NonPublic | BindingFlags.Instance,
             binder: null,
-            new[] { typeof(IDialogService), typeof(WooScraper), typeof(ShopifyScraper), typeof(HttpClient) },
+            new[]
+            {
+                typeof(IDialogService),
+                typeof(WooScraper),
+                typeof(ShopifyScraper),
+                typeof(HttpClient),
+                typeof(ILogger<MainViewModel>)
+            },
             modifiers: null);
         Assert.NotNull(ctor);
 
@@ -290,7 +331,8 @@ public class MainViewModelTests
             new StubDialogService(),
             wooScraper,
             shopifyScraper,
-            httpClient
+            httpClient,
+            NullLogger<MainViewModel>.Instance
         });
 
         var tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
@@ -470,7 +512,14 @@ public class MainViewModelTests
                 var ctor = typeof(MainViewModel).GetConstructor(
                     BindingFlags.NonPublic | BindingFlags.Instance,
                     binder: null,
-                    new[] { typeof(IDialogService), typeof(WooScraper), typeof(ShopifyScraper), typeof(HttpClient) },
+                    new[]
+                    {
+                        typeof(IDialogService),
+                        typeof(WooScraper),
+                        typeof(ShopifyScraper),
+                        typeof(HttpClient),
+                        typeof(ILogger<MainViewModel>)
+                    },
                     modifiers: null);
                 Assert.NotNull(ctor);
 
@@ -479,7 +528,8 @@ public class MainViewModelTests
                     new StubDialogService(),
                     wooScraper,
                     shopifyScraper,
-                    httpClient
+                    httpClient,
+                    NullLogger<MainViewModel>.Instance
                 });
 
                 viewModel.StoreUrl = "not a url";
@@ -634,20 +684,28 @@ public class MainViewModelTests
         using var wooScraper = new WooScraper(wooHttp);
         using var shopifyScraper = new ShopifyScraper();
 
-        var ctor = typeof(MainViewModel).GetConstructor(
-            BindingFlags.NonPublic | BindingFlags.Instance,
-            binder: null,
-            new[] { typeof(IDialogService), typeof(WooScraper), typeof(ShopifyScraper), typeof(HttpClient) },
-            modifiers: null);
+    var ctor = typeof(MainViewModel).GetConstructor(
+        BindingFlags.NonPublic | BindingFlags.Instance,
+        binder: null,
+        new[]
+        {
+            typeof(IDialogService),
+            typeof(WooScraper),
+            typeof(ShopifyScraper),
+            typeof(HttpClient),
+            typeof(ILogger<MainViewModel>)
+        },
+        modifiers: null);
         Assert.NotNull(ctor);
 
-        var viewModel = (MainViewModel)ctor!.Invoke(new object[]
-        {
-            new StubDialogService(),
-            wooScraper,
-            shopifyScraper,
-            wooHttp
-        });
+    var viewModel = (MainViewModel)ctor!.Invoke(new object[]
+    {
+        new StubDialogService(),
+        wooScraper,
+        shopifyScraper,
+        wooHttp,
+        NullLogger<MainViewModel>.Instance
+    });
 
         var tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(tempDir);
@@ -868,20 +926,28 @@ public class MainViewModelTests
         using var wooScraper = new WooScraper();
         using var shopifyScraper = new ShopifyScraper(httpClient);
 
-        var ctor = typeof(MainViewModel).GetConstructor(
-            BindingFlags.NonPublic | BindingFlags.Instance,
-            binder: null,
-            new[] { typeof(IDialogService), typeof(WooScraper), typeof(ShopifyScraper), typeof(HttpClient) },
-            modifiers: null);
+    var ctor = typeof(MainViewModel).GetConstructor(
+        BindingFlags.NonPublic | BindingFlags.Instance,
+        binder: null,
+        new[]
+        {
+            typeof(IDialogService),
+            typeof(WooScraper),
+            typeof(ShopifyScraper),
+            typeof(HttpClient),
+            typeof(ILogger<MainViewModel>)
+        },
+        modifiers: null);
         Assert.NotNull(ctor);
 
-        var viewModel = (MainViewModel)ctor!.Invoke(new object[]
-        {
-            new StubDialogService(),
-            wooScraper,
-            shopifyScraper,
-            httpClient
-        });
+    var viewModel = (MainViewModel)ctor!.Invoke(new object[]
+    {
+        new StubDialogService(),
+        wooScraper,
+        shopifyScraper,
+        httpClient,
+        NullLogger<MainViewModel>.Instance
+    });
 
         var tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(tempDir);
