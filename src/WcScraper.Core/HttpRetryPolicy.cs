@@ -7,6 +7,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using WcScraper.Core.Telemetry;
 
 namespace WcScraper.Core;
 
@@ -188,12 +189,9 @@ public sealed class HttpRetryPolicy
 
     private void NotifyRetry(Action<HttpRetryAttempt>? onRetry, int attempt, TimeSpan delay, string reason)
     {
-        onRetry?.Invoke(new HttpRetryAttempt(attempt, delay, reason));
-        _logger.LogWarning(
-            "Retrying HTTP operation in {Delay} (attempt {Attempt}): {Reason}",
-            delay,
-            attempt,
-            reason);
+        var retryAttempt = new HttpRetryAttempt(attempt, delay, reason);
+        onRetry?.Invoke(retryAttempt);
+        _logger.LogRetryScheduled(delay, attempt, reason);
     }
 }
 
