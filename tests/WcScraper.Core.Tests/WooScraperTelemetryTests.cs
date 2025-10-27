@@ -6,6 +6,7 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using WcScraper.Core;
+using WcScraper.Core.Telemetry;
 using WcScraper.Core.Tests.Telemetry;
 using WcScraper.Wpf.Services;
 using Xunit;
@@ -45,14 +46,24 @@ public sealed class WooScraperTelemetryTests
         });
 
         using var httpClient = new HttpClient(handler);
-        var scraper = new WooScraper(httpClient, allowLegacyTls: false, loggerFactory: telemetry.LoggerFactory);
+        var instrumentationOptions = new ScraperInstrumentationOptions
+        {
+            LoggerFactory = telemetry.LoggerFactory
+        };
+
+        var scraper = new WooScraper(
+            httpClient,
+            allowLegacyTls: false,
+            loggerFactory: telemetry.LoggerFactory,
+            instrumentationOptions: instrumentationOptions);
 
         var progress = LoggerProgressAdapter.ForOperation(
             telemetry.CreateLogger<WooScraperTelemetryTests>(),
             callback: null,
             operationName: OperationName,
             url: requestUrl,
-            entityType: EntityType);
+            entityType: EntityType,
+            instrumentationOptions: instrumentationOptions);
 
         var products = await scraper.FetchStoreProductsAsync(baseUrl, perPage: 100, maxPages: 1, log: progress);
 
