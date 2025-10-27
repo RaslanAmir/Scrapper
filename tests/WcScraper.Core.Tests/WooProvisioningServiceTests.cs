@@ -10,6 +10,8 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using WcScraper.Core;
+using WcScraper.Core.Tests.Telemetry;
+using WcScraper.Wpf.Services;
 using Xunit;
 
 namespace WcScraper.Core.Tests;
@@ -151,6 +153,86 @@ public class WooProvisioningServiceTests
         }
 
         Assert.Contains(handler.Calls, call => call.Method == HttpMethod.Post && call.Path == "/wp-json/wc/v3/products");
+    }
+
+    [Fact]
+    public async Task ProgressAdapterContinuesLogging()
+    {
+        using var telemetry = new TelemetryTestContext();
+        using var service = new WooProvisioningService();
+
+        var fakeContext = new FakeSynchronizationContext();
+        var originalContext = SynchronizationContext.Current;
+        var legacyProgress = new List<string>();
+
+        try
+        {
+            SynchronizationContext.SetSynchronizationContext(fakeContext);
+
+            var progress = new Progress<string>(legacyProgress.Add);
+            var adapter = LoggerProgressAdapter.ForOperation(
+                telemetry.CreateLogger<WooProvisioningServiceTests>(),
+                progress.Report,
+                operationName: "WooProvisioningService.Provision",
+                url: "https://target.example",
+                entityType: "product");
+
+            var settings = new WooProvisioningSettings("https://target.example", "ck", "cs");
+
+            await service.ProvisionAsync(
+                settings,
+                Array.Empty<StoreProduct>(),
+                variableProducts: Array.Empty<ProvisioningVariableProduct>(),
+                progress: adapter);
+
+            fakeContext.ExecutePostedCallbacks();
+        }
+        finally
+        {
+            SynchronizationContext.SetSynchronizationContext(originalContext);
+        }
+
+        Assert.Equal(new[] { "No artifacts to provision." }, legacyProgress);
+        Assert.Equal(1, fakeContext.PostCount);
+
+        var logRecord = Assert.Single(telemetry.LoggerFactory.Logs.Where(record => record.EventId.Id == 5000));
+        Assert.Equal("No artifacts to provision.", logRecord.Message);
+        Assert.Contains(logRecord.State, pair =>
+            string.Equals(pair.Key, "ProgressMessage", StringComparison.Ordinal) &&
+            string.Equals(pair.Value as string, "No artifacts to provision.", StringComparison.Ordinal));
+
+        var scope = Assert.Contains(telemetry.LoggerFactory.Scopes, record =>
+            record.Values.TryGetValue("Operation", out var operation) &&
+            string.Equals(operation as string, "WooProvisioningService.Provision", StringComparison.Ordinal));
+        Assert.Equal("https://target.example", Assert.IsType<string>(scope.Values["Url"]));
+        Assert.Equal("product", Assert.IsType<string>(scope.Values["EntityType"]));
+    }
+
+    private sealed class FakeSynchronizationContext : SynchronizationContext
+    {
+        private readonly Queue<(SendOrPostCallback Callback, object? State)> _queue = new();
+
+        public int PostCount { get; private set; }
+
+        public override void Post(SendOrPostCallback d, object? state)
+        {
+            if (d is null)
+            {
+                throw new ArgumentNullException(nameof(d));
+            }
+
+            _queue.Enqueue((d, state));
+            PostCount++;
+        }
+
+        public void ExecutePostedCallbacks()
+        {
+            while (_queue.Count > 0)
+            {
+                var (callback, state) = _queue.Dequeue();
+                callback(state);
+            }
+        }
     }
 
     [Fact]
