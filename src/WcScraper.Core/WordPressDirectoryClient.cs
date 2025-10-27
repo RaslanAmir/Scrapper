@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.IO;
 using System.Net;
 using System.Net.Http;
@@ -9,6 +10,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using WcScraper.Core.Telemetry;
 
 namespace WcScraper.Core;
 
@@ -97,24 +99,56 @@ public sealed class WordPressDirectoryClient
         }
 
         var requestUri = BuildRequestUri(endpoint, action, slug);
+        var requestName = $"WordPressDirectory.{action}";
         _logger.LogDebug("Requesting WordPress directory entry for '{Slug}' via {Endpoint}", slug, endpoint);
-        using var response = await _retryPolicy.SendAsync(
-                () => _httpClient.GetAsync(requestUri, cancellationToken),
-                cancellationToken,
-                attempt => ReportRetry(log, slug, attempt))
-            .ConfigureAwait(false);
-        if (!response.IsSuccessStatusCode)
+
+        using var _ = _logger.BeginRequestScope(requestName, slug, requestUri);
+        _logger.RecordRequestStart(requestName, slug, requestUri);
+
+        var stopwatch = Stopwatch.StartNew();
+        var retryCount = 0;
+        HttpResponseMessage? response = null;
+
+        try
         {
-            if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
+            response = await _retryPolicy.SendAsync(
+                    () => _httpClient.GetAsync(requestUri, cancellationToken),
+                    cancellationToken,
+                    attempt =>
+                    {
+                        retryCount = attempt.AttemptNumber;
+                        _logger.RecordRetryAttempt(requestName, slug, attempt);
+                        ReportRetry(log, slug, attempt);
+                    })
+                .ConfigureAwait(false);
+
+            if (response.StatusCode == HttpStatusCode.NotFound)
             {
+                stopwatch.Stop();
+                _logger.RecordRequestSuccess(requestName, slug, stopwatch.Elapsed, retryCount, response.StatusCode);
                 return null;
             }
 
             response.EnsureSuccessStatusCode();
-        }
 
-        await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
-        return await parser(stream, cancellationToken).ConfigureAwait(false);
+            await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+            var entry = await parser(stream, cancellationToken).ConfigureAwait(false);
+
+            stopwatch.Stop();
+            _logger.RecordRequestSuccess(requestName, slug, stopwatch.Elapsed, retryCount, response.StatusCode);
+            return entry;
+        }
+        catch (Exception ex)
+        {
+            stopwatch.Stop();
+            var statusCode = response?.StatusCode ?? (ex as HttpRequestException)?.StatusCode;
+            _logger.RecordRequestFailure(requestName, slug, stopwatch.Elapsed, ex, retryCount, statusCode);
+            throw;
+        }
+        finally
+        {
+            response?.Dispose();
+        }
     }
 
     private static void ReportRetry(IProgress<string>? log, string slug, HttpRetryAttempt attempt)
