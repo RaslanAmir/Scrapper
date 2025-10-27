@@ -512,7 +512,7 @@ public class MainViewModelTests
 
         thread.SetApartmentState(ApartmentState.STA);
         thread.Start();
-        await completion.Task.ConfigureAwait(false);
+        await completion.Task;
     }
 
     [Fact]
