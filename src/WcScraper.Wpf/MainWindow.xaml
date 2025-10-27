@@ -4,8 +4,6 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
-        xmlns:vm="clr-namespace:WcScraper.Wpf.ViewModels"
-        xmlns:svc="clr-namespace:WcScraper.Wpf.Services"
         xmlns:models="clr-namespace:WcScraper.Wpf.Models"
         mc:Ignorable="d"
         Title="WC Local Scraper (WPF)" Height="580" Width="900"
@@ -21,13 +19,6 @@
             </Style.Triggers>
         </Style>
     </Window.Resources>
-    <Window.DataContext>
-        <vm:MainViewModel>
-            <vm:MainViewModel.Dialogs>
-                <svc:DialogService />
-            </vm:MainViewModel.Dialogs>
-        </vm:MainViewModel>
-    </Window.DataContext>
     <Grid Margin="12">
         <Grid.RowDefinitions>
             <RowDefinition Height="*"/>

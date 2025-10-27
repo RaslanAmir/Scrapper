@@ -6,13 +6,13 @@ using WcScraper.Core.Telemetry;
 
 namespace WcScraper.Wpf.Services;
 
-public sealed class LoggerProgressAdapter : IProgress<string>
+public sealed class LoggerProgressAdapter : IProgress<string>, ILogger
 {
     private static readonly EventId ProgressEvent = new(5000, nameof(LoggerProgressAdapter));
 
     private readonly ILogger _logger;
     private readonly Action<string>? _callback;
-    private readonly LogLevel _level;
+    private readonly LogLevel _defaultLevel;
     private readonly IReadOnlyList<KeyValuePair<string, object?>>? _additionalScope;
     private readonly IScraperInstrumentation? _instrumentation;
     private readonly ScraperOperationContext? _operationContext;
@@ -28,7 +28,7 @@ public sealed class LoggerProgressAdapter : IProgress<string>
     {
         _logger = logger ?? NullLogger.Instance;
         _callback = callback;
-        _level = level;
+        _defaultLevel = level;
 
         if (operationContext is { } context)
         {
@@ -73,50 +73,105 @@ public sealed class LoggerProgressAdapter : IProgress<string>
 
     public void Report(string value)
     {
-        if (value is null)
+        if (string.IsNullOrWhiteSpace(value))
         {
             return;
         }
 
-        _callback?.Invoke(value);
+        Log(_defaultLevel, ProgressEvent, value, null, static (state, _) => state);
+    }
 
-        void LogCore()
+    public IDisposable BeginScope<TState>(TState state)
+        => _logger.BeginScope(state);
+
+    public bool IsEnabled(LogLevel logLevel) => _logger.IsEnabled(logLevel);
+
+    public void Log<TState>(
+        LogLevel logLevel,
+        EventId eventId,
+        TState state,
+        Exception? exception,
+        Func<TState, Exception?, string> formatter)
+    {
+        if (formatter is null)
         {
-            if (string.IsNullOrWhiteSpace(value))
-            {
-                return;
-            }
+            throw new ArgumentNullException(nameof(formatter));
+        }
 
-            _logger.Log(_level, ProgressEvent, "{ProgressMessage}", value);
+        void WriteLog()
+        {
+            _logger.Log(logLevel, eventId, state, exception, formatter);
         }
 
         if (_operationContext is { } context && _instrumentation is { } instrumentation)
         {
             using (instrumentation.BeginScope(context))
             {
-                if (_additionalScope is { Count: > 0 })
-                {
-                    using (_logger.BeginScope(_additionalScope))
-                    {
-                        LogCore();
-                    }
-                }
-                else
-                {
-                    LogCore();
-                }
-            }
-        }
-        else if (_additionalScope is { Count: > 0 })
-        {
-            using (_logger.BeginScope(_additionalScope))
-            {
-                LogCore();
+                LogWithinAdditionalScope(WriteLog);
             }
         }
         else
         {
-            LogCore();
+            LogWithinAdditionalScope(WriteLog);
         }
+
+        if (_callback is null)
+        {
+            return;
+        }
+
+        var message = formatter(state, exception);
+        if (string.IsNullOrWhiteSpace(message) && exception is not null)
+        {
+            message = exception.Message;
+        }
+
+        if (string.IsNullOrWhiteSpace(message))
+        {
+            return;
+        }
+
+        if (exception is not null && !string.Equals(message, exception.Message, StringComparison.Ordinal))
+        {
+            message = $"{message}: {exception.Message}";
+        }
+
+        _callback(FormatUiMessage(logLevel, message));
+    }
+
+    private void LogWithinAdditionalScope(Action logAction)
+    {
+        if (_additionalScope is { Count: > 0 })
+        {
+            using (_logger.BeginScope(_additionalScope))
+            {
+                logAction();
+            }
+        }
+        else
+        {
+            logAction();
+        }
+    }
+
+    private static string FormatUiMessage(LogLevel level, string message)
+    {
+        var prefix = level switch
+        {
+            LogLevel.Trace => "TRACE",
+            LogLevel.Debug => "DEBUG",
+            LogLevel.Information => "INFO",
+            LogLevel.Warning => "WARN",
+            LogLevel.Error => "ERROR",
+            LogLevel.Critical => "CRITICAL",
+            _ => string.Empty
+        };
+
+        if (string.IsNullOrEmpty(prefix))
+        {
+            return message;
+        }
+
+        return $"[{prefix}] {message}";
     }
 }
