@@ -21,6 +21,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Input;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using WcScraper.Core;
 using WcScraper.Core.Exporters;
@@ -45,6 +46,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private readonly ChatAssistantService _chatAssistantService;
     private readonly ChatTranscriptStore _chatTranscriptStore;
     private readonly IArtifactIndexingService _artifactIndexingService;
+    private readonly ILogger<MainViewModel> _logger;
     private readonly string _settingsDirectory;
     private readonly string _preferencesPath;
     private readonly string _chatKeyPath;
@@ -168,13 +170,13 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private ChatInteractionMode _selectedChatMode = ChatInteractionMode.GeneralAssistant;
     private int _chatTranscriptLoadState;
 
-    public MainViewModel(IDialogService dialogs)
-        : this(dialogs, new WooScraper(), new ShopifyScraper(), new HttpClient())
+    public MainViewModel(IDialogService dialogs, ILogger<MainViewModel>? logger = null)
+        : this(dialogs, new WooScraper(), new ShopifyScraper(), new HttpClient(), logger)
     {
     }
 
-    internal MainViewModel(IDialogService dialogs, WooScraper wooScraper, ShopifyScraper shopifyScraper)
-        : this(dialogs, wooScraper, shopifyScraper, new HttpClient())
+    internal MainViewModel(IDialogService dialogs, WooScraper wooScraper, ShopifyScraper shopifyScraper, ILogger<MainViewModel>? logger = null)
+        : this(dialogs, wooScraper, shopifyScraper, new HttpClient(), logger)
     {
     }
 
@@ -182,7 +184,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
         IDialogService dialogs,
         WooScraper wooScraper,
         ShopifyScraper shopifyScraper,
-        HttpClient httpClient)
+        HttpClient httpClient,
+        ILogger<MainViewModel>? logger = null)
         : this(
             dialogs,
             wooScraper,
@@ -190,7 +193,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
             httpClient,
             new HeadlessBrowserScreenshotService(),
             CreateDefaultArtifactIndexingService(out var artifactIndexingService),
-            new ChatAssistantService(artifactIndexingService))
+            new ChatAssistantService(artifactIndexingService),
+            logger)
     {
     }
 
@@ -201,8 +205,10 @@ public sealed class MainViewModel : INotifyPropertyChanged
         HttpClient httpClient,
         HeadlessBrowserScreenshotService designScreenshotService,
         IArtifactIndexingService artifactIndexingService,
-        ChatAssistantService chatAssistantService)
+        ChatAssistantService chatAssistantService,
+        ILogger<MainViewModel>? logger = null)
     {
+        _logger = logger ?? NullLogger<MainViewModel>.Instance;
         _dialogs = dialogs;
         _wooScraper = wooScraper;
         _shopifyScraper = shopifyScraper;
@@ -3934,7 +3940,6 @@ public sealed class MainViewModel : INotifyPropertyChanged
             UpdateAiRecommendations(null);
             var baseOutputFolder = ResolveBaseOutputFolder();
             Directory.CreateDirectory(baseOutputFolder);
-            IProgress<string> logger = new Progress<string>(Append);
 
             var storeId = BuildStoreIdentifier(targetUrl);
             var storeOutputFolder = Path.Combine(baseOutputFolder, storeId);
@@ -3943,6 +3948,18 @@ public sealed class MainViewModel : INotifyPropertyChanged
             var timestamp = DateTime.UtcNow.ToString("yyyyMMdd_HHmmss");
 
             _latestStoreOutputFolder = storeOutputFolder;
+
+            var progressContext = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["StoreId"] = storeId,
+                ["Output"] = storeOutputFolder
+            };
+
+            IProgress<string> logger = CreateProgressLogger(
+                "ManualExport",
+                targetUrl,
+                SelectedPlatform.ToString(),
+                progressContext);
 
             _artifactIndexingService.ResetForRun(storeId, timestamp);
             UpdateChatConfigurationStatus();
@@ -6677,6 +6694,14 @@ public sealed class MainViewModel : INotifyPropertyChanged
         System.Windows.Application.Current?.Dispatcher.Invoke(() => Logs.Add(message));
     }
 
+    private LoggerProgressAdapter CreateProgressLogger(
+        string operationName,
+        string? url = null,
+        string? entityType = null,
+        IReadOnlyDictionary<string, object?>? additionalContext = null,
+        LogLevel level = LogLevel.Information) =>
+        LoggerProgressAdapter.ForOperation(_logger, Append, operationName, url, entityType, additionalContext, level);
+
     private sealed class UiScraperInstrumentation : IScraperInstrumentation
     {
         private readonly Action<string> _append;
@@ -8401,7 +8426,17 @@ public sealed class MainViewModel : INotifyPropertyChanged
         try
         {
             IsRunning = true;
-            IProgress<string> logger = new Progress<string>(Append);
+            var provisioningContext = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["ProductCount"] = _lastProvisioningContext.Products.Count,
+                ["TargetUrl"] = TargetStoreUrl
+            };
+
+            IProgress<string> logger = CreateProgressLogger(
+                "WooProvisioning",
+                TargetStoreUrl,
+                entityType: "WooCommerce",
+                additionalContext: provisioningContext);
             var settings = new WooProvisioningSettings(
                 TargetStoreUrl,
                 TargetConsumerKey,
