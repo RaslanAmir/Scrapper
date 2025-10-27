@@ -30,6 +30,7 @@ using WcScraper.Core.Telemetry;
 using WcScraper.Wpf.Models;
 using WcScraper.Wpf.Reporting;
 using WcScraper.Wpf.Services;
+using WcScraper.Wpf.Extensions;
 
 namespace WcScraper.Wpf.ViewModels;
 
@@ -46,6 +47,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private readonly ChatAssistantService _chatAssistantService;
     private readonly ChatTranscriptStore _chatTranscriptStore;
     private readonly IArtifactIndexingService _artifactIndexingService;
+    private readonly ILoggerFactory _loggerFactory;
     private readonly ILogger<MainViewModel> _logger;
     private readonly string _settingsDirectory;
     private readonly string _preferencesPath;
@@ -170,13 +172,23 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private ChatInteractionMode _selectedChatMode = ChatInteractionMode.GeneralAssistant;
     private int _chatTranscriptLoadState;
 
-    public MainViewModel(IDialogService dialogs, ILogger<MainViewModel>? logger = null)
-        : this(dialogs, new WooScraper(), new ShopifyScraper(), new HttpClient(), logger)
+    public MainViewModel(IDialogService dialogs, ILoggerFactory loggerFactory)
+        : this(
+            dialogs,
+            CreateDefaultWooScraper(loggerFactory),
+            CreateDefaultShopifyScraper(loggerFactory),
+            new HttpClient(),
+            loggerFactory)
     {
     }
 
-    internal MainViewModel(IDialogService dialogs, WooScraper wooScraper, ShopifyScraper shopifyScraper, ILogger<MainViewModel>? logger = null)
-        : this(dialogs, wooScraper, shopifyScraper, new HttpClient(), logger)
+    public MainViewModel()
+        : this(new WcScraper.Wpf.Services.DialogService(), NullLoggerFactory.Instance)
+    {
+    }
+
+    internal MainViewModel(IDialogService dialogs, WooScraper wooScraper, ShopifyScraper shopifyScraper, ILoggerFactory loggerFactory)
+        : this(dialogs, wooScraper, shopifyScraper, new HttpClient(), loggerFactory)
     {
     }
 
@@ -185,7 +197,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         WooScraper wooScraper,
         ShopifyScraper shopifyScraper,
         HttpClient httpClient,
-        ILogger<MainViewModel>? logger = null)
+        ILoggerFactory loggerFactory)
         : this(
             dialogs,
             wooScraper,
@@ -194,7 +206,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
             new HeadlessBrowserScreenshotService(),
             CreateDefaultArtifactIndexingService(out var artifactIndexingService),
             new ChatAssistantService(artifactIndexingService),
-            logger)
+            loggerFactory)
     {
     }
 
@@ -206,16 +218,22 @@ public sealed class MainViewModel : INotifyPropertyChanged
         HeadlessBrowserScreenshotService designScreenshotService,
         IArtifactIndexingService artifactIndexingService,
         ChatAssistantService chatAssistantService,
+        ILoggerFactory loggerFactory,
         ILogger<MainViewModel>? logger = null)
     {
-        _logger = logger ?? NullLogger<MainViewModel>.Instance;
-        _dialogs = dialogs;
-        _wooScraper = wooScraper;
-        _shopifyScraper = shopifyScraper;
-        _httpClient = httpClient;
+        _loggerFactory = loggerFactory ?? NullLoggerFactory.Instance;
+        _logger = logger ?? _loggerFactory.CreateLogger<MainViewModel>();
+        _dialogs = dialogs ?? throw new ArgumentNullException(nameof(dialogs));
+        _wooScraper = wooScraper ?? throw new ArgumentNullException(nameof(wooScraper));
+        _shopifyScraper = shopifyScraper ?? throw new ArgumentNullException(nameof(shopifyScraper));
+        _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
         _wooProvisioningService = new WooProvisioningService();
-        _uiInstrumentation = new UiScraperInstrumentation(Append);
-        _wpDirectoryClient = new WordPressDirectoryClient(_httpClient, instrumentation: _uiInstrumentation);
+        _uiInstrumentation = new UiScraperInstrumentation(Append, _loggerFactory);
+        _wpDirectoryClient = new WordPressDirectoryClient(
+            _httpClient,
+            instrumentation: _uiInstrumentation,
+            logger: _loggerFactory.CreateLogger<WordPressDirectoryClient>(),
+            loggerFactory: _loggerFactory);
         _designScreenshotService = designScreenshotService ?? throw new ArgumentNullException(nameof(designScreenshotService));
         _artifactIndexingService = artifactIndexingService ?? throw new ArgumentNullException(nameof(artifactIndexingService));
         _chatAssistantService = chatAssistantService ?? throw new ArgumentNullException(nameof(chatAssistantService));
@@ -280,6 +298,22 @@ public sealed class MainViewModel : INotifyPropertyChanged
             [nameof(ImportStoreConfiguration)] = (() => ImportStoreConfiguration, value => ImportStoreConfiguration = value),
             [nameof(EnableHttpRetries)] = (() => EnableHttpRetries, value => EnableHttpRetries = value),
         };
+    }
+
+    private static WooScraper CreateDefaultWooScraper(ILoggerFactory loggerFactory)
+    {
+        loggerFactory ??= NullLoggerFactory.Instance;
+        return new WooScraper(
+            logger: loggerFactory.CreateLogger<WooScraper>(),
+            loggerFactory: loggerFactory);
+    }
+
+    private static ShopifyScraper CreateDefaultShopifyScraper(ILoggerFactory loggerFactory)
+    {
+        loggerFactory ??= NullLoggerFactory.Instance;
+        return new ShopifyScraper(
+            logger: loggerFactory.CreateLogger<ShopifyScraper>(),
+            loggerFactory: loggerFactory);
     }
 
     private static IArtifactIndexingService CreateDefaultArtifactIndexingService(out IArtifactIndexingService service)
@@ -785,7 +819,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         return tokens;
     }
 
-    private (int? PageLimit, long? ByteLimit) GetPublicExtensionLimits(IProgress<string>? log)
+    private (int? PageLimit, long? ByteLimit) GetPublicExtensionLimits(ILogger? log)
     {
         var pageLimit = ParsePositiveInt(PublicExtensionMaxPages, out var pageInvalid);
         if (pageInvalid)
@@ -3816,14 +3850,15 @@ public sealed class MainViewModel : INotifyPropertyChanged
         };
     }
 
-    private async Task LoadFiltersForStoreAsync(string baseUrl, IProgress<string> logger)
+    private async Task LoadFiltersForStoreAsync(string baseUrl, ILogger logger)
     {
+        var progress = RequireProgressLogger(logger);
         try
         {
             if (SelectedPlatform == PlatformMode.WooCommerce)
             {
-                var cats = await _wooScraper.FetchProductCategoriesAsync(baseUrl, logger);
-                var tags = await _wooScraper.FetchProductTagsAsync(baseUrl, logger);
+                var cats = await _wooScraper.FetchProductCategoriesAsync(baseUrl, progress);
+                var tags = await _wooScraper.FetchProductTagsAsync(baseUrl, progress);
                 System.Windows.Application.Current?.Dispatcher.Invoke(() =>
                 {
                     CategoryChoices.Clear();
@@ -3835,8 +3870,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
             else
             {
                 var settings = BuildShopifySettings(baseUrl);
-                var collections = await _shopifyScraper.FetchCollectionsAsync(settings, logger);
-                var tags = await _shopifyScraper.FetchProductTagsAsync(settings, logger);
+                var collections = await _shopifyScraper.FetchCollectionsAsync(settings, progress);
+                var tags = await _shopifyScraper.FetchProductTagsAsync(settings, progress);
                 System.Windows.Application.Current?.Dispatcher.Invoke(() =>
                 {
                     CategoryChoices.Clear();
@@ -3913,7 +3948,11 @@ public sealed class MainViewModel : INotifyPropertyChanged
         var runGoals = ManualRunGoals?.Trim();
 
         var retrySettings = GetRetrySettings();
-        var retryPolicy = new HttpRetryPolicy(retrySettings.Attempts, retrySettings.BaseDelay, retrySettings.MaxDelay);
+        var retryPolicy = new HttpRetryPolicy(
+            retrySettings.Attempts,
+            retrySettings.BaseDelay,
+            retrySettings.MaxDelay,
+            logger: _loggerFactory.CreateLogger<HttpRetryPolicy>());
         _wooScraper.HttpPolicy = retryPolicy;
         _wpDirectoryClient.RetryPolicy = retryPolicy;
 
@@ -3955,17 +3994,18 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 ["Output"] = storeOutputFolder
             };
 
-            IProgress<string> logger = CreateProgressLogger(
+            var operationLogger = CreateOperationLogger(
                 "ManualExport",
                 targetUrl,
                 SelectedPlatform.ToString(),
                 progressContext);
+            var progressLogger = RequireProgressLogger(operationLogger);
 
             _artifactIndexingService.ResetForRun(storeId, timestamp);
             UpdateChatConfigurationStatus();
 
             // Refresh filters for this store
-            await LoadFiltersForStoreAsync(targetUrl, logger);
+            await LoadFiltersForStoreAsync(targetUrl, operationLogger);
 
             // Build filters
             string? categoryFilter = null;
@@ -4033,12 +4073,12 @@ public sealed class MainViewModel : INotifyPropertyChanged
             if (SelectedPlatform == PlatformMode.WooCommerce)
             {
                 Append($"Fetching products via Store API… {targetUrl}");
-                prods = await _wooScraper.FetchStoreProductsAsync(targetUrl, log: logger, categoryFilter: categoryFilter, tagFilter: tagFilter);
+                prods = await _wooScraper.FetchStoreProductsAsync(targetUrl, log: progressLogger, categoryFilter: categoryFilter, tagFilter: tagFilter);
 
                 if (prods.Count == 0)
                 {
                     Append("Store API empty. Trying WordPress REST fallback (basic fields)…");
-                    prods = await _wooScraper.FetchWpProductsBasicAsync(targetUrl, log: logger);
+                    prods = await _wooScraper.FetchWpProductsBasicAsync(targetUrl, log: progressLogger);
                 }
 
                 if (prods.Count == 0)
@@ -4056,7 +4096,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 }
                 else
                 {
-                    categoryTerms = await _wooScraper.FetchProductCategoriesAsync(targetUrl, logger);
+                    categoryTerms = await _wooScraper.FetchProductCategoriesAsync(targetUrl, progressLogger);
                 }
 
                 // Variations for variable products
@@ -4065,7 +4105,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 if (parentIds.Count > 0)
                 {
                     Append($"Fetching variations for {parentIds.Count} variable products…");
-                    variations = await _wooScraper.FetchStoreVariationsAsync(targetUrl, parentIds, log: logger);
+                    variations = await _wooScraper.FetchStoreVariationsAsync(targetUrl, parentIds, log: progressLogger);
                     Append($"Found {variations.Count} variations.");
                 }
             }
@@ -4073,7 +4113,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
             {
                 var settings = BuildShopifySettings(targetUrl);
                 Append($"Fetching products via Shopify API… {settings.BaseUrl}");
-                var rawProducts = await _shopifyScraper.FetchShopifyProductsAsync(settings, log: logger);
+                var rawProducts = await _shopifyScraper.FetchShopifyProductsAsync(settings, log: progressLogger);
                 var pairs = rawProducts
                     .Select(p => (Product: p, Store: ShopifyConverters.ToStoreProduct(p, settings)))
                     .ToList();
@@ -4134,7 +4174,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                     {
                         attemptedPluginFetch = true;
                         Append("Fetching installed plugins…");
-                        plugins = await _wooScraper.FetchPluginsAsync(targetUrl, WordPressUsername, WordPressApplicationPassword, logger);
+                        plugins = await _wooScraper.FetchPluginsAsync(targetUrl, WordPressUsername, WordPressApplicationPassword, progressLogger);
                         Append(plugins.Count > 0
                             ? $"Found {plugins.Count} plugins."
                             : "No plugins returned by the authenticated endpoint.");
@@ -4144,7 +4184,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                     {
                         attemptedThemeFetch = true;
                         Append("Fetching installed themes…");
-                        themes = await _wooScraper.FetchThemeAsync(targetUrl, WordPressUsername, WordPressApplicationPassword, logger);
+                        themes = await _wooScraper.FetchThemeAsync(targetUrl, WordPressUsername, WordPressApplicationPassword, progressLogger);
                         Append(themes.Count > 0
                             ? $"Found {themes.Count} themes."
                             : "No themes returned by the authenticated endpoint.");
@@ -4168,14 +4208,14 @@ public sealed class MainViewModel : INotifyPropertyChanged
                         Append($"Including {additionalEntryUrls.Count} additional page(s) for public asset detection.");
                     }
 
-                    var (pageLimit, byteLimit) = GetPublicExtensionLimits(logger);
+                    var (pageLimit, byteLimit) = GetPublicExtensionLimits(operationLogger);
                     aiAdditionalExtensionPages = additionalEntryUrls.ToList();
                     aiPublicExtensionPageLimit = pageLimit;
                     aiPublicExtensionByteLimit = byteLimit;
                     publicExtensionFootprints = await _wooScraper.FetchPublicExtensionFootprintsAsync(
                         targetUrl,
                         includeLinkedAssets: true,
-                        log: logger,
+                        log: progressLogger,
                         additionalEntryUrls: additionalEntryUrls,
                         maxPages: pageLimit,
                         maxBytes: byteLimit);
@@ -4183,7 +4223,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                     if (publicExtensionFootprints.Count > 0)
                     {
                         Append($"Detected {publicExtensionFootprints.Count} plugin/theme slug(s) from public assets (manual install required).");
-                        await EnrichPublicExtensionFootprintsAsync(publicExtensionFootprints, logger);
+                        await EnrichPublicExtensionFootprintsAsync(publicExtensionFootprints, operationLogger);
                         aiPublicExtensionInsights.AddRange(publicExtensionFootprints.Select(footprint =>
                         {
                             var sources = footprint.SourceUrls?.Where(url => !string.IsNullOrWhiteSpace(url))
@@ -4245,7 +4285,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                         Append($"Including {additionalDesignPages.Count} additional design page(s).");
                     }
 
-                    designSnapshot = await _wooScraper.FetchPublicDesignSnapshotAsync(targetUrl, logger, additionalDesignPages);
+                    designSnapshot = await _wooScraper.FetchPublicDesignSnapshotAsync(targetUrl, progressLogger, additionalDesignPages);
                     if (designSnapshot is null || string.IsNullOrWhiteSpace(designSnapshot.RawHtml))
                     {
                         Append("Public design snapshot capture returned no HTML.");
@@ -4306,28 +4346,28 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 {
                     attemptedCustomerFetch = true;
                     Append("Fetching customers…");
-                    customers = await _wooScraper.FetchCustomersAsync(targetUrl, WordPressUsername, WordPressApplicationPassword, logger);
+                    customers = await _wooScraper.FetchCustomersAsync(targetUrl, WordPressUsername, WordPressApplicationPassword, progressLogger);
                     Append(customers.Count > 0
                         ? $"Found {customers.Count} customers."
                         : "No customers returned by the authenticated endpoint.");
 
                     attemptedCouponFetch = true;
                     Append("Fetching coupons…");
-                    coupons = await _wooScraper.FetchCouponsAsync(targetUrl, WordPressUsername, WordPressApplicationPassword, logger);
+                    coupons = await _wooScraper.FetchCouponsAsync(targetUrl, WordPressUsername, WordPressApplicationPassword, progressLogger);
                     Append(coupons.Count > 0
                         ? $"Found {coupons.Count} coupons."
                         : "No coupons returned by the authenticated endpoint.");
 
                     attemptedOrderFetch = true;
                     Append("Fetching orders…");
-                    orders = await _wooScraper.FetchOrdersAsync(targetUrl, WordPressUsername, WordPressApplicationPassword, logger);
+                    orders = await _wooScraper.FetchOrdersAsync(targetUrl, WordPressUsername, WordPressApplicationPassword, progressLogger);
                     Append(orders.Count > 0
                         ? $"Found {orders.Count} orders."
                         : "No orders returned by the authenticated endpoint.");
 
                     attemptedSubscriptionFetch = true;
                     Append("Fetching subscriptions…");
-                    subscriptions = await _wooScraper.FetchSubscriptionsAsync(targetUrl, WordPressUsername, WordPressApplicationPassword, logger);
+                    subscriptions = await _wooScraper.FetchSubscriptionsAsync(targetUrl, WordPressUsername, WordPressApplicationPassword, progressLogger);
                     Append(subscriptions.Count > 0
                         ? $"Found {subscriptions.Count} subscriptions."
                         : "No subscriptions returned by the authenticated endpoint.");
@@ -4339,7 +4379,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 && !string.IsNullOrWhiteSpace(WordPressUsername)
                 && !string.IsNullOrWhiteSpace(WordPressApplicationPassword))
             {
-                wpSettingsSnapshot = await _wooScraper.FetchWordPressSettingsAsync(targetUrl, WordPressUsername, WordPressApplicationPassword, logger);
+                wpSettingsSnapshot = await _wooScraper.FetchWordPressSettingsAsync(targetUrl, WordPressUsername, WordPressApplicationPassword, progressLogger);
                 if (wpSettingsSnapshot.Count > 0)
                 {
                     Append($"Captured {wpSettingsSnapshot.Count} WordPress settings entries for extension option discovery.");
@@ -4349,37 +4389,37 @@ public sealed class MainViewModel : INotifyPropertyChanged
             if (SelectedPlatform == PlatformMode.WooCommerce && plugins.Count > 0)
             {
                 var pluginRoot = Path.Combine(storeOutputFolder, "plugins");
-                pluginBundles = await CapturePluginBundlesAsync(targetUrl, WordPressUsername, WordPressApplicationPassword, plugins, pluginRoot, wpSettingsSnapshot, logger);
+                pluginBundles = await CapturePluginBundlesAsync(targetUrl, WordPressUsername, WordPressApplicationPassword, plugins, pluginRoot, wpSettingsSnapshot, operationLogger);
             }
 
             if (SelectedPlatform == PlatformMode.WooCommerce && themes.Count > 0)
             {
                 var themeRoot = Path.Combine(storeOutputFolder, "themes");
-                themeBundles = await CaptureThemeBundlesAsync(targetUrl, WordPressUsername, WordPressApplicationPassword, themes, themeRoot, wpSettingsSnapshot, logger);
+                themeBundles = await CaptureThemeBundlesAsync(targetUrl, WordPressUsername, WordPressApplicationPassword, themes, themeRoot, wpSettingsSnapshot, operationLogger);
             }
 
             if (SelectedPlatform == PlatformMode.WooCommerce)
             {
                 Append("Fetching WordPress pages…");
-                pages = await _wooScraper.FetchWordPressPagesAsync(targetUrl, log: logger);
+                pages = await _wooScraper.FetchWordPressPagesAsync(targetUrl, log: progressLogger);
                 Append(pages.Count > 0
                     ? $"Captured {pages.Count} pages."
                     : "No pages returned by the REST API.");
 
                 Append("Fetching WordPress posts…");
-                posts = await _wooScraper.FetchWordPressPostsAsync(targetUrl, log: logger);
+                posts = await _wooScraper.FetchWordPressPostsAsync(targetUrl, log: progressLogger);
                 Append(posts.Count > 0
                     ? $"Captured {posts.Count} posts."
                     : "No posts returned by the REST API.");
 
                 Append("Fetching WordPress media library…");
-                mediaLibrary = await _wooScraper.FetchWordPressMediaAsync(targetUrl, log: logger);
+                mediaLibrary = await _wooScraper.FetchWordPressMediaAsync(targetUrl, log: progressLogger);
                 Append(mediaLibrary.Count > 0
                     ? $"Captured {mediaLibrary.Count} media entries."
                     : "No media entries returned by the REST API.");
 
                 Append("Discovering WordPress menus…");
-                menuCollection = await _wooScraper.FetchWordPressMenusAsync(targetUrl, log: logger);
+                menuCollection = await _wooScraper.FetchWordPressMenusAsync(targetUrl, log: progressLogger);
                 if (menuCollection is not null && menuCollection.Menus.Count > 0)
                 {
                     Append($"Captured {menuCollection.Menus.Count} menus from {menuCollection.Endpoint}.");
@@ -4392,7 +4432,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 if (!string.IsNullOrWhiteSpace(WordPressUsername) && !string.IsNullOrWhiteSpace(WordPressApplicationPassword))
                 {
                     Append("Fetching WordPress widgets…");
-                    widgets = await _wooScraper.FetchWordPressWidgetsAsync(targetUrl, WordPressUsername, WordPressApplicationPassword, logger);
+                    widgets = await _wooScraper.FetchWordPressWidgetsAsync(targetUrl, WordPressUsername, WordPressApplicationPassword, progressLogger);
                     Append(widgets.Widgets.Count > 0
                         ? $"Captured {widgets.Widgets.Count} widgets across {widgets.Areas.Count} areas."
                         : "No widgets returned by the REST API.");
@@ -4409,7 +4449,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 if (mediaLibrary.Count > 0)
                 {
                     Append($"Downloading media library to {mediaFolder}…");
-                    var downloadedMedia = await DownloadMediaLibraryAsync(mediaLibrary, mediaFolder, logger);
+                    var downloadedMedia = await DownloadMediaLibraryAsync(mediaLibrary, mediaFolder, operationLogger);
                     foreach (var pair in downloadedMedia)
                     {
                         mediaReferenceMap[pair.Key] = pair.Value;
@@ -4424,7 +4464,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 if (contentItems.Count > 0)
                 {
                     Append("Resolving content media references…");
-                    await PopulateContentMediaReferencesAsync(contentItems, mediaLibrary, mediaFolder, mediaReferenceMap, logger);
+                    await PopulateContentMediaReferencesAsync(contentItems, mediaLibrary, mediaFolder, mediaReferenceMap, operationLogger);
                 }
 
                 var contentFolder = Path.Combine(storeOutputFolder, "content");
@@ -4491,7 +4531,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 else
                 {
                     Append("Capturing store configuration…");
-                    configuration = await FetchStoreConfigurationAsync(targetUrl, WordPressUsername, WordPressApplicationPassword, logger);
+                    configuration = await FetchStoreConfigurationAsync(targetUrl, WordPressUsername, WordPressApplicationPassword, operationLogger);
                     if (configuration is not null && HasConfigurationData(configuration))
                     {
                         var configPath = Path.Combine(storeOutputFolder, $"{storeId}_{timestamp}_configuration.json");
@@ -4516,11 +4556,11 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
             var imagesFolder = Path.Combine(storeOutputFolder, "images");
             Directory.CreateDirectory(imagesFolder);
-            logger.Report($"Downloading product images to {imagesFolder}…");
+            operationLogger.Report($"Downloading product images to {imagesFolder}…");
 
             foreach (var product in prods)
             {
-                var relativePaths = await DownloadProductImagesAsync(product, imagesFolder, logger, mediaReferenceMap);
+                var relativePaths = await DownloadProductImagesAsync(product, imagesFolder, operationLogger, mediaReferenceMap);
                 product.ImageFilePaths = relativePaths;
                 if (rowsById.TryGetValue(product.Id, out var row))
                 {
@@ -4530,7 +4570,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
             foreach (var variation in variations)
             {
-                var relativePaths = await DownloadProductImagesAsync(variation, imagesFolder, logger, mediaReferenceMap);
+                var relativePaths = await DownloadProductImagesAsync(variation, imagesFolder, operationLogger, mediaReferenceMap);
                 variation.ImageFilePaths = relativePaths;
             }
 
@@ -5137,7 +5177,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 if (SelectedPlatform == PlatformMode.WooCommerce && prods.Count > 0 && prods[0].Prices is not null)
                 {
                     var ids = prods.Select(p => p.Id).Where(id => id > 0);
-                    var revs = await _wooScraper.FetchStoreReviewsAsync(targetUrl, ids, log: logger);
+                    var revs = await _wooScraper.FetchStoreReviewsAsync(targetUrl, ids, log: progressLogger);
                     if (revs.Count > 0)
                     {
                         var path = Path.Combine(storeOutputFolder, $"{storeId}_{timestamp}_reviews.csv");
@@ -5738,11 +5778,12 @@ public sealed class MainViewModel : INotifyPropertyChanged
         string baseUrl,
         string username,
         string applicationPassword,
-        IProgress<string> logger)
+        ILogger logger)
     {
         var configuration = new StoreConfiguration();
+        var progress = RequireProgressLogger(logger);
 
-        var settings = await _wooScraper.FetchStoreSettingsAsync(baseUrl, username, applicationPassword, logger);
+        var settings = await _wooScraper.FetchStoreSettingsAsync(baseUrl, username, applicationPassword, progress);
         if (settings.Count > 0)
         {
             configuration.StoreSettings.AddRange(settings);
@@ -5753,7 +5794,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
             logger.Report("No store settings returned or endpoint unavailable.");
         }
 
-        var zones = await _wooScraper.FetchShippingZonesAsync(baseUrl, username, applicationPassword, logger);
+        var zones = await _wooScraper.FetchShippingZonesAsync(baseUrl, username, applicationPassword, progress);
         if (zones.Count > 0)
         {
             configuration.ShippingZones.AddRange(zones);
@@ -5764,7 +5805,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
             logger.Report("No shipping zones returned or endpoint unavailable.");
         }
 
-        var gateways = await _wooScraper.FetchPaymentGatewaysAsync(baseUrl, username, applicationPassword, logger);
+        var gateways = await _wooScraper.FetchPaymentGatewaysAsync(baseUrl, username, applicationPassword, progress);
         if (gateways.Count > 0)
         {
             configuration.PaymentGateways.AddRange(gateways);
@@ -5792,10 +5833,11 @@ public sealed class MainViewModel : INotifyPropertyChanged
         List<InstalledPlugin> plugins,
         string rootFolder,
         IReadOnlyDictionary<string, JsonElement>? settingsSnapshot,
-        IProgress<string> logger)
+        ILogger logger)
     {
         var bundles = new List<ExtensionArtifact>();
         Directory.CreateDirectory(rootFolder);
+        var progress = RequireProgressLogger(logger);
 
         foreach (var plugin in plugins)
         {
@@ -5811,7 +5853,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 plugin.AssetManifest = null;
                 plugin.AssetPaths.Clear();
 
-                var options = await _wooScraper.FetchPluginOptionsAsync(baseUrl, username, applicationPassword, plugin, logger, settingsSnapshot);
+                var options = await _wooScraper.FetchPluginOptionsAsync(baseUrl, username, applicationPassword, plugin, progress, settingsSnapshot);
                 if (options.Count > 0)
                 {
                     foreach (var kvp in options)
@@ -5834,7 +5876,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                     }
                 }
 
-                var manifest = await _wooScraper.FetchPluginAssetManifestAsync(baseUrl, username, applicationPassword, plugin, logger);
+                var manifest = await _wooScraper.FetchPluginAssetManifestAsync(baseUrl, username, applicationPassword, plugin, progress);
                 if (manifest.Paths.Count > 0 || !string.IsNullOrWhiteSpace(manifest.ManifestJson))
                 {
                     if (manifest.Paths.Count > 0)
@@ -5871,7 +5913,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 }
 
                 var archivePath = Path.Combine(bundleFolder, "archive.zip");
-                var downloaded = await _wooScraper.DownloadPluginArchiveAsync(baseUrl, username, applicationPassword, plugin, archivePath, logger);
+                var downloaded = await _wooScraper.DownloadPluginArchiveAsync(baseUrl, username, applicationPassword, plugin, archivePath, progress);
                 if (!downloaded && File.Exists(archivePath))
                 {
                     File.Delete(archivePath);
@@ -5896,10 +5938,11 @@ public sealed class MainViewModel : INotifyPropertyChanged
         List<InstalledTheme> themes,
         string rootFolder,
         IReadOnlyDictionary<string, JsonElement>? settingsSnapshot,
-        IProgress<string> logger)
+        ILogger logger)
     {
         var bundles = new List<ExtensionArtifact>();
         Directory.CreateDirectory(rootFolder);
+        var progress = RequireProgressLogger(logger);
 
         foreach (var theme in themes)
         {
@@ -5915,7 +5958,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 theme.AssetManifest = null;
                 theme.AssetPaths.Clear();
 
-                var options = await _wooScraper.FetchThemeOptionsAsync(baseUrl, username, applicationPassword, theme, logger, settingsSnapshot);
+                var options = await _wooScraper.FetchThemeOptionsAsync(baseUrl, username, applicationPassword, theme, progress, settingsSnapshot);
                 if (options.Count > 0)
                 {
                     foreach (var kvp in options)
@@ -5938,7 +5981,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                     }
                 }
 
-                var manifest = await _wooScraper.FetchThemeAssetManifestAsync(baseUrl, username, applicationPassword, theme, logger);
+                var manifest = await _wooScraper.FetchThemeAssetManifestAsync(baseUrl, username, applicationPassword, theme, progress);
                 if (manifest.Paths.Count > 0 || !string.IsNullOrWhiteSpace(manifest.ManifestJson))
                 {
                     if (manifest.Paths.Count > 0)
@@ -5975,7 +6018,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 }
 
                 var archivePath = Path.Combine(bundleFolder, "archive.zip");
-                var downloaded = await _wooScraper.DownloadThemeArchiveAsync(baseUrl, username, applicationPassword, theme, archivePath, logger);
+                var downloaded = await _wooScraper.DownloadThemeArchiveAsync(baseUrl, username, applicationPassword, theme, archivePath, progress);
                 if (!downloaded && File.Exists(archivePath))
                 {
                     File.Delete(archivePath);
@@ -6041,7 +6084,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private async Task<string?> DownloadProductImagesAsync(
         StoreProduct product,
         string imagesFolder,
-        IProgress<string>? logger,
+        ILogger? logger,
         IDictionary<string, MediaReference>? mediaMap = null)
     {
         product.LocalImageFilePaths.Clear();
@@ -6117,7 +6160,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private async Task<Dictionary<string, MediaReference>> DownloadMediaLibraryAsync(
         List<WordPressMediaItem> mediaItems,
         string mediaRoot,
-        IProgress<string>? logger)
+        ILogger? logger)
     {
         var map = new Dictionary<string, MediaReference>(StringComparer.OrdinalIgnoreCase);
         foreach (var item in mediaItems)
@@ -6178,7 +6221,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         List<WordPressMediaItem> mediaLibrary,
         string mediaRoot,
         IDictionary<string, MediaReference> mediaMap,
-        IProgress<string>? logger)
+        ILogger? logger)
     {
         var existingByUrl = mediaLibrary
             .Where(m => !string.IsNullOrWhiteSpace(m.SourceUrl))
@@ -6232,7 +6275,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         }
     }
 
-    private async Task EnrichPublicExtensionFootprintsAsync(IList<PublicExtensionFootprint> footprints, IProgress<string> log)
+    private async Task EnrichPublicExtensionFootprintsAsync(IList<PublicExtensionFootprint> footprints, ILogger log)
     {
         if (footprints.Count == 0)
         {
@@ -6339,7 +6382,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         string url,
         string mediaRoot,
         IDictionary<string, MediaReference> mediaMap,
-        IProgress<string>? logger)
+        ILogger? logger)
     {
         if (string.IsNullOrWhiteSpace(url))
         {
@@ -6694,23 +6737,46 @@ public sealed class MainViewModel : INotifyPropertyChanged
         System.Windows.Application.Current?.Dispatcher.Invoke(() => Logs.Add(message));
     }
 
-    private LoggerProgressAdapter CreateProgressLogger(
+    private LoggerProgressAdapter CreateOperationLogger(
         string operationName,
         string? url = null,
         string? entityType = null,
         IReadOnlyDictionary<string, object?>? additionalContext = null,
-        LogLevel level = LogLevel.Information) =>
-        LoggerProgressAdapter.ForOperation(_logger, Append, operationName, url, entityType, additionalContext, level);
+        LogLevel level = LogLevel.Information)
+    {
+        var categoryName = string.IsNullOrWhiteSpace(operationName)
+            ? typeof(MainViewModel).FullName ?? nameof(MainViewModel)
+            : $"WcScraper.Wpf.Run.{operationName}";
+        var logger = _loggerFactory.CreateLogger(categoryName);
+        return LoggerProgressAdapter.ForOperation(logger, Append, operationName, url, entityType, additionalContext, level);
+    }
+
+    private static IProgress<string> RequireProgressLogger(ILogger logger)
+    {
+        if (logger is IProgress<string> progress)
+        {
+            return progress;
+        }
+
+        throw new ArgumentException("Logger must support progress reporting.", nameof(logger));
+    }
+
+    private static IProgress<string>? TryGetProgressLogger(ILogger? logger)
+        => logger is IProgress<string> progress ? progress : null;
 
     private sealed class UiScraperInstrumentation : IScraperInstrumentation
     {
         private readonly Action<string> _append;
         private readonly IScraperInstrumentation _inner;
 
-        public UiScraperInstrumentation(Action<string> append)
+        public UiScraperInstrumentation(Action<string> append, ILoggerFactory loggerFactory)
         {
             _append = append ?? throw new ArgumentNullException(nameof(append));
-            _inner = new ScraperInstrumentation(NullLogger.Instance);
+            loggerFactory ??= NullLoggerFactory.Instance;
+            _inner = ScraperInstrumentation.Create(new ScraperInstrumentationOptions
+            {
+                LoggerFactory = loggerFactory
+            });
         }
 
         public IDisposable BeginScope(ScraperOperationContext context) => _inner.BeginScope(context);
@@ -8432,11 +8498,12 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 ["TargetUrl"] = TargetStoreUrl
             };
 
-            IProgress<string> logger = CreateProgressLogger(
+            var operationLogger = CreateOperationLogger(
                 "WooProvisioning",
                 TargetStoreUrl,
                 entityType: "WooCommerce",
                 additionalContext: provisioningContext);
+            var progressLogger = RequireProgressLogger(operationLogger);
             var settings = new WooProvisioningSettings(
                 TargetStoreUrl,
                 TargetConsumerKey,
@@ -8462,13 +8529,13 @@ public sealed class MainViewModel : INotifyPropertyChanged
             if (_lastProvisioningContext.PluginBundles.Count > 0)
             {
                 Append($"Uploading {_lastProvisioningContext.PluginBundles.Count} plugin bundles…");
-                await _wooProvisioningService.UploadPluginsAsync(settings, _lastProvisioningContext.PluginBundles, logger);
+                await _wooProvisioningService.UploadPluginsAsync(settings, _lastProvisioningContext.PluginBundles, progressLogger);
             }
 
             if (_lastProvisioningContext.ThemeBundles.Count > 0)
             {
                 Append($"Uploading {_lastProvisioningContext.ThemeBundles.Count} theme bundles…");
-                await _wooProvisioningService.UploadThemesAsync(settings, _lastProvisioningContext.ThemeBundles, logger);
+                await _wooProvisioningService.UploadThemesAsync(settings, _lastProvisioningContext.ThemeBundles, progressLogger);
             }
 
             await _wooProvisioningService.ProvisionAsync(
@@ -8483,7 +8550,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 subscriptions: _lastProvisioningContext.Subscriptions,
                 siteContent: _lastProvisioningContext.SiteContent,
                 categoryMetadata: _lastProvisioningContext.ProductCategories,
-                progress: logger);
+                progress: progressLogger);
         }
         catch (Exception ex)
         {
