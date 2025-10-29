@@ -250,14 +250,26 @@ public sealed class MainViewModel : INotifyPropertyChanged
         _runPlanner.PlanQueued += OnRunPlanQueued;
         _runPlanner.PlanExecutionCompleted += OnRunPlanExecutionCompleted;
         BrowseCommand = new RelayCommand(OnBrowse);
-        RunCommand = new RelayCommand(async () => await OnRunAsync(), () => !IsRunning);
+        RunCommand = new RelayCommand(
+            async () =>
+            {
+                var cancellationToken = PrepareRunCancellationToken();
+                await OnRunAsync(cancellationToken);
+            },
+            () => !IsRunning);
         CancelRunCommand = new RelayCommand(OnCancelRun, () => _runCts is not null);
         SelectAllCategoriesCommand = new RelayCommand(() => SetSelection(CategoryChoices, true));
         ClearCategoriesCommand = new RelayCommand(() => SetSelection(CategoryChoices, false));
         SelectAllTagsCommand = new RelayCommand(() => SetSelection(TagChoices, true));
         ClearTagsCommand = new RelayCommand(() => SetSelection(TagChoices, false));
         ExportCollectionsCommand = new RelayCommand(OnExportCollections);
-        ReplicateCommand = new RelayCommand(async () => await OnReplicateStoreAsync(), () => !IsRunning && CanReplicate);
+        ReplicateCommand = new RelayCommand(
+            async () =>
+            {
+                var cancellationToken = PrepareRunCancellationToken();
+                await OnReplicateStoreAsync(cancellationToken);
+            },
+            () => !IsRunning && CanReplicate);
         OpenLogCommand = new RelayCommand(OnOpenLog);
         ExplainLogsCommand = new RelayCommand(async () => await OnExplainLatestLogsAsync(), CanExplainLogs);
         LaunchWizardCommand = new RelayCommand(OnLaunchWizard, CanLaunchWizard);
@@ -3687,7 +3699,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         }
     }
 
-    private async Task IndexArtifactIfSupportedAsync(string? filePath)
+    private async Task IndexArtifactIfSupportedAsync(string? filePath, CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(filePath))
         {
@@ -3696,7 +3708,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
         try
         {
-            await _artifactIndexingService.IndexArtifactAsync(filePath, CancellationToken.None).ConfigureAwait(false);
+            await _artifactIndexingService.IndexArtifactAsync(filePath, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -3927,7 +3939,9 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
         ApplyRunPlanOverrides(plan);
 
-        await OnRunAsync();
+        var cancellationToken = PrepareRunCancellationToken();
+
+        await OnRunAsync(cancellationToken);
 
         var outcome = _activeRunPlanOutcome ?? new RunPlanExecutionOutcome(true, "Run invoked.");
         _activeRunPlan = null;
@@ -3965,7 +3979,22 @@ public sealed class MainViewModel : INotifyPropertyChanged
         CancelRunCommand.RaiseCanExecuteChanged();
     }
 
-    private async Task OnRunAsync()
+    private CancellationToken PrepareRunCancellationToken()
+    {
+        var previousCts = _runCts;
+        if (previousCts is not null)
+        {
+            previousCts.Cancel();
+            previousCts.Dispose();
+        }
+
+        var runCts = new CancellationTokenSource();
+        _runCts = runCts;
+        RaiseRunCommandStates();
+        return runCts.Token;
+    }
+
+    private async Task OnRunAsync(CancellationToken cancellationToken)
     {
         var targetUrl = SelectedPlatform == PlatformMode.WooCommerce ? StoreUrl : ShopifyStoreUrl;
         if (string.IsNullOrWhiteSpace(targetUrl))
@@ -3986,18 +4015,6 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
         try
         {
-            var previousCts = _runCts;
-            if (previousCts is not null)
-            {
-                previousCts.Cancel();
-                previousCts.Dispose();
-            }
-
-            var runCts = new CancellationTokenSource();
-            _runCts = runCts;
-            RaiseRunCommandStates();
-            var cancellationToken = runCts.Token;
-
             var runGoals = ManualRunGoals?.Trim();
 
             var retrySettings = GetRetrySettings();
@@ -4057,6 +4074,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
             // Refresh filters for this store
             await LoadFiltersForStoreAsync(targetUrl, operationLogger, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
 
             // Build filters
             string? categoryFilter = null;
@@ -4139,6 +4157,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 }
 
                 Append($"Found {prods.Count} products.");
+                cancellationToken.ThrowIfCancellationRequested();
 
                 var lastCategoryTerms = _wooScraper.LastFetchedProductCategories;
                 if (lastCategoryTerms.Count > 0)
@@ -4158,6 +4177,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                     Append($"Fetching variations for {parentIds.Count} variable products…");
                     variations = await _wooScraper.FetchStoreVariationsAsync(targetUrl, parentIds, log: progressLogger, cancellationToken: cancellationToken);
                     Append($"Found {variations.Count} variations.");
+                    cancellationToken.ThrowIfCancellationRequested();
                 }
             }
             else
@@ -4204,6 +4224,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                     .ToList();
 
                 Append($"Found {prods.Count} products.");
+                cancellationToken.ThrowIfCancellationRequested();
             }
 
             var needsPluginInventory = ExportPluginsCsv || ExportPluginsJsonl;
@@ -4243,6 +4264,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 }
             }
 
+            cancellationToken.ThrowIfCancellationRequested();
+
             if (SelectedPlatform == PlatformMode.WooCommerce && ExportPublicExtensionFootprints)
             {
                 if (HasWordPressCredentials)
@@ -4275,7 +4298,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                     if (publicExtensionFootprints.Count > 0)
                     {
                         Append($"Detected {publicExtensionFootprints.Count} plugin/theme slug(s) from public assets (manual install required).");
-                        await EnrichPublicExtensionFootprintsAsync(publicExtensionFootprints, operationLogger);
+                        await EnrichPublicExtensionFootprintsAsync(publicExtensionFootprints, operationLogger, cancellationToken);
                         aiPublicExtensionInsights.AddRange(publicExtensionFootprints.Select(footprint =>
                         {
                             var sources = footprint.SourceUrls?.Where(url => !string.IsNullOrWhiteSpace(url))
@@ -4325,6 +4348,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 }
             }
 
+            cancellationToken.ThrowIfCancellationRequested();
+
             if (SelectedPlatform == PlatformMode.WooCommerce && ExportPublicDesignSnapshot)
             {
                 attemptedDesignSnapshot = true;
@@ -4358,6 +4383,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 }
             }
 
+            cancellationToken.ThrowIfCancellationRequested();
+
             if (SelectedPlatform == PlatformMode.WooCommerce && ExportPublicDesignScreenshots)
             {
                 try
@@ -4386,6 +4413,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
                     Append($"Design screenshot capture failed: {ex.Message}");
                 }
             }
+
+            cancellationToken.ThrowIfCancellationRequested();
 
             if (SelectedPlatform == PlatformMode.WooCommerce)
             {
@@ -4426,6 +4455,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 }
             }
 
+            cancellationToken.ThrowIfCancellationRequested();
+
             if (SelectedPlatform == PlatformMode.WooCommerce
                 && (plugins.Count > 0 || themes.Count > 0)
                 && !string.IsNullOrWhiteSpace(WordPressUsername)
@@ -4438,17 +4469,23 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 }
             }
 
+            cancellationToken.ThrowIfCancellationRequested();
+
             if (SelectedPlatform == PlatformMode.WooCommerce && plugins.Count > 0)
             {
                 var pluginRoot = Path.Combine(storeOutputFolder, "plugins");
                 pluginBundles = await CapturePluginBundlesAsync(targetUrl, WordPressUsername, WordPressApplicationPassword, plugins, pluginRoot, wpSettingsSnapshot, operationLogger, cancellationToken);
             }
 
+            cancellationToken.ThrowIfCancellationRequested();
+
             if (SelectedPlatform == PlatformMode.WooCommerce && themes.Count > 0)
             {
                 var themeRoot = Path.Combine(storeOutputFolder, "themes");
                 themeBundles = await CaptureThemeBundlesAsync(targetUrl, WordPressUsername, WordPressApplicationPassword, themes, themeRoot, wpSettingsSnapshot, operationLogger, cancellationToken);
             }
+
+            cancellationToken.ThrowIfCancellationRequested();
 
             if (SelectedPlatform == PlatformMode.WooCommerce)
             {
@@ -4501,7 +4538,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 if (mediaLibrary.Count > 0)
                 {
                     Append($"Downloading media library to {mediaFolder}…");
-                    var downloadedMedia = await DownloadMediaLibraryAsync(mediaLibrary, mediaFolder, operationLogger);
+                    var downloadedMedia = await DownloadMediaLibraryAsync(mediaLibrary, mediaFolder, operationLogger, cancellationToken);
                     foreach (var pair in downloadedMedia)
                     {
                         mediaReferenceMap[pair.Key] = pair.Value;
@@ -4516,7 +4553,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 if (contentItems.Count > 0)
                 {
                     Append("Resolving content media references…");
-                    await PopulateContentMediaReferencesAsync(contentItems, mediaLibrary, mediaFolder, mediaReferenceMap, operationLogger);
+                    await PopulateContentMediaReferencesAsync(contentItems, mediaLibrary, mediaFolder, mediaReferenceMap, operationLogger, cancellationToken);
                 }
 
                 var contentFolder = Path.Combine(storeOutputFolder, "content");
@@ -4526,7 +4563,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 {
                     var pagePath = Path.Combine(contentFolder, $"{storeId}_{timestamp}_pages.json");
                     var json = JsonSerializer.Serialize(pages, _artifactWriteOptions);
-                    await File.WriteAllTextAsync(pagePath, json, Encoding.UTF8);
+                    await File.WriteAllTextAsync(pagePath, json, Encoding.UTF8, cancellationToken);
                     Append($"Wrote {pagePath}");
                 }
 
@@ -4534,7 +4571,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 {
                     var postPath = Path.Combine(contentFolder, $"{storeId}_{timestamp}_posts.json");
                     var json = JsonSerializer.Serialize(posts, _artifactWriteOptions);
-                    await File.WriteAllTextAsync(postPath, json, Encoding.UTF8);
+                    await File.WriteAllTextAsync(postPath, json, Encoding.UTF8, cancellationToken);
                     Append($"Wrote {postPath}");
                 }
 
@@ -4542,7 +4579,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 {
                     var mediaPath = Path.Combine(contentFolder, $"{storeId}_{timestamp}_media.json");
                     var json = JsonSerializer.Serialize(mediaLibrary, _artifactWriteOptions);
-                    await File.WriteAllTextAsync(mediaPath, json, Encoding.UTF8);
+                    await File.WriteAllTextAsync(mediaPath, json, Encoding.UTF8, cancellationToken);
                     Append($"Wrote {mediaPath}");
                 }
 
@@ -4550,7 +4587,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 {
                     var menuPath = Path.Combine(contentFolder, $"{storeId}_{timestamp}_menus.json");
                     var json = JsonSerializer.Serialize(menuCollection, _artifactWriteOptions);
-                    await File.WriteAllTextAsync(menuPath, json, Encoding.UTF8);
+                    await File.WriteAllTextAsync(menuPath, json, Encoding.UTF8, cancellationToken);
                     Append($"Wrote {menuPath}");
                 }
 
@@ -4558,7 +4595,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 {
                     var widgetPath = Path.Combine(contentFolder, $"{storeId}_{timestamp}_widgets.json");
                     var json = JsonSerializer.Serialize(widgets, _artifactWriteOptions);
-                    await File.WriteAllTextAsync(widgetPath, json, Encoding.UTF8);
+                    await File.WriteAllTextAsync(widgetPath, json, Encoding.UTF8, cancellationToken);
                     Append($"Wrote {widgetPath}");
                 }
 
@@ -4572,6 +4609,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
                     MediaRootDirectory = mediaFolder
                 };
             }
+
+            cancellationToken.ThrowIfCancellationRequested();
 
             if (SelectedPlatform == PlatformMode.WooCommerce && ExportStoreConfiguration)
             {
@@ -4588,7 +4627,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                     {
                         var configPath = Path.Combine(storeOutputFolder, $"{storeId}_{timestamp}_configuration.json");
                         var json = JsonSerializer.Serialize(configuration, _configurationWriteOptions);
-                        await File.WriteAllTextAsync(configPath, json, Encoding.UTF8);
+                        await File.WriteAllTextAsync(configPath, json, Encoding.UTF8, cancellationToken);
                         Append($"Wrote {configPath}");
                     }
                     else
@@ -4597,6 +4636,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
                     }
                 }
             }
+
+            cancellationToken.ThrowIfCancellationRequested();
 
             // Generic rows projection
             var genericRows = Mappers.ToGenericRows(prods).ToList();
@@ -4612,7 +4653,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
             foreach (var product in prods)
             {
-                var relativePaths = await DownloadProductImagesAsync(product, imagesFolder, operationLogger, mediaReferenceMap);
+                var relativePaths = await DownloadProductImagesAsync(product, imagesFolder, operationLogger, mediaReferenceMap, cancellationToken);
                 product.ImageFilePaths = relativePaths;
                 if (rowsById.TryGetValue(product.Id, out var row))
                 {
@@ -4622,9 +4663,11 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
             foreach (var variation in variations)
             {
-                var relativePaths = await DownloadProductImagesAsync(variation, imagesFolder, operationLogger, mediaReferenceMap);
+                var relativePaths = await DownloadProductImagesAsync(variation, imagesFolder, operationLogger, mediaReferenceMap, cancellationToken);
                 variation.ImageFilePaths = relativePaths;
             }
+
+            cancellationToken.ThrowIfCancellationRequested();
 
             // Project generic rows lazily so CSV/JSONL exporters can stream directly without materializing.
             var genericDicts = genericRows.Select(r => new Dictionary<string, object?>
@@ -4675,7 +4718,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 var path = Path.Combine(storeOutputFolder, $"{storeId}_{timestamp}_products.csv");
                 CsvExporter.Write(path, genericDicts, DetermineFlushCadence(genericRows.Count));
                 Append($"Wrote {path}");
-                await IndexArtifactIfSupportedAsync(path);
+                await IndexArtifactIfSupportedAsync(path, cancellationToken);
             }
             if (ExportXlsx)
             {
@@ -4691,7 +4734,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 var path = Path.Combine(storeOutputFolder, $"{storeId}_{timestamp}_products.jsonl");
                 JsonlExporter.Write(path, genericDicts, DetermineFlushCadence(genericRows.Count));
                 Append($"Wrote {path}");
-                await IndexArtifactIfSupportedAsync(path);
+                await IndexArtifactIfSupportedAsync(path, cancellationToken);
             }
 
             if (SelectedPlatform == PlatformMode.WooCommerce && ExportPluginsCsv)
@@ -4701,7 +4744,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                     var path = Path.Combine(storeOutputFolder, $"{storeId}_{timestamp}_plugins.csv");
                     CsvExporter.WritePlugins(path, plugins, DetermineFlushCadence(plugins.Count));
                     Append($"Wrote {path}");
-                    await IndexArtifactIfSupportedAsync(path);
+                    await IndexArtifactIfSupportedAsync(path, cancellationToken);
                 }
                 else if (attemptedPluginFetch)
                 {
@@ -4716,7 +4759,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                     var path = Path.Combine(storeOutputFolder, $"{storeId}_{timestamp}_plugins.jsonl");
                     JsonlExporter.WritePlugins(path, plugins, DetermineFlushCadence(plugins.Count));
                     Append($"Wrote {path}");
-                    await IndexArtifactIfSupportedAsync(path);
+                    await IndexArtifactIfSupportedAsync(path, cancellationToken);
                 }
                 else if (attemptedPluginFetch)
                 {
@@ -4731,7 +4774,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                     var path = Path.Combine(storeOutputFolder, $"{storeId}_{timestamp}_themes.csv");
                     CsvExporter.WriteThemes(path, themes, DetermineFlushCadence(themes.Count));
                     Append($"Wrote {path}");
-                    await IndexArtifactIfSupportedAsync(path);
+                    await IndexArtifactIfSupportedAsync(path, cancellationToken);
                 }
                 else if (attemptedThemeFetch)
                 {
@@ -4746,7 +4789,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                     var path = Path.Combine(storeOutputFolder, $"{storeId}_{timestamp}_themes.jsonl");
                     JsonlExporter.WriteThemes(path, themes, DetermineFlushCadence(themes.Count));
                     Append($"Wrote {path}");
-                    await IndexArtifactIfSupportedAsync(path);
+                    await IndexArtifactIfSupportedAsync(path, cancellationToken);
                 }
                 else if (attemptedThemeFetch)
                 {
@@ -4780,11 +4823,11 @@ public sealed class MainViewModel : INotifyPropertyChanged
                     CsvExporter.Write(csvPath, rows);
                     var limitNote = BuildPublicExtensionLimitNote(publicExtensionDetection);
                     Append($"Wrote {csvPath} (includes asset URLs and version cues when available; manual install required).{limitNote}");
-                    await IndexArtifactIfSupportedAsync(csvPath);
+                    await IndexArtifactIfSupportedAsync(csvPath, cancellationToken);
 
                     var jsonPath = Path.Combine(storeOutputFolder, $"{storeId}_{timestamp}_public_extension_footprints.json");
                     var json = JsonSerializer.Serialize(publicExtensionFootprints, _artifactWriteOptions);
-                    await File.WriteAllTextAsync(jsonPath, json, Encoding.UTF8);
+                    await File.WriteAllTextAsync(jsonPath, json, Encoding.UTF8, cancellationToken);
                     Append($"Wrote {jsonPath} (includes asset URLs and version cues when available; manual install required).{limitNote}");
                 }
                 else if (attemptedPublicExtensionFootprintFetch)
@@ -4808,16 +4851,16 @@ public sealed class MainViewModel : INotifyPropertyChanged
                     Directory.CreateDirectory(assetsRoot);
 
                     var htmlPath = Path.Combine(designRoot, "homepage.html");
-                    await File.WriteAllTextAsync(htmlPath, designSnapshot.RawHtml, Encoding.UTF8);
+                    await File.WriteAllTextAsync(htmlPath, designSnapshot.RawHtml, Encoding.UTF8, cancellationToken);
                     Append($"Wrote {htmlPath}");
 
                     var cssPath = Path.Combine(designRoot, "inline-styles.css");
-                    await File.WriteAllTextAsync(cssPath, designSnapshot.InlineCss, Encoding.UTF8);
+                    await File.WriteAllTextAsync(cssPath, designSnapshot.InlineCss, Encoding.UTF8, cancellationToken);
                     Append($"Wrote {cssPath}");
 
                     var fontsPath = Path.Combine(designRoot, "fonts.json");
                     var fontsJson = JsonSerializer.Serialize(designSnapshot.FontUrls, _artifactWriteOptions);
-                    await File.WriteAllTextAsync(fontsPath, fontsJson, Encoding.UTF8);
+                    await File.WriteAllTextAsync(fontsPath, fontsJson, Encoding.UTF8, cancellationToken);
                     Append($"Wrote {fontsPath}");
 
                     if (designSnapshot.ColorSwatches.Count > 0)
@@ -4834,13 +4877,13 @@ public sealed class MainViewModel : INotifyPropertyChanged
                             csvBuilder.AppendLine(swatch.Count.ToString(CultureInfo.InvariantCulture));
                         }
 
-                        await File.WriteAllTextAsync(colorsCsvPath, csvBuilder.ToString(), Encoding.UTF8);
+                        await File.WriteAllTextAsync(colorsCsvPath, csvBuilder.ToString(), Encoding.UTF8, cancellationToken);
                         Append($"Wrote {colorsCsvPath}");
-                        await IndexArtifactIfSupportedAsync(colorsCsvPath);
+                        await IndexArtifactIfSupportedAsync(colorsCsvPath, cancellationToken);
 
                         var colorsJsonPath = Path.Combine(designRoot, "colors.json");
                         var colorsJson = JsonSerializer.Serialize(designSnapshot.ColorSwatches, _artifactWriteOptions);
-                        await File.WriteAllTextAsync(colorsJsonPath, colorsJson, Encoding.UTF8);
+                        await File.WriteAllTextAsync(colorsJsonPath, colorsJson, Encoding.UTF8, cancellationToken);
                         Append($"Wrote {colorsJsonPath}");
 
                         aiColorPalette.AddRange(designSnapshot.ColorSwatches.Select(swatch =>
@@ -4873,7 +4916,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                             ? stylesheet!.Content
                             : Encoding.UTF8.GetBytes(stylesheet?.TextContent ?? string.Empty);
 
-                        await File.WriteAllBytesAsync(assetPath, content);
+                        await File.WriteAllBytesAsync(assetPath, content, cancellationToken);
                         Append($"Wrote {assetPath}");
 
                         var fileSize = content.Length;
@@ -4925,7 +4968,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                         var assetPath = Path.Combine(assetsRoot, fileName);
                         var content = font?.Content ?? Array.Empty<byte>();
 
-                        await File.WriteAllBytesAsync(assetPath, content);
+                        await File.WriteAllBytesAsync(assetPath, content, cancellationToken);
                         Append($"Wrote {assetPath}");
 
                         var fileSize = content.Length;
@@ -4980,7 +5023,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                         var assetPath = Path.Combine(assetsRoot, fileName);
                         var content = image?.Content ?? Array.Empty<byte>();
 
-                        await File.WriteAllBytesAsync(assetPath, content);
+                        await File.WriteAllBytesAsync(assetPath, content, cancellationToken);
                         Append($"Wrote {assetPath}");
 
                         var fileSize = content.Length;
@@ -5050,7 +5093,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                             var iconPath = Path.Combine(iconsRoot, fileName);
                             var content = icon?.Content ?? Array.Empty<byte>();
 
-                            await File.WriteAllBytesAsync(iconPath, content);
+                            await File.WriteAllBytesAsync(iconPath, content, cancellationToken);
                             Append($"Wrote {iconPath}");
 
                             var fileSize = content.Length;
@@ -5163,7 +5206,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
                     var manifestPath = Path.Combine(designRoot, "assets-manifest.json");
                     var manifestJson = JsonSerializer.Serialize(manifest, _artifactWriteOptions);
-                    await File.WriteAllTextAsync(manifestPath, manifestJson, Encoding.UTF8);
+                    await File.WriteAllTextAsync(manifestPath, manifestJson, Encoding.UTF8, cancellationToken);
                     Append($"Wrote {manifestPath}");
 
                     aiDesignManifestJsonPath = TryGetStoreRelativePath(storeOutputFolder, manifestPath);
@@ -5198,9 +5241,9 @@ public sealed class MainViewModel : INotifyPropertyChanged
                         }));
                     }
 
-                    await File.WriteAllTextAsync(manifestCsvPath, manifestCsvBuilder.ToString(), Encoding.UTF8);
+                    await File.WriteAllTextAsync(manifestCsvPath, manifestCsvBuilder.ToString(), Encoding.UTF8, cancellationToken);
                     Append($"Wrote {manifestCsvPath}");
-                    await IndexArtifactIfSupportedAsync(manifestCsvPath);
+                    await IndexArtifactIfSupportedAsync(manifestCsvPath, cancellationToken);
 
                     aiDesignManifestCsvPath = TryGetStoreRelativePath(storeOutputFolder, manifestCsvPath);
                 }
@@ -5218,7 +5261,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 var path = Path.Combine(storeOutputFolder, $"{storeId}_{timestamp}_shopify_products.csv");
                 CsvExporter.Write(path, rows);
                 Append($"Wrote {path}");
-                await IndexArtifactIfSupportedAsync(path);
+                await IndexArtifactIfSupportedAsync(path, cancellationToken);
             }
 
             if (ExportWoo)
@@ -5232,7 +5275,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 var path = Path.Combine(storeOutputFolder, $"{storeId}_{timestamp}_woocommerce_products.csv");
                 CsvExporter.Write(path, rows);
                 Append($"Wrote {path}");
-                await IndexArtifactIfSupportedAsync(path);
+                await IndexArtifactIfSupportedAsync(path, cancellationToken);
             }
 
             if (ExportReviews)
@@ -5254,7 +5297,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                             ["date_created"] = r.DateCreated
                         }));
                         Append($"Wrote {path} ({revs.Count} rows)");
-                        await IndexArtifactIfSupportedAsync(path);
+                        await IndexArtifactIfSupportedAsync(path, cancellationToken);
                     }
                     else
                     {
@@ -5275,7 +5318,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 {
                     var path = Path.Combine(storeOutputFolder, $"{storeId}_{timestamp}_customers.json");
                     var json = JsonSerializer.Serialize(customers, _artifactWriteOptions);
-                    await File.WriteAllTextAsync(path, json, Encoding.UTF8);
+                    await File.WriteAllTextAsync(path, json, Encoding.UTF8, cancellationToken);
                     Append($"Wrote {path}");
                 }
                 else if (attemptedCustomerFetch)
@@ -5287,7 +5330,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 {
                     var path = Path.Combine(storeOutputFolder, $"{storeId}_{timestamp}_coupons.json");
                     var json = JsonSerializer.Serialize(coupons, _artifactWriteOptions);
-                    await File.WriteAllTextAsync(path, json, Encoding.UTF8);
+                    await File.WriteAllTextAsync(path, json, Encoding.UTF8, cancellationToken);
                     Append($"Wrote {path}");
                 }
                 else if (attemptedCouponFetch)
@@ -5299,7 +5342,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 {
                     var path = Path.Combine(storeOutputFolder, $"{storeId}_{timestamp}_orders.json");
                     var json = JsonSerializer.Serialize(orders, _artifactWriteOptions);
-                    await File.WriteAllTextAsync(path, json, Encoding.UTF8);
+                    await File.WriteAllTextAsync(path, json, Encoding.UTF8, cancellationToken);
                     Append($"Wrote {path}");
                 }
                 else if (attemptedOrderFetch)
@@ -5311,7 +5354,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 {
                     var path = Path.Combine(storeOutputFolder, $"{storeId}_{timestamp}_subscriptions.json");
                     var json = JsonSerializer.Serialize(subscriptions, _artifactWriteOptions);
-                    await File.WriteAllTextAsync(path, json, Encoding.UTF8);
+                    await File.WriteAllTextAsync(path, json, Encoding.UTF8, cancellationToken);
                     Append($"Wrote {path}");
                 }
                 else if (attemptedSubscriptionFetch)
@@ -5431,6 +5474,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
             string? automationSummary = null;
             string? automationError = null;
 
+            cancellationToken.ThrowIfCancellationRequested();
+
             if (chatSession is null)
             {
                 automationError = "Configure the assistant to generate automation scripts before running.";
@@ -5444,7 +5489,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                         chatSession,
                         runSnapshotJson,
                         runGoals,
-                        CancellationToken.None);
+                        cancellationToken);
 
                     if (!string.IsNullOrWhiteSpace(scriptResult.Summary))
                     {
@@ -5482,7 +5527,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
                             var fileName = ResolveAutomationScriptFileName(script, index++, usedNames);
                             var scriptPath = Path.Combine(scriptsFolder, fileName);
-                            await File.WriteAllTextAsync(scriptPath, script.Content, Encoding.UTF8);
+                            await File.WriteAllTextAsync(scriptPath, script.Content, Encoding.UTF8, cancellationToken);
                             Append($"Automation script saved: {scriptPath}");
 
                             var relativePath = TryGetStoreRelativePath(storeOutputFolder, scriptPath) ?? scriptPath;
@@ -5563,6 +5608,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 }
             });
 
+            cancellationToken.ThrowIfCancellationRequested();
+
             string? deltaNarrativePath = null;
             string? deltaRelativePath = null;
             string? deltaDataPath = null;
@@ -5589,7 +5636,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                     }
 
                     deltaDataPath = Path.Combine(storeOutputFolder, RunDeltaDataFileName);
-                    await File.WriteAllTextAsync(deltaDataPath, runDeltaJson, Encoding.UTF8);
+                    await File.WriteAllTextAsync(deltaDataPath, runDeltaJson, Encoding.UTF8, cancellationToken);
                     Append($"Run delta data: {deltaDataPath}");
 
                     string? aiDeltaNarrative = null;
@@ -5600,7 +5647,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                             aiDeltaNarrative = await _chatAssistantService.SummarizeRunDeltaAsync(
                                 chatSession,
                                 runDeltaJson,
-                                CancellationToken.None);
+                                cancellationToken);
                         }
                         catch (Exception ex)
                         {
@@ -5619,7 +5666,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                     {
                         var trimmedDelta = aiDeltaNarrative.Trim();
                         deltaNarrativePath = Path.Combine(storeOutputFolder, RunDeltaNarrativeFileName);
-                        await File.WriteAllTextAsync(deltaNarrativePath, trimmedDelta, Encoding.UTF8);
+                        await File.WriteAllTextAsync(deltaNarrativePath, trimmedDelta, Encoding.UTF8, cancellationToken);
                         Append($"Run delta summary: {deltaNarrativePath}");
                         deltaRelativePath = TryGetStoreRelativePath(storeOutputFolder, deltaNarrativePath)
                             ?? RunDeltaNarrativeFileName;
@@ -5632,6 +5679,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
             {
                 reportContext = reportContext with { RunDeltaNarrativeRelativePath = deltaRelativePath };
             }
+
+            cancellationToken.ThrowIfCancellationRequested();
 
             var entityCounts = BuildEntityCounts(
                 prods,
@@ -5653,10 +5702,10 @@ public sealed class MainViewModel : INotifyPropertyChanged
             ExecuteOnUiThread(() => LatestRunSnapshotJson = refreshedSnapshotJson);
 
             var reportBuilder = new ManualMigrationReportBuilder(_chatAssistantService);
-            var reportResult = await reportBuilder.BuildAsync(reportContext, chatSession, CancellationToken.None);
+            var reportResult = await reportBuilder.BuildAsync(reportContext, chatSession, cancellationToken);
             var report = reportResult.ReportMarkdown;
             var reportPath = Path.Combine(storeOutputFolder, "manual-migration-report.md");
-            await File.WriteAllTextAsync(reportPath, report, Encoding.UTF8);
+            await File.WriteAllTextAsync(reportPath, report, Encoding.UTF8, cancellationToken);
             Append($"Manual migration report: {reportPath}");
             _latestManualReportPath = reportPath;
 
@@ -5674,15 +5723,15 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 await TryAnnotateManualReportAsync(reportPath, manualBundleArchivePath);
             }
 
-                if (chatSession is not null)
+            if (chatSession is not null)
+            {
+                try
                 {
-                    try
-                    {
-                        var verificationResult = await _chatAssistantService.VerifyExportsAsync(
+                    var verificationResult = await _chatAssistantService.VerifyExportsAsync(
                             chatSession,
                             reportContext,
                             reportContext.FileSystemStats?.Directories ?? Array.Empty<ManualMigrationDirectorySnapshot>(),
-                            CancellationToken.None);
+                            cancellationToken);
 
                     if (verificationResult is not null)
                     {
@@ -5692,7 +5741,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
                         var verificationMarkdown = BuildExportVerificationMarkdown(verificationResult);
                         exportVerificationPath = Path.Combine(storeOutputFolder, ExportVerificationFileName);
-                        await File.WriteAllTextAsync(exportVerificationPath, verificationMarkdown, Encoding.UTF8);
+                        await File.WriteAllTextAsync(exportVerificationPath, verificationMarkdown, Encoding.UTF8, cancellationToken);
                         Append($"AI export verification: {exportVerificationPath}");
                         Append($"AI export verification summary: {verificationResult.Summary}");
 
@@ -5749,20 +5798,22 @@ public sealed class MainViewModel : INotifyPropertyChanged
                         Append($"AI export verification failed: {ex.Message}");
                     }
 
-                    UpdateChatUsageTotals(chatSession);
-                }
+                UpdateChatUsageTotals(chatSession);
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
 
             string? aiBriefPath = null;
             if (chatSession is not null)
             {
                 try
                 {
-                    var aiNarrative = await _chatAssistantService.SummarizeRunAsync(chatSession, runSnapshotJson, runGoals, CancellationToken.None);
+                    var aiNarrative = await _chatAssistantService.SummarizeRunAsync(chatSession, runSnapshotJson, runGoals, cancellationToken);
                     if (!string.IsNullOrWhiteSpace(aiNarrative))
                     {
                         var trimmedNarrative = aiNarrative.Trim();
                         aiBriefPath = Path.Combine(storeOutputFolder, "manual-migration-report.ai.md");
-                        await File.WriteAllTextAsync(aiBriefPath, trimmedNarrative, Encoding.UTF8);
+                        await File.WriteAllTextAsync(aiBriefPath, trimmedNarrative, Encoding.UTF8, cancellationToken);
                         Append($"AI migration brief: {aiBriefPath}");
                         var capturedPath = aiBriefPath;
                         ExecuteOnUiThread(() =>
@@ -6161,7 +6212,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
         StoreProduct product,
         string imagesFolder,
         ILogger? logger,
-        IDictionary<string, MediaReference>? mediaMap = null)
+        IDictionary<string, MediaReference>? mediaMap,
+        CancellationToken cancellationToken)
     {
         product.LocalImageFilePaths.Clear();
         if (product.Images is null || product.Images.Count == 0)
@@ -6176,6 +6228,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
         foreach (var image in product.Images)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var src = image.Src;
             if (string.IsNullOrWhiteSpace(src))
             {
@@ -6208,8 +6261,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
             try
             {
                 logger?.Report($"Downloading {src} -> {relativePath}");
-                var bytes = await _httpClient.GetByteArrayAsync(uri);
-                await File.WriteAllBytesAsync(absolutePath, bytes);
+                var bytes = await _httpClient.GetByteArrayAsync(uri, cancellationToken);
+                await File.WriteAllBytesAsync(absolutePath, bytes, cancellationToken);
                 relativePaths.Add(relativePath);
                 absolutePaths.Add(absolutePath);
                 if (mediaMap is not null)
@@ -6236,11 +6289,13 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private async Task<Dictionary<string, MediaReference>> DownloadMediaLibraryAsync(
         List<WordPressMediaItem> mediaItems,
         string mediaRoot,
-        ILogger? logger)
+        ILogger? logger,
+        CancellationToken cancellationToken)
     {
         var map = new Dictionary<string, MediaReference>(StringComparer.OrdinalIgnoreCase);
         foreach (var item in mediaItems)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (string.IsNullOrWhiteSpace(item.SourceUrl))
             {
                 continue;
@@ -6266,16 +6321,16 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 try
                 {
                     logger?.Report($"Downloading {item.SourceUrl} -> {relativePath}");
-                    using var response = await _httpClient.GetAsync(item.SourceUrl);
+                    using var response = await _httpClient.GetAsync(item.SourceUrl, cancellationToken);
                     if (!response.IsSuccessStatusCode)
                     {
                         logger?.Report($"Failed to download {item.SourceUrl}: {(int)response.StatusCode} ({response.ReasonPhrase}).");
                         continue;
                     }
 
-                    await using var input = await response.Content.ReadAsStreamAsync();
+                    await using var input = await response.Content.ReadAsStreamAsync(cancellationToken);
                     await using var output = File.Create(absolutePath);
-                    await input.CopyToAsync(output);
+                    await input.CopyToAsync(output, cancellationToken);
                 }
                 catch (Exception ex)
                 {
@@ -6297,7 +6352,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
         List<WordPressMediaItem> mediaLibrary,
         string mediaRoot,
         IDictionary<string, MediaReference> mediaMap,
-        ILogger? logger)
+        ILogger? logger,
+        CancellationToken cancellationToken)
     {
         var existingByUrl = mediaLibrary
             .Where(m => !string.IsNullOrWhiteSpace(m.SourceUrl))
@@ -6306,6 +6362,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
         foreach (var content in contentItems)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (content is null)
             {
                 continue;
@@ -6316,12 +6373,13 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
             foreach (var url in content.ReferencedMediaUrls)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 if (string.IsNullOrWhiteSpace(url) || !seen.Add(url))
                 {
                     continue;
                 }
 
-                var reference = await EnsureMediaReferenceAsync(url, mediaRoot, mediaMap, logger);
+                var reference = await EnsureMediaReferenceAsync(url, mediaRoot, mediaMap, logger, cancellationToken);
                 if (reference is null)
                 {
                     continue;
@@ -6333,7 +6391,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
             if (!string.IsNullOrWhiteSpace(content.FeaturedMediaUrl))
             {
-                var reference = await EnsureMediaReferenceAsync(content.FeaturedMediaUrl!, mediaRoot, mediaMap, logger);
+                var reference = await EnsureMediaReferenceAsync(content.FeaturedMediaUrl!, mediaRoot, mediaMap, logger, cancellationToken);
                 if (reference is not null)
                 {
                     content.FeaturedMediaFile = reference.RelativePath;
@@ -6351,7 +6409,10 @@ public sealed class MainViewModel : INotifyPropertyChanged
         }
     }
 
-    private async Task EnrichPublicExtensionFootprintsAsync(IList<PublicExtensionFootprint> footprints, ILogger log)
+    private async Task EnrichPublicExtensionFootprintsAsync(
+        IList<PublicExtensionFootprint> footprints,
+        ILogger log,
+        CancellationToken cancellationToken)
     {
         if (footprints.Count == 0)
         {
@@ -6362,6 +6423,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
         foreach (var footprint in footprints)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var slug = footprint.Slug;
             if (string.IsNullOrWhiteSpace(slug))
             {
@@ -6395,15 +6457,15 @@ public sealed class MainViewModel : INotifyPropertyChanged
             {
                 log.Report($"Looking up {footprint.Type} slug '{slug}' on WordPress.org…");
                 entry = footprint.Type.Equals("theme", StringComparison.OrdinalIgnoreCase)
-                    ? await _wpDirectoryClient.GetThemeAsync(slug).ConfigureAwait(false)
-                    : await _wpDirectoryClient.GetPluginAsync(slug).ConfigureAwait(false);
+                    ? await _wpDirectoryClient.GetThemeAsync(slug, cancellationToken).ConfigureAwait(false)
+                    : await _wpDirectoryClient.GetPluginAsync(slug, cancellationToken).ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or IOException)
             {
                 ApplyDirectoryMetadata(footprint, null, "lookup_error");
                 log.Report($"WordPress.org lookup failed for slug '{slug}': {ex.Message}");
                 cache[cacheKey] = null;
-                await Task.Delay(DirectoryLookupDelay).ConfigureAwait(false);
+                await Task.Delay(DirectoryLookupDelay, cancellationToken).ConfigureAwait(false);
                 continue;
             }
 
@@ -6430,7 +6492,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 }
             }
 
-            await Task.Delay(DirectoryLookupDelay).ConfigureAwait(false);
+            await Task.Delay(DirectoryLookupDelay, cancellationToken).ConfigureAwait(false);
         }
     }
 
@@ -6458,7 +6520,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
         string url,
         string mediaRoot,
         IDictionary<string, MediaReference> mediaMap,
-        ILogger? logger)
+        ILogger? logger,
+        CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(url))
         {
@@ -6501,16 +6564,16 @@ public sealed class MainViewModel : INotifyPropertyChanged
             try
             {
                 logger?.Report($"Downloading {url} -> {relativePath}");
-                using var response = await _httpClient.GetAsync(uri);
+                using var response = await _httpClient.GetAsync(uri, cancellationToken);
                 if (!response.IsSuccessStatusCode)
                 {
                     logger?.Report($"Failed to download {url}: {(int)response.StatusCode} ({response.ReasonPhrase}).");
                     return null;
                 }
 
-                await using var input = await response.Content.ReadAsStreamAsync();
+                await using var input = await response.Content.ReadAsStreamAsync(cancellationToken);
                 await using var output = File.Create(absolutePath);
-                await input.CopyToAsync(output);
+                await input.CopyToAsync(output, cancellationToken);
             }
             catch (Exception ex)
             {
@@ -6705,7 +6768,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 updatedContent = content + Environment.NewLine + insertionText;
             }
 
-            await File.WriteAllTextAsync(reportPath, updatedContent, Encoding.UTF8).ConfigureAwait(false);
+            await File.WriteAllTextAsync(reportPath, updatedContent, Encoding.UTF8, cancellationToken).ConfigureAwait(false);
         }
         catch
         {
@@ -8551,7 +8614,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         }
     }
 
-    private async Task OnReplicateStoreAsync()
+    private async Task OnReplicateStoreAsync(CancellationToken cancellationToken)
     {
         if (_lastProvisioningContext is null || _lastProvisioningContext.Products.Count == 0)
         {
@@ -8567,18 +8630,6 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
         try
         {
-            var previousCts = _runCts;
-            if (previousCts is not null)
-            {
-                previousCts.Cancel();
-                previousCts.Dispose();
-            }
-
-            var runCts = new CancellationTokenSource();
-            _runCts = runCts;
-            RaiseRunCommandStates();
-            var cancellationToken = runCts.Token;
-
             IsRunning = true;
             var provisioningContext = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
             {
@@ -8614,17 +8665,23 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 }
             }
 
+            cancellationToken.ThrowIfCancellationRequested();
+
             if (_lastProvisioningContext.PluginBundles.Count > 0)
             {
                 Append($"Uploading {_lastProvisioningContext.PluginBundles.Count} plugin bundles…");
                 await _wooProvisioningService.UploadPluginsAsync(settings, _lastProvisioningContext.PluginBundles, progressLogger, cancellationToken);
             }
 
+            cancellationToken.ThrowIfCancellationRequested();
+
             if (_lastProvisioningContext.ThemeBundles.Count > 0)
             {
                 Append($"Uploading {_lastProvisioningContext.ThemeBundles.Count} theme bundles…");
                 await _wooProvisioningService.UploadThemesAsync(settings, _lastProvisioningContext.ThemeBundles, progressLogger, cancellationToken);
             }
+
+            cancellationToken.ThrowIfCancellationRequested();
 
             await _wooProvisioningService.ProvisionAsync(
                 settings,
