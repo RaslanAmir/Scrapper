@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
+using System.Threading;
 using System.Threading.Tasks;
 using WcScraper.Core;
 using Xunit;
@@ -122,5 +123,31 @@ public sealed class HttpRetryPolicyTests
 
         Assert.Equal(1, attempts);
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task SendAsync_CancelledBeforeRetryDelay_ThrowsOperationCanceledException()
+    {
+        using var cancellationSource = new CancellationTokenSource();
+        var policy = new HttpRetryPolicy(maxRetries: 2, baseDelay: TimeSpan.FromMilliseconds(50), maxDelay: TimeSpan.FromMilliseconds(50));
+        var attempts = 0;
+        var notifications = 0;
+
+        async Task<HttpResponseMessage> SendOperation()
+        {
+            attempts++;
+            throw new HttpRequestException("temporary failure");
+        }
+
+        void OnRetry(HttpRetryAttempt attempt)
+        {
+            notifications++;
+            cancellationSource.Cancel();
+        }
+
+        await Assert.ThrowsAsync<OperationCanceledException>(() => policy.SendAsync(SendOperation, cancellationSource.Token, OnRetry));
+
+        Assert.Equal(1, attempts);
+        Assert.Equal(1, notifications);
     }
 }
