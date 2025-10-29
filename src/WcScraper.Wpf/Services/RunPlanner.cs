@@ -69,7 +69,7 @@ public sealed class RunPlanner : IDisposable
             return false;
         }
 
-        if (plan.Status is RunPlanStatus.Running or RunPlanStatus.Completed or RunPlanStatus.Failed)
+        if (plan.Status is RunPlanStatus.Running or RunPlanStatus.Completed or RunPlanStatus.Failed or RunPlanStatus.Cancelled)
         {
             return false;
         }
@@ -85,7 +85,7 @@ public sealed class RunPlanner : IDisposable
             return false;
         }
 
-        if (plan.Status is RunPlanStatus.Running or RunPlanStatus.Completed or RunPlanStatus.Failed)
+        if (plan.Status is RunPlanStatus.Running or RunPlanStatus.Completed or RunPlanStatus.Failed or RunPlanStatus.Cancelled)
         {
             return false;
         }
@@ -121,7 +121,11 @@ public sealed class RunPlanner : IDisposable
                     {
                         snapshot = snapshot with
                         {
-                            Status = overrideOutcome.Success ? RunPlanStatus.Completed : RunPlanStatus.Failed,
+                            Status = overrideOutcome.Cancelled
+                                ? RunPlanStatus.Cancelled
+                                : overrideOutcome.Success
+                                    ? RunPlanStatus.Completed
+                                    : RunPlanStatus.Failed,
                             ExecutedAtUtc = DateTimeOffset.UtcNow,
                             ResultNote = overrideOutcome.Message,
                         };
@@ -199,6 +203,10 @@ public sealed class RunPlanner : IDisposable
             {
                 outcome = await _executor(plan).ConfigureAwait(false);
             }
+            catch (OperationCanceledException)
+            {
+                outcome = RunPlanExecutionOutcome.CreateCancelled();
+            }
             catch (Exception ex)
             {
                 outcome = new RunPlanExecutionOutcome(false, ex.Message);
@@ -206,7 +214,11 @@ public sealed class RunPlanner : IDisposable
 
             await InvokeOnDispatcherAsync(() =>
             {
-                plan.Status = outcome.Success ? RunPlanStatus.Completed : RunPlanStatus.Failed;
+                plan.Status = outcome.Cancelled
+                    ? RunPlanStatus.Cancelled
+                    : outcome.Success
+                        ? RunPlanStatus.Completed
+                        : RunPlanStatus.Failed;
                 plan.ExecutedAtUtc ??= DateTimeOffset.UtcNow;
                 plan.ResultNote = outcome.Message;
             }).ConfigureAwait(false);
