@@ -441,10 +441,15 @@ public class MainViewModelTests
                 viewModel.SelectedPlatform = PlatformMode.WooCommerce;
 
                 var onRun = typeof(MainViewModel)
-                    .GetMethod("OnRunAsync", BindingFlags.NonPublic | BindingFlags.Instance);
+                    .GetMethod(
+                        "OnRunAsync",
+                        BindingFlags.NonPublic | BindingFlags.Instance,
+                        binder: null,
+                        types: new[] { typeof(CancellationToken) },
+                        modifiers: null);
                 Assert.NotNull(onRun);
 
-                var task = (Task)onRun!.Invoke(viewModel, Array.Empty<object>())!;
+                var task = (Task)onRun!.Invoke(viewModel, new object[] { CancellationToken.None })!;
                 task.GetAwaiter().GetResult();
 
                 app.Dispatcher.Invoke(() =>
@@ -611,11 +616,16 @@ public class MainViewModelTests
             viewModel.ExportReviews = false;
             viewModel.ExportXlsx = false;
 
-            var onRun = typeof(MainViewModel)
-                .GetMethod("OnRunAsync", BindingFlags.NonPublic | BindingFlags.Instance);
-            Assert.NotNull(onRun);
+                var onRun = typeof(MainViewModel)
+                    .GetMethod(
+                        "OnRunAsync",
+                        BindingFlags.NonPublic | BindingFlags.Instance,
+                        binder: null,
+                        types: new[] { typeof(CancellationToken) },
+                        modifiers: null);
+                Assert.NotNull(onRun);
 
-            var task = (Task)onRun!.Invoke(viewModel, Array.Empty<object>())!;
+                var task = (Task)onRun!.Invoke(viewModel, new object[] { CancellationToken.None })!;
             await task;
 
             var storeIdMethod = typeof(MainViewModel)
@@ -837,11 +847,16 @@ public class MainViewModelTests
             viewModel.ExportReviews = false;
             viewModel.ExportXlsx = false;
 
-            var onRun = typeof(MainViewModel)
-                .GetMethod("OnRunAsync", BindingFlags.NonPublic | BindingFlags.Instance);
-            Assert.NotNull(onRun);
+                var onRun = typeof(MainViewModel)
+                    .GetMethod(
+                        "OnRunAsync",
+                        BindingFlags.NonPublic | BindingFlags.Instance,
+                        binder: null,
+                        types: new[] { typeof(CancellationToken) },
+                        modifiers: null);
+                Assert.NotNull(onRun);
 
-            var task = (Task)onRun!.Invoke(viewModel, Array.Empty<object>())!;
+                var task = (Task)onRun!.Invoke(viewModel, new object[] { CancellationToken.None })!;
             await task;
 
             var storeIdMethod = typeof(MainViewModel)
