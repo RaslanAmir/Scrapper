@@ -5715,12 +5715,18 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 Append($"AI recommendations unavailable: {reportResult.AnnotationError}");
             }
 
-            var manualBundleArchivePath = TryCreateManualBundle(storeOutputFolder, baseOutputFolder, storeId, timestamp, reportPath);
+            var manualBundleArchivePath = TryCreateManualBundle(
+                storeOutputFolder,
+                baseOutputFolder,
+                storeId,
+                timestamp,
+                reportPath,
+                cancellationToken);
             _latestManualBundlePath = string.IsNullOrWhiteSpace(manualBundleArchivePath) ? null : manualBundleArchivePath;
             if (!string.IsNullOrWhiteSpace(manualBundleArchivePath))
             {
                 Append($"Manual bundle archive: {manualBundleArchivePath}");
-                await TryAnnotateManualReportAsync(reportPath, manualBundleArchivePath);
+                await TryAnnotateManualReportAsync(reportPath, manualBundleArchivePath, cancellationToken);
             }
 
             if (chatSession is not null)
@@ -6638,18 +6644,27 @@ public sealed class MainViewModel : INotifyPropertyChanged
         return item;
     }
 
-    private string? TryCreateManualBundle(string storeOutputFolder, string baseOutputFolder, string storeId, string timestamp, string reportPath)
+    private string? TryCreateManualBundle(
+        string storeOutputFolder,
+        string baseOutputFolder,
+        string storeId,
+        string timestamp,
+        string reportPath,
+        CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var deliverables = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         if (File.Exists(reportPath))
         {
+            cancellationToken.ThrowIfCancellationRequested();
             deliverables.Add(reportPath);
         }
 
         var designFolder = Path.Combine(storeOutputFolder, "design");
         if (Directory.Exists(designFolder))
         {
+            cancellationToken.ThrowIfCancellationRequested();
             deliverables.Add(designFolder);
         }
 
@@ -6657,6 +6672,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         {
             foreach (var file in Directory.EnumerateFiles(storeOutputFolder, $"{storeId}_{timestamp}_*", SearchOption.TopDirectoryOnly))
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 var extension = Path.GetExtension(file);
                 if (extension.Equals(".csv", StringComparison.OrdinalIgnoreCase)
                     || extension.Equals(".json", StringComparison.OrdinalIgnoreCase)
@@ -6689,20 +6705,24 @@ public sealed class MainViewModel : INotifyPropertyChanged
         {
             if (Directory.Exists(stagingFolder))
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 Directory.Delete(stagingFolder, recursive: true);
             }
 
+            cancellationToken.ThrowIfCancellationRequested();
             Directory.CreateDirectory(stagingFolder);
 
             foreach (var item in deliverables)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 if (Directory.Exists(item))
                 {
                     var destinationDirectory = Path.Combine(stagingFolder, Path.GetFileName(item));
-                    CopyDirectory(item, destinationDirectory);
+                    CopyDirectory(item, destinationDirectory, cancellationToken);
                 }
                 else if (File.Exists(item))
                 {
+                    cancellationToken.ThrowIfCancellationRequested();
                     var destinationFile = Path.Combine(stagingFolder, Path.GetFileName(item));
                     File.Copy(item, destinationFile, overwrite: true);
                 }
@@ -6711,9 +6731,11 @@ public sealed class MainViewModel : INotifyPropertyChanged
             var archivePath = Path.Combine(baseOutputFolder, $"{stagingFolderName}.zip");
             if (File.Exists(archivePath))
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 File.Delete(archivePath);
             }
 
+            cancellationToken.ThrowIfCancellationRequested();
             ZipFile.CreateFromDirectory(stagingFolder, archivePath);
             return archivePath;
         }
@@ -6738,17 +6760,22 @@ public sealed class MainViewModel : INotifyPropertyChanged
         }
     }
 
-    private static async Task TryAnnotateManualReportAsync(string reportPath, string archivePath)
+    private static async Task TryAnnotateManualReportAsync(
+        string reportPath,
+        string archivePath,
+        CancellationToken cancellationToken)
     {
         try
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (!File.Exists(reportPath))
             {
                 return;
             }
 
             var summaryNote = $"- **Archive:** `{archivePath}`";
-            var content = await File.ReadAllTextAsync(reportPath, Encoding.UTF8).ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
+            var content = await File.ReadAllTextAsync(reportPath, Encoding.UTF8, cancellationToken).ConfigureAwait(false);
             if (content.Contains(summaryNote, StringComparison.Ordinal))
             {
                 return;
@@ -6761,10 +6788,12 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
             if (insertionIndex >= 0)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 updatedContent = content.Insert(insertionIndex, insertionText);
             }
             else
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 updatedContent = content + Environment.NewLine + insertionText;
             }
 
@@ -6849,25 +6878,31 @@ public sealed class MainViewModel : INotifyPropertyChanged
         });
     }
 
-    private static void CopyDirectory(string sourceDirectory, string destinationDirectory)
+    private static void CopyDirectory(
+        string sourceDirectory,
+        string destinationDirectory,
+        CancellationToken cancellationToken)
     {
         if (!Directory.Exists(sourceDirectory))
         {
             return;
         }
 
+        cancellationToken.ThrowIfCancellationRequested();
         Directory.CreateDirectory(destinationDirectory);
 
         foreach (var file in Directory.EnumerateFiles(sourceDirectory))
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var targetFile = Path.Combine(destinationDirectory, Path.GetFileName(file));
             File.Copy(file, targetFile, overwrite: true);
         }
 
         foreach (var directory in Directory.EnumerateDirectories(sourceDirectory))
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var targetDirectory = Path.Combine(destinationDirectory, Path.GetFileName(directory));
-            CopyDirectory(directory, targetDirectory);
+            CopyDirectory(directory, targetDirectory, cancellationToken);
         }
     }
 
