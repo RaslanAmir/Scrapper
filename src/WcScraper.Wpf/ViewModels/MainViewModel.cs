@@ -3002,7 +3002,11 @@ public sealed class MainViewModel : INotifyPropertyChanged
             return;
         }
 
-        var status = e.Outcome.Success ? "completed" : "finished with issues";
+        var status = e.Outcome.Cancelled
+            ? "was cancelled"
+            : e.Outcome.Success
+                ? "completed"
+                : "finished with issues";
         Append($"Run plan \"{e.Plan.Name}\" {status}.");
         if (!string.IsNullOrWhiteSpace(e.Outcome.Message))
         {
@@ -3941,11 +3945,24 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
         var cancellationToken = PrepareRunCancellationToken();
 
-        await OnRunAsync(cancellationToken);
+        RunPlanExecutionOutcome outcome;
 
-        var outcome = _activeRunPlanOutcome ?? new RunPlanExecutionOutcome(true, "Run invoked.");
-        _activeRunPlan = null;
-        _activeRunPlanOutcome = null;
+        try
+        {
+            await OnRunAsync(cancellationToken);
+            outcome = _activeRunPlanOutcome ?? new RunPlanExecutionOutcome(true, "Run invoked.");
+        }
+        catch (OperationCanceledException)
+        {
+            _activeRunPlanOutcome ??= RunPlanExecutionOutcome.CreateCancelled("Run cancelled.");
+            outcome = _activeRunPlanOutcome;
+        }
+        finally
+        {
+            _activeRunPlan = null;
+            _activeRunPlanOutcome = null;
+        }
+
         return outcome;
     }
 
@@ -5882,6 +5899,15 @@ public sealed class MainViewModel : INotifyPropertyChanged
             };
 
             ExecuteOnUiThread(() => _dialogs.ShowRunCompletionDialog(completionInfo));
+        }
+        catch (OperationCanceledException)
+        {
+            _activeRunPlanOutcome ??= RunPlanExecutionOutcome.CreateCancelled("Run cancelled.");
+            Append("Run cancelled.");
+            if (_activeRunPlan is not null)
+            {
+                throw;
+            }
         }
         catch (Exception ex)
         {

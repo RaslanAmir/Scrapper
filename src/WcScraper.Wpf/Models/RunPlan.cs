@@ -21,6 +21,7 @@ public enum RunPlanStatus
     Running,
     Completed,
     Failed,
+    Cancelled,
     Skipped,
 }
 
@@ -48,7 +49,13 @@ public sealed record RunPlanSettingOverride(
     };
 }
 
-public sealed record RunPlanExecutionOutcome(bool Success, string? Message);
+public sealed record RunPlanExecutionOutcome(bool Success, string? Message)
+{
+    public bool Cancelled { get; init; }
+
+    public static RunPlanExecutionOutcome CreateCancelled(string? message = null)
+        => new(false, message ?? "Plan execution cancelled.") { Cancelled = true };
+}
 
 public sealed record RunPlanSnapshot(
     Guid Id,
