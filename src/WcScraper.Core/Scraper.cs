@@ -199,20 +199,22 @@ public sealed class WooScraper : IDisposable
         int maxPages = 100,
         IProgress<string>? log = null,
         string? categoryFilter = null,
-        string? tagFilter = null)
+        string? tagFilter = null,
+        CancellationToken cancellationToken = default)
     {
         baseUrl = CleanBaseUrl(baseUrl);
         var all = new List<StoreProduct>();
 
         for (int page = 1; page <= maxPages; page++)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var url = $"{baseUrl}/wp-json/wc/store/v1/products?per_page={perPage}&page={page}" +
                       (string.IsNullOrWhiteSpace(categoryFilter) ? "" : $"&category={Uri.EscapeDataString(categoryFilter)}") +
                       (string.IsNullOrWhiteSpace(tagFilter) ? "" : $"&tag={Uri.EscapeDataString(tagFilter)}");
             try
             {
                 log?.Report($"GET {url}");
-                using var resp = await GetWithRetryAsync(url, default, CreateRetryReporter(log, url));
+                using var resp = await GetWithRetryAsync(url, cancellationToken, CreateRetryReporter(log, url));
                 if (!resp.IsSuccessStatusCode)
                 {
                     if ((int)resp.StatusCode == 404) break;
@@ -240,6 +242,10 @@ public sealed class WooScraper : IDisposable
             }
             catch (TaskCanceledException ex)
             {
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    throw;
+                }
                 log?.Report($"Store API request timed out: {ex.Message}");
                 break;
             }
@@ -268,10 +274,10 @@ public sealed class WooScraper : IDisposable
 
         if (productsNeedingSeo.Count > 0)
         {
-            await FetchWooSeoMetadataAsync(baseUrl, productsNeedingSeo, log);
+            await FetchWooSeoMetadataAsync(baseUrl, productsNeedingSeo, log, cancellationToken).ConfigureAwait(false);
         }
 
-        await PopulateCategoryMetadataAsync(baseUrl, all, log);
+        await PopulateCategoryMetadataAsync(baseUrl, all, log, cancellationToken).ConfigureAwait(false);
         return all;
     }
 
@@ -279,15 +285,17 @@ public sealed class WooScraper : IDisposable
         string baseUrl,
         IProgress<string>? log = null,
         int perPage = 100,
-        int maxPages = 100)
-        => FetchWordPressContentAsync<WordPressPage>(baseUrl, "pages", perPage, maxPages, log);
+        int maxPages = 100,
+        CancellationToken cancellationToken = default)
+        => FetchWordPressContentAsync<WordPressPage>(baseUrl, "pages", perPage, maxPages, log, cancellationToken);
 
     public Task<List<WordPressPost>> FetchWordPressPostsAsync(
         string baseUrl,
         IProgress<string>? log = null,
         int perPage = 100,
-        int maxPages = 100)
-        => FetchWordPressContentAsync<WordPressPost>(baseUrl, "posts", perPage, maxPages, log);
+        int maxPages = 100,
+        CancellationToken cancellationToken = default)
+        => FetchWordPressContentAsync<WordPressPost>(baseUrl, "posts", perPage, maxPages, log, cancellationToken);
 
     public Task<FrontEndDesignSnapshotResult> FetchPublicDesignSnapshotAsync(
         string baseUrl,
@@ -307,18 +315,20 @@ public sealed class WooScraper : IDisposable
         string baseUrl,
         IProgress<string>? log = null,
         int perPage = 100,
-        int maxPages = 100)
+        int maxPages = 100,
+        CancellationToken cancellationToken = default)
     {
         baseUrl = CleanBaseUrl(baseUrl);
         var all = new List<WordPressMediaItem>();
 
         for (int page = 1; page <= maxPages; page++)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var url = $"{baseUrl}/wp-json/wp/v2/media?per_page={perPage}&page={page}&orderby=date&order=asc";
             try
             {
                 log?.Report($"GET {url}");
-                using var resp = await GetWithRetryAsync(url, default, CreateRetryReporter(log, url));
+                using var resp = await GetWithRetryAsync(url, cancellationToken, CreateRetryReporter(log, url));
                 if (!resp.IsSuccessStatusCode)
                 {
                     if ((int)resp.StatusCode == 404)
@@ -353,6 +363,10 @@ public sealed class WooScraper : IDisposable
             }
             catch (TaskCanceledException ex)
             {
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    throw;
+                }
                 log?.Report($"Media request timed out: {ex.Message}");
                 break;
             }
@@ -390,14 +404,16 @@ public sealed class WooScraper : IDisposable
         bool includeLinkedAssets = true,
         IProgress<string>? log = null,
         int? maxPages = null,
-        long? maxBytes = null)
+        long? maxBytes = null,
+        CancellationToken cancellationToken = default)
         => FetchPublicExtensionFootprintsAsync(
             baseUrl,
             includeLinkedAssets,
             log,
             additionalEntryUrls: null,
             maxPages,
-            maxBytes);
+            maxBytes,
+            cancellationToken);
 
     public async Task<List<PublicExtensionFootprint>> FetchPublicExtensionFootprintsAsync(
         string baseUrl,
@@ -405,7 +421,8 @@ public sealed class WooScraper : IDisposable
         IProgress<string>? log,
         IEnumerable<string>? additionalEntryUrls,
         int? maxPages = null,
-        long? maxBytes = null)
+        long? maxBytes = null,
+        CancellationToken cancellationToken = default)
     {
         baseUrl = CleanBaseUrl(baseUrl);
 
@@ -431,7 +448,7 @@ public sealed class WooScraper : IDisposable
         try
         {
             var findings = await detector
-                .DetectAsync(baseUrl, includeLinkedAssets, log, entryList, maxPages, maxBytes)
+                .DetectAsync(baseUrl, includeLinkedAssets, log, entryList, maxPages, maxBytes, cancellationToken)
                 .ConfigureAwait(false);
 
             var wordpressVersion = detector.WordPressVersion;
@@ -482,6 +499,10 @@ public sealed class WooScraper : IDisposable
         }
         catch (TaskCanceledException ex)
         {
+            if (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
             log?.Report($"Public extension detection request timed out: {ex.Message}");
         }
         catch (AuthenticationException ex)
@@ -553,7 +574,11 @@ public sealed class WooScraper : IDisposable
         return combined;
     }
 
-    private async Task PopulateCategoryMetadataAsync(string baseUrl, List<StoreProduct> products, IProgress<string>? log)
+    private async Task PopulateCategoryMetadataAsync(
+        string baseUrl,
+        List<StoreProduct> products,
+        IProgress<string>? log,
+        CancellationToken cancellationToken)
     {
         if (products.Count == 0)
         {
@@ -561,7 +586,7 @@ public sealed class WooScraper : IDisposable
             return;
         }
 
-        var categoryTerms = await FetchProductCategoriesAsync(baseUrl, log);
+        var categoryTerms = await FetchProductCategoriesAsync(baseUrl, log, cancellationToken).ConfigureAwait(false);
         if (categoryTerms.Count == 0)
         {
             return;
@@ -574,6 +599,7 @@ public sealed class WooScraper : IDisposable
 
         foreach (var product in products)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (product.Categories is null || product.Categories.Count == 0)
             {
                 continue;
@@ -581,6 +607,7 @@ public sealed class WooScraper : IDisposable
 
             foreach (var category in product.Categories)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 if (category is null || category.Id <= 0)
                 {
                     continue;
@@ -623,7 +650,8 @@ public sealed class WooScraper : IDisposable
     public async Task<WordPressMenuCollection?> FetchWordPressMenusAsync(
         string baseUrl,
         IProgress<string>? log = null,
-        IEnumerable<string>? preferredEndpoints = null)
+        IEnumerable<string>? preferredEndpoints = null,
+        CancellationToken cancellationToken = default)
     {
         baseUrl = CleanBaseUrl(baseUrl);
         var endpoints = preferredEndpoints?.ToList();
@@ -639,7 +667,9 @@ public sealed class WooScraper : IDisposable
 
         foreach (var endpoint in endpoints)
         {
-            var menuCollection = await TryFetchMenusFromEndpointAsync(baseUrl, endpoint, log);
+            cancellationToken.ThrowIfCancellationRequested();
+            var menuCollection = await TryFetchMenusFromEndpointAsync(baseUrl, endpoint, log, cancellationToken)
+                .ConfigureAwait(false);
             if (menuCollection is not null)
             {
                 menuCollection.Endpoint = endpoint;
@@ -655,7 +685,8 @@ public sealed class WooScraper : IDisposable
         string baseUrl,
         string username,
         string applicationPassword,
-        IProgress<string>? log = null)
+        IProgress<string>? log = null,
+        CancellationToken cancellationToken = default)
     {
         baseUrl = CleanBaseUrl(baseUrl);
         if (string.IsNullOrWhiteSpace(username) || string.IsNullOrWhiteSpace(applicationPassword))
@@ -671,21 +702,24 @@ public sealed class WooScraper : IDisposable
             "widget areas",
             username,
             applicationPassword,
-            log);
+            log,
+            cancellationToken).ConfigureAwait(false);
 
         snapshot.Widgets = await FetchAuthenticatedListAsync<WordPressWidget>(
             $"{baseUrl}/wp-json/wp/v2/widgets",
             "widgets",
             username,
             applicationPassword,
-            log);
+            log,
+            cancellationToken).ConfigureAwait(false);
 
         snapshot.WidgetTypes = await FetchAuthenticatedListAsync<WordPressWidgetType>(
             $"{baseUrl}/wp-json/wp/v2/widget-types",
             "widget types",
             username,
             applicationPassword,
-            log);
+            log,
+            cancellationToken).ConfigureAwait(false);
 
         return snapshot;
     }
@@ -695,15 +729,17 @@ public sealed class WooScraper : IDisposable
         string username,
         string applicationPassword,
         IProgress<string>? log = null,
-        int perPage = 100)
-        => FetchThemeAsync(baseUrl, username, applicationPassword, log, perPage);
+        int perPage = 100,
+        CancellationToken cancellationToken = default)
+        => FetchThemeAsync(baseUrl, username, applicationPassword, log, perPage, cancellationToken);
 
     public async Task<List<InstalledPlugin>> FetchPluginsAsync(
         string baseUrl,
         string username,
         string applicationPassword,
         IProgress<string>? log = null,
-        int perPage = 100)
+        int perPage = 100,
+        CancellationToken cancellationToken = default)
     {
         baseUrl = CleanBaseUrl(baseUrl);
         if (string.IsNullOrWhiteSpace(username) || string.IsNullOrWhiteSpace(applicationPassword))
@@ -717,6 +753,7 @@ public sealed class WooScraper : IDisposable
 
         for (int page = 1; page <= 100; page++)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var url = $"{baseUrl}/wp-json/wp/v2/plugins?context=edit&per_page={perPage}&page={page}";
             try
             {
@@ -727,7 +764,7 @@ public sealed class WooScraper : IDisposable
                     var request = new HttpRequestMessage(HttpMethod.Get, url);
                     request.Headers.Authorization = CreateBasicAuthHeader(username, applicationPassword);
                     return request;
-                }, default, CreateRetryReporter(log, url));
+                }, cancellationToken, CreateRetryReporter(log, url)).ConfigureAwait(false);
                 if (!resp.IsSuccessStatusCode)
                 {
                     if ((int)resp.StatusCode == 404)
@@ -767,6 +804,10 @@ public sealed class WooScraper : IDisposable
             }
             catch (TaskCanceledException ex)
             {
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    throw;
+                }
                 log?.Report($"Plugins request timed out: {ex.Message}");
                 break;
             }
@@ -797,7 +838,8 @@ public sealed class WooScraper : IDisposable
             log?.Report("Attempting plugins admin page scrape fallback.");
         }
 
-        return await FetchPluginsViaAdminAsync(baseUrl, username, applicationPassword, log);
+        return await FetchPluginsViaAdminAsync(baseUrl, username, applicationPassword, log, cancellationToken)
+            .ConfigureAwait(false);
     }
 
     public async Task<List<InstalledTheme>> FetchThemeAsync(
@@ -805,7 +847,8 @@ public sealed class WooScraper : IDisposable
         string username,
         string applicationPassword,
         IProgress<string>? log = null,
-        int perPage = 100)
+        int perPage = 100,
+        CancellationToken cancellationToken = default)
     {
         baseUrl = CleanBaseUrl(baseUrl);
         if (string.IsNullOrWhiteSpace(username) || string.IsNullOrWhiteSpace(applicationPassword))
@@ -819,6 +862,7 @@ public sealed class WooScraper : IDisposable
 
         for (int page = 1; page <= 100; page++)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var url = $"{baseUrl}/wp-json/wp/v2/themes?context=edit&per_page={perPage}&page={page}";
             try
             {
@@ -829,7 +873,7 @@ public sealed class WooScraper : IDisposable
                     var request = new HttpRequestMessage(HttpMethod.Get, url);
                     request.Headers.Authorization = CreateBasicAuthHeader(username, applicationPassword);
                     return request;
-                }, default, CreateRetryReporter(log, url));
+                }, cancellationToken, CreateRetryReporter(log, url)).ConfigureAwait(false);
                 if (!resp.IsSuccessStatusCode)
                 {
                     if ((int)resp.StatusCode == 404)
@@ -869,6 +913,10 @@ public sealed class WooScraper : IDisposable
             }
             catch (TaskCanceledException ex)
             {
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    throw;
+                }
                 log?.Report($"Themes request timed out: {ex.Message}");
                 break;
             }
@@ -899,14 +947,16 @@ public sealed class WooScraper : IDisposable
             log?.Report("Attempting themes admin page scrape fallback.");
         }
 
-        return await FetchThemesViaAdminAsync(baseUrl, username, applicationPassword, log);
+        return await FetchThemesViaAdminAsync(baseUrl, username, applicationPassword, log, cancellationToken)
+            .ConfigureAwait(false);
     }
 
     public async Task<Dictionary<string, JsonElement>> FetchWordPressSettingsAsync(
         string baseUrl,
         string username,
         string applicationPassword,
-        IProgress<string>? log = null)
+        IProgress<string>? log = null,
+        CancellationToken cancellationToken = default)
     {
         baseUrl = CleanBaseUrl(baseUrl);
         if (string.IsNullOrWhiteSpace(username) || string.IsNullOrWhiteSpace(applicationPassword))
@@ -916,7 +966,14 @@ public sealed class WooScraper : IDisposable
         }
 
         var result = new Dictionary<string, JsonElement>(StringComparer.OrdinalIgnoreCase);
-        var element = await TryFetchJsonAsync(baseUrl, "/wp-json/wp/v2/settings", username, applicationPassword, log, "WordPress settings");
+        var element = await TryFetchJsonAsync(
+            baseUrl,
+            "/wp-json/wp/v2/settings",
+            username,
+            applicationPassword,
+            log,
+            "WordPress settings",
+            cancellationToken).ConfigureAwait(false);
         if (element is not JsonElement json || json.ValueKind != JsonValueKind.Object)
         {
             return result;
@@ -924,6 +981,7 @@ public sealed class WooScraper : IDisposable
 
         foreach (var property in json.EnumerateObject())
         {
+            cancellationToken.ThrowIfCancellationRequested();
             result[property.Name] = property.Value.Clone();
         }
 
@@ -936,7 +994,8 @@ public sealed class WooScraper : IDisposable
         string applicationPassword,
         InstalledPlugin plugin,
         IProgress<string>? log = null,
-        IReadOnlyDictionary<string, JsonElement>? sharedSettings = null)
+        IReadOnlyDictionary<string, JsonElement>? sharedSettings = null,
+        CancellationToken cancellationToken = default)
     {
         if (plugin is null) throw new ArgumentNullException(nameof(plugin));
 
@@ -963,7 +1022,15 @@ public sealed class WooScraper : IDisposable
 
         foreach (var endpoint in BuildPluginOptionEndpoints(plugin))
         {
-            var element = await TryFetchJsonAsync(baseUrl, endpoint, username, applicationPassword, log, $"Plugin options ({plugin.Name ?? plugin.Slug ?? plugin.PluginFile ?? "plugin"})");
+            cancellationToken.ThrowIfCancellationRequested();
+            var element = await TryFetchJsonAsync(
+                baseUrl,
+                endpoint,
+                username,
+                applicationPassword,
+                log,
+                $"Plugin options ({plugin.Name ?? plugin.Slug ?? plugin.PluginFile ?? "plugin"})",
+                cancellationToken).ConfigureAwait(false);
             if (element is null)
             {
                 continue;
@@ -980,7 +1047,8 @@ public sealed class WooScraper : IDisposable
         string username,
         string applicationPassword,
         InstalledPlugin plugin,
-        IProgress<string>? log = null)
+        IProgress<string>? log = null,
+        CancellationToken cancellationToken = default)
     {
         if (plugin is null) throw new ArgumentNullException(nameof(plugin));
 
@@ -993,8 +1061,15 @@ public sealed class WooScraper : IDisposable
 
         foreach (var endpoint in BuildPluginManifestEndpoints(plugin))
         {
-            var snapshot = await TryFetchAssetSnapshotAsync(baseUrl, endpoint, username, applicationPassword, log,
-                $"Plugin manifest ({plugin.Name ?? plugin.Slug ?? plugin.PluginFile ?? "plugin"})");
+            cancellationToken.ThrowIfCancellationRequested();
+            var snapshot = await TryFetchAssetSnapshotAsync(
+                baseUrl,
+                endpoint,
+                username,
+                applicationPassword,
+                log,
+                $"Plugin manifest ({plugin.Name ?? plugin.Slug ?? plugin.PluginFile ?? "plugin"})",
+                cancellationToken).ConfigureAwait(false);
 
             if (snapshot.Paths.Count > 0 || !string.IsNullOrWhiteSpace(snapshot.ManifestJson))
             {
@@ -1017,7 +1092,8 @@ public sealed class WooScraper : IDisposable
         string applicationPassword,
         InstalledPlugin plugin,
         string destinationPath,
-        IProgress<string>? log = null)
+        IProgress<string>? log = null,
+        CancellationToken cancellationToken = default)
     {
         if (plugin is null) throw new ArgumentNullException(nameof(plugin));
 
@@ -1030,7 +1106,16 @@ public sealed class WooScraper : IDisposable
 
         foreach (var endpoint in BuildPluginArchiveEndpoints(plugin))
         {
-            var success = await TryDownloadBinaryAsync(baseUrl, endpoint, username, applicationPassword, destinationPath, log, $"Plugin archive ({plugin.Name ?? plugin.Slug ?? plugin.PluginFile ?? "plugin"})");
+            cancellationToken.ThrowIfCancellationRequested();
+            var success = await TryDownloadBinaryAsync(
+                baseUrl,
+                endpoint,
+                username,
+                applicationPassword,
+                destinationPath,
+                log,
+                $"Plugin archive ({plugin.Name ?? plugin.Slug ?? plugin.PluginFile ?? "plugin"})",
+                cancellationToken).ConfigureAwait(false);
             if (success)
             {
                 return true;
@@ -1046,7 +1131,8 @@ public sealed class WooScraper : IDisposable
         string applicationPassword,
         InstalledTheme theme,
         IProgress<string>? log = null,
-        IReadOnlyDictionary<string, JsonElement>? sharedSettings = null)
+        IReadOnlyDictionary<string, JsonElement>? sharedSettings = null,
+        CancellationToken cancellationToken = default)
     {
         if (theme is null) throw new ArgumentNullException(nameof(theme));
 
@@ -1073,7 +1159,15 @@ public sealed class WooScraper : IDisposable
 
         foreach (var endpoint in BuildThemeOptionEndpoints(theme))
         {
-            var element = await TryFetchJsonAsync(baseUrl, endpoint, username, applicationPassword, log, $"Theme options ({theme.Name ?? theme.Slug ?? theme.Stylesheet ?? "theme"})");
+            cancellationToken.ThrowIfCancellationRequested();
+            var element = await TryFetchJsonAsync(
+                baseUrl,
+                endpoint,
+                username,
+                applicationPassword,
+                log,
+                $"Theme options ({theme.Name ?? theme.Slug ?? theme.Stylesheet ?? "theme"})",
+                cancellationToken).ConfigureAwait(false);
             if (element is null)
             {
                 continue;
@@ -1090,7 +1184,8 @@ public sealed class WooScraper : IDisposable
         string username,
         string applicationPassword,
         InstalledTheme theme,
-        IProgress<string>? log = null)
+        IProgress<string>? log = null,
+        CancellationToken cancellationToken = default)
     {
         if (theme is null) throw new ArgumentNullException(nameof(theme));
 
@@ -1103,8 +1198,15 @@ public sealed class WooScraper : IDisposable
 
         foreach (var endpoint in BuildThemeManifestEndpoints(theme))
         {
-            var snapshot = await TryFetchAssetSnapshotAsync(baseUrl, endpoint, username, applicationPassword, log,
-                $"Theme manifest ({theme.Name ?? theme.Slug ?? theme.Stylesheet ?? "theme"})");
+            cancellationToken.ThrowIfCancellationRequested();
+            var snapshot = await TryFetchAssetSnapshotAsync(
+                baseUrl,
+                endpoint,
+                username,
+                applicationPassword,
+                log,
+                $"Theme manifest ({theme.Name ?? theme.Slug ?? theme.Stylesheet ?? "theme"})",
+                cancellationToken).ConfigureAwait(false);
             if (snapshot.Paths.Count > 0 || !string.IsNullOrWhiteSpace(snapshot.ManifestJson))
             {
                 return snapshot;
@@ -1126,7 +1228,8 @@ public sealed class WooScraper : IDisposable
         string applicationPassword,
         InstalledTheme theme,
         string destinationPath,
-        IProgress<string>? log = null)
+        IProgress<string>? log = null,
+        CancellationToken cancellationToken = default)
     {
         if (theme is null) throw new ArgumentNullException(nameof(theme));
 
@@ -1139,7 +1242,16 @@ public sealed class WooScraper : IDisposable
 
         foreach (var endpoint in BuildThemeArchiveEndpoints(theme))
         {
-            var success = await TryDownloadBinaryAsync(baseUrl, endpoint, username, applicationPassword, destinationPath, log, $"Theme archive ({theme.Name ?? theme.Slug ?? theme.Stylesheet ?? "theme"})");
+            cancellationToken.ThrowIfCancellationRequested();
+            var success = await TryDownloadBinaryAsync(
+                baseUrl,
+                endpoint,
+                username,
+                applicationPassword,
+                destinationPath,
+                log,
+                $"Theme archive ({theme.Name ?? theme.Slug ?? theme.Stylesheet ?? "theme"})",
+                cancellationToken).ConfigureAwait(false);
             if (success)
             {
                 return true;
@@ -1153,7 +1265,8 @@ public sealed class WooScraper : IDisposable
         string baseUrl,
         IEnumerable<int> productIds,
         int perPage = 100,
-        IProgress<string>? log = null)
+        IProgress<string>? log = null,
+        CancellationToken cancellationToken = default)
     {
         baseUrl = CleanBaseUrl(baseUrl);
         var all = new List<StoreReview>();
@@ -1162,6 +1275,7 @@ public sealed class WooScraper : IDisposable
 
         for (int i = 0; i < ids.Count; i += chunk)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var slice = ids.Skip(i).Take(chunk);
             var pid = string.Join(",", slice);
             var url =
@@ -1169,7 +1283,7 @@ public sealed class WooScraper : IDisposable
             try
             {
                 log?.Report($"GET {url}");
-                using var resp = await GetWithRetryAsync(url, default, CreateRetryReporter(log, url));
+                using var resp = await GetWithRetryAsync(url, cancellationToken, CreateRetryReporter(log, url));
                 if (!resp.IsSuccessStatusCode) continue;
 
                 var text = await resp.Content.ReadAsStringAsync();
@@ -1181,6 +1295,10 @@ public sealed class WooScraper : IDisposable
             }
             catch (TaskCanceledException ex)
             {
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    throw;
+                }
                 log?.Report($"Reviews request timed out: {ex.Message}");
             }
             catch (AuthenticationException ex)
@@ -1204,7 +1322,8 @@ public sealed class WooScraper : IDisposable
         string baseUrl,
         string username,
         string applicationPassword,
-        IProgress<string>? log = null)
+        IProgress<string>? log = null,
+        CancellationToken cancellationToken = default)
     {
         baseUrl = CleanBaseUrl(baseUrl);
         if (string.IsNullOrWhiteSpace(username) || string.IsNullOrWhiteSpace(applicationPassword))
@@ -1214,7 +1333,13 @@ public sealed class WooScraper : IDisposable
         }
 
         var groupsUrl = $"{baseUrl}/wp-json/wc/v3/settings";
-        var groups = await FetchAuthenticatedListAsync<WooSettingGroup>(groupsUrl, "store settings groups", username, applicationPassword, log);
+        var groups = await FetchAuthenticatedListAsync<WooSettingGroup>(
+            groupsUrl,
+            "store settings groups",
+            username,
+            applicationPassword,
+            log,
+            cancellationToken).ConfigureAwait(false);
         if (groups.Count == 0)
         {
             return new();
@@ -1223,8 +1348,15 @@ public sealed class WooScraper : IDisposable
         var all = new List<WooStoreSetting>();
         foreach (var group in groups.Where(g => !string.IsNullOrWhiteSpace(g.Id)))
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var url = $"{baseUrl}/wp-json/wc/v3/settings/{group.Id}";
-            var entries = await FetchAuthenticatedListAsync<WooStoreSetting>(url, $"settings group '{group.Id}'", username, applicationPassword, log);
+            var entries = await FetchAuthenticatedListAsync<WooStoreSetting>(
+                url,
+                $"settings group '{group.Id}'",
+                username,
+                applicationPassword,
+                log,
+                cancellationToken).ConfigureAwait(false);
             foreach (var entry in entries)
             {
                 entry.GroupId ??= group.Id;
@@ -1239,7 +1371,8 @@ public sealed class WooScraper : IDisposable
         string baseUrl,
         string username,
         string applicationPassword,
-        IProgress<string>? log = null)
+        IProgress<string>? log = null,
+        CancellationToken cancellationToken = default)
     {
         baseUrl = CleanBaseUrl(baseUrl);
         if (string.IsNullOrWhiteSpace(username) || string.IsNullOrWhiteSpace(applicationPassword))
@@ -1249,7 +1382,13 @@ public sealed class WooScraper : IDisposable
         }
 
         var zonesUrl = $"{baseUrl}/wp-json/wc/v3/shipping/zones";
-        var zones = await FetchAuthenticatedListAsync<ShippingZoneSetting>(zonesUrl, "shipping zones", username, applicationPassword, log);
+        var zones = await FetchAuthenticatedListAsync<ShippingZoneSetting>(
+            zonesUrl,
+            "shipping zones",
+            username,
+            applicationPassword,
+            log,
+            cancellationToken).ConfigureAwait(false);
         if (zones.Count == 0)
         {
             return zones;
@@ -1257,18 +1396,31 @@ public sealed class WooScraper : IDisposable
 
         foreach (var zone in zones)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (zone.Id <= 0)
             {
                 continue;
             }
 
             var locationsUrl = $"{baseUrl}/wp-json/wc/v3/shipping/zones/{zone.Id}/locations";
-            var locations = await FetchAuthenticatedListAsync<ShippingZoneLocation>(locationsUrl, $"shipping zone {zone.Id} locations", username, applicationPassword, log);
+            var locations = await FetchAuthenticatedListAsync<ShippingZoneLocation>(
+                locationsUrl,
+                $"shipping zone {zone.Id} locations",
+                username,
+                applicationPassword,
+                log,
+                cancellationToken).ConfigureAwait(false);
             zone.Locations.Clear();
             zone.Locations.AddRange(locations);
 
             var methodsUrl = $"{baseUrl}/wp-json/wc/v3/shipping/zones/{zone.Id}/methods";
-            var methods = await FetchAuthenticatedListAsync<ShippingZoneMethodSetting>(methodsUrl, $"shipping zone {zone.Id} methods", username, applicationPassword, log);
+            var methods = await FetchAuthenticatedListAsync<ShippingZoneMethodSetting>(
+                methodsUrl,
+                $"shipping zone {zone.Id} methods",
+                username,
+                applicationPassword,
+                log,
+                cancellationToken).ConfigureAwait(false);
             zone.Methods.Clear();
             zone.Methods.AddRange(methods);
         }
@@ -1280,7 +1432,8 @@ public sealed class WooScraper : IDisposable
         string baseUrl,
         string username,
         string applicationPassword,
-        IProgress<string>? log = null)
+        IProgress<string>? log = null,
+        CancellationToken cancellationToken = default)
     {
         baseUrl = CleanBaseUrl(baseUrl);
         if (string.IsNullOrWhiteSpace(username) || string.IsNullOrWhiteSpace(applicationPassword))
@@ -1290,7 +1443,13 @@ public sealed class WooScraper : IDisposable
         }
 
         var url = $"{baseUrl}/wp-json/wc/v3/payment_gateways";
-        return await FetchAuthenticatedListAsync<PaymentGatewaySetting>(url, "payment gateways", username, applicationPassword, log);
+        return await FetchAuthenticatedListAsync<PaymentGatewaySetting>(
+            url,
+            "payment gateways",
+            username,
+            applicationPassword,
+            log,
+            cancellationToken).ConfigureAwait(false);
     }
 
     public async Task<List<WooCustomer>> FetchCustomersAsync(
@@ -1299,7 +1458,8 @@ public sealed class WooScraper : IDisposable
         string applicationPassword,
         IProgress<string>? log = null,
         int perPage = 100,
-        int maxPages = 100)
+        int maxPages = 100,
+        CancellationToken cancellationToken = default)
     {
         baseUrl = CleanBaseUrl(baseUrl);
         if (string.IsNullOrWhiteSpace(username) || string.IsNullOrWhiteSpace(applicationPassword))
@@ -1312,6 +1472,7 @@ public sealed class WooScraper : IDisposable
 
         for (int page = 1; page <= maxPages; page++)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var url = $"{baseUrl}/wp-json/wc/v3/customers?per_page={perPage}&page={page}&orderby=id&order=asc";
             try
             {
@@ -1321,7 +1482,7 @@ public sealed class WooScraper : IDisposable
                     var request = new HttpRequestMessage(HttpMethod.Get, url);
                     request.Headers.Authorization = CreateBasicAuthHeader(username, applicationPassword);
                     return request;
-                }, default, CreateRetryReporter(log, url));
+                }, cancellationToken, CreateRetryReporter(log, url)).ConfigureAwait(false);
                 if (!resp.IsSuccessStatusCode)
                 {
                     if (resp.StatusCode == HttpStatusCode.NotFound)
@@ -1355,6 +1516,10 @@ public sealed class WooScraper : IDisposable
             }
             catch (TaskCanceledException ex)
             {
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    throw;
+                }
                 log?.Report($"Customers request timed out: {ex.Message}");
                 break;
             }
@@ -1384,7 +1549,8 @@ public sealed class WooScraper : IDisposable
         string applicationPassword,
         IProgress<string>? log = null,
         int perPage = 100,
-        int maxPages = 100)
+        int maxPages = 100,
+        CancellationToken cancellationToken = default)
     {
         baseUrl = CleanBaseUrl(baseUrl);
         if (string.IsNullOrWhiteSpace(username) || string.IsNullOrWhiteSpace(applicationPassword))
@@ -1397,6 +1563,7 @@ public sealed class WooScraper : IDisposable
 
         for (int page = 1; page <= maxPages; page++)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var url = $"{baseUrl}/wp-json/wc/v3/orders?per_page={perPage}&page={page}&orderby=id&order=asc";
             try
             {
@@ -1406,7 +1573,7 @@ public sealed class WooScraper : IDisposable
                     var request = new HttpRequestMessage(HttpMethod.Get, url);
                     request.Headers.Authorization = CreateBasicAuthHeader(username, applicationPassword);
                     return request;
-                }, default, CreateRetryReporter(log, url));
+                }, cancellationToken, CreateRetryReporter(log, url)).ConfigureAwait(false);
                 if (!resp.IsSuccessStatusCode)
                 {
                     if (resp.StatusCode == HttpStatusCode.NotFound)
@@ -1440,6 +1607,10 @@ public sealed class WooScraper : IDisposable
             }
             catch (TaskCanceledException ex)
             {
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    throw;
+                }
                 log?.Report($"Orders request timed out: {ex.Message}");
                 break;
             }
@@ -1469,7 +1640,8 @@ public sealed class WooScraper : IDisposable
         string applicationPassword,
         IProgress<string>? log = null,
         int perPage = 100,
-        int maxPages = 100)
+        int maxPages = 100,
+        CancellationToken cancellationToken = default)
     {
         baseUrl = CleanBaseUrl(baseUrl);
         if (string.IsNullOrWhiteSpace(username) || string.IsNullOrWhiteSpace(applicationPassword))
@@ -1482,6 +1654,7 @@ public sealed class WooScraper : IDisposable
 
         for (int page = 1; page <= maxPages; page++)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var url = $"{baseUrl}/wp-json/wc/v3/coupons?per_page={perPage}&page={page}&orderby=id&order=asc";
             try
             {
@@ -1491,7 +1664,7 @@ public sealed class WooScraper : IDisposable
                     var request = new HttpRequestMessage(HttpMethod.Get, url);
                     request.Headers.Authorization = CreateBasicAuthHeader(username, applicationPassword);
                     return request;
-                }, default, CreateRetryReporter(log, url));
+                }, cancellationToken, CreateRetryReporter(log, url)).ConfigureAwait(false);
                 if (!resp.IsSuccessStatusCode)
                 {
                     if (resp.StatusCode == HttpStatusCode.NotFound)
@@ -1525,6 +1698,10 @@ public sealed class WooScraper : IDisposable
             }
             catch (TaskCanceledException ex)
             {
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    throw;
+                }
                 log?.Report($"Coupons request timed out: {ex.Message}");
                 break;
             }
@@ -1554,7 +1731,8 @@ public sealed class WooScraper : IDisposable
         string applicationPassword,
         IProgress<string>? log = null,
         int perPage = 100,
-        int maxPages = 100)
+        int maxPages = 100,
+        CancellationToken cancellationToken = default)
     {
         baseUrl = CleanBaseUrl(baseUrl);
         if (string.IsNullOrWhiteSpace(username) || string.IsNullOrWhiteSpace(applicationPassword))
@@ -1567,6 +1745,7 @@ public sealed class WooScraper : IDisposable
 
         for (int page = 1; page <= maxPages; page++)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var url = $"{baseUrl}/wp-json/wc/v1/subscriptions?per_page={perPage}&page={page}&orderby=id&order=asc";
             try
             {
@@ -1576,7 +1755,7 @@ public sealed class WooScraper : IDisposable
                     var request = new HttpRequestMessage(HttpMethod.Get, url);
                     request.Headers.Authorization = CreateBasicAuthHeader(username, applicationPassword);
                     return request;
-                }, default, CreateRetryReporter(log, url));
+                }, cancellationToken, CreateRetryReporter(log, url)).ConfigureAwait(false);
                 if (!resp.IsSuccessStatusCode)
                 {
                     if (resp.StatusCode == HttpStatusCode.NotFound)
@@ -1610,6 +1789,10 @@ public sealed class WooScraper : IDisposable
             }
             catch (TaskCanceledException ex)
             {
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    throw;
+                }
                 log?.Report($"Subscriptions request timed out: {ex.Message}");
                 break;
             }
@@ -1637,25 +1820,32 @@ public sealed class WooScraper : IDisposable
         string baseUrl,
         int perPage = 100,
         int maxPages = 100,
-        IProgress<string>? log = null)
+        IProgress<string>? log = null,
+        CancellationToken cancellationToken = default)
     {
         baseUrl = CleanBaseUrl(baseUrl);
         var all = new List<StoreProduct>();
 
         for (int page = 1; page <= maxPages; page++)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var url = $"{baseUrl}/wp-json/wp/v2/product?per_page={perPage}&page={page}&_embed=1";
             try
             {
                 log?.Report($"GET {url}");
-                using var resp = await GetWithRetryAsync(url, default, CreateRetryReporter(log, url));
+                using var resp = await GetWithRetryAsync(url, cancellationToken, CreateRetryReporter(log, url));
                 if (!resp.IsSuccessStatusCode)
                 {
                     if ((int)resp.StatusCode == 404) break;
                     resp.EnsureSuccessStatusCode();
                 }
 
-                using JsonDocument? doc = await ParseDocumentAsync(resp, log, "Failed to parse WP product response");
+                using JsonDocument? doc = await ParseDocumentAsync(
+                        resp,
+                        log,
+                        "Failed to parse WP product response",
+                        cancellationToken)
+                    .ConfigureAwait(false);
                 if (doc is null) break;
                 if (doc.RootElement.ValueKind != JsonValueKind.Array) break;
 
@@ -1727,6 +1917,10 @@ public sealed class WooScraper : IDisposable
             }
             catch (TaskCanceledException ex)
             {
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    throw;
+                }
                 log?.Report($"WP REST request timed out: {ex.Message}");
                 break;
             }
@@ -1750,14 +1944,17 @@ public sealed class WooScraper : IDisposable
         return all;
     }
 
-    public async Task<List<TermItem>> FetchProductCategoriesAsync(string baseUrl, IProgress<string>? log = null)
+    public async Task<List<TermItem>> FetchProductCategoriesAsync(
+        string baseUrl,
+        IProgress<string>? log = null,
+        CancellationToken cancellationToken = default)
     {
         baseUrl = CleanBaseUrl(baseUrl);
         var url = $"{baseUrl}/wp-json/wc/store/v1/products/categories";
         try
         {
             log?.Report($"GET {url}");
-            using var resp = await GetWithRetryAsync(url, default, CreateRetryReporter(log, url));
+            using var resp = await GetWithRetryAsync(url, cancellationToken, CreateRetryReporter(log, url));
             if (!resp.IsSuccessStatusCode) return new();
 
             var text = await resp.Content.ReadAsStringAsync();
@@ -1767,6 +1964,10 @@ public sealed class WooScraper : IDisposable
         }
         catch (TaskCanceledException ex)
         {
+            if (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
             log?.Report($"Categories request timed out: {ex.Message}");
             _lastProductCategoryTerms = new List<TermItem>();
             return new();
@@ -1791,14 +1992,17 @@ public sealed class WooScraper : IDisposable
         }
     }
 
-    public async Task<List<TermItem>> FetchProductTagsAsync(string baseUrl, IProgress<string>? log = null)
+    public async Task<List<TermItem>> FetchProductTagsAsync(
+        string baseUrl,
+        IProgress<string>? log = null,
+        CancellationToken cancellationToken = default)
     {
         baseUrl = CleanBaseUrl(baseUrl);
         var url = $"{baseUrl}/wp-json/wc/store/v1/products/tags";
         try
         {
             log?.Report($"GET {url}");
-            using var resp = await GetWithRetryAsync(url, default, CreateRetryReporter(log, url));
+            using var resp = await GetWithRetryAsync(url, cancellationToken, CreateRetryReporter(log, url));
             if (!resp.IsSuccessStatusCode) return new();
 
             var text = await resp.Content.ReadAsStringAsync();
@@ -1806,6 +2010,10 @@ public sealed class WooScraper : IDisposable
         }
         catch (TaskCanceledException ex)
         {
+            if (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
             log?.Report($"Tags request timed out: {ex.Message}");
             return new();
         }
@@ -1826,14 +2034,17 @@ public sealed class WooScraper : IDisposable
         }
     }
 
-    public async Task<List<TermItem>> FetchProductAttributesAsync(string baseUrl, IProgress<string>? log = null)
+    public async Task<List<TermItem>> FetchProductAttributesAsync(
+        string baseUrl,
+        IProgress<string>? log = null,
+        CancellationToken cancellationToken = default)
     {
         baseUrl = CleanBaseUrl(baseUrl);
         var url = $"{baseUrl}/wp-json/wc/store/v1/products/attributes";
         try
         {
             log?.Report($"GET {url}");
-            using var resp = await GetWithRetryAsync(url, default, CreateRetryReporter(log, url));
+            using var resp = await GetWithRetryAsync(url, cancellationToken, CreateRetryReporter(log, url));
             if (!resp.IsSuccessStatusCode) return new();
 
             var text = await resp.Content.ReadAsStringAsync();
@@ -1841,6 +2052,10 @@ public sealed class WooScraper : IDisposable
         }
         catch (TaskCanceledException ex)
         {
+            if (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
             log?.Report($"Attributes request timed out: {ex.Message}");
             return new();
         }
@@ -1865,7 +2080,8 @@ public sealed class WooScraper : IDisposable
         string baseUrl,
         IEnumerable<int> parentIds,
         int perPage = 100,
-        IProgress<string>? log = null)
+        IProgress<string>? log = null,
+        CancellationToken cancellationToken = default)
     {
         baseUrl = CleanBaseUrl(baseUrl);
         var all = new List<StoreProduct>();
@@ -1874,17 +2090,19 @@ public sealed class WooScraper : IDisposable
 
         for (int i = 0; i < parents.Count; i += chunk)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var slice = parents.Skip(i).Take(chunk);
             var parentParam = string.Join(",", slice);
             int page = 1;
             while (true)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 var url =
                     $"{baseUrl}/wp-json/wc/store/v1/products?type=variation&parent={parentParam}&per_page={perPage}&page={page}";
                 try
                 {
                     log?.Report($"GET {url}");
-                    using var resp = await GetWithRetryAsync(url, default, CreateRetryReporter(log, url));
+                    using var resp = await GetWithRetryAsync(url, cancellationToken, CreateRetryReporter(log, url));
                     if (!resp.IsSuccessStatusCode) break;
 
                     var text = await resp.Content.ReadAsStringAsync();
@@ -1897,6 +2115,10 @@ public sealed class WooScraper : IDisposable
                 }
                 catch (TaskCanceledException ex)
                 {
+                    if (cancellationToken.IsCancellationRequested)
+                    {
+                        throw;
+                    }
                     log?.Report($"Variations request timed out: {ex.Message}");
                     break;
                 }
@@ -1918,11 +2140,15 @@ public sealed class WooScraper : IDisposable
             }
         }
 
-        await PopulateCategoryMetadataAsync(baseUrl, all, log);
+        await PopulateCategoryMetadataAsync(baseUrl, all, log, cancellationToken).ConfigureAwait(false);
         return all;
     }
 
-    private async Task FetchWooSeoMetadataAsync(string baseUrl, IReadOnlyCollection<StoreProduct> products, IProgress<string>? log)
+    private async Task FetchWooSeoMetadataAsync(
+        string baseUrl,
+        IReadOnlyCollection<StoreProduct> products,
+        IProgress<string>? log,
+        CancellationToken cancellationToken)
     {
         if (products.Count == 0)
         {
@@ -1934,6 +2160,7 @@ public sealed class WooScraper : IDisposable
 
         foreach (var product in products)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var url = ResolveProductUrl(baseUrl, product);
             if (url is null)
             {
@@ -1951,6 +2178,7 @@ public sealed class WooScraper : IDisposable
 
         foreach (var pair in targets)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var url = pair.Key;
             var associatedProducts = pair.Value;
 
@@ -1962,7 +2190,7 @@ public sealed class WooScraper : IDisposable
             try
             {
                 log?.Report($"GET {url} (SEO fallback)");
-                using var resp = await GetWithRetryAsync(url, default, CreateRetryReporter(log, url));
+                using var resp = await GetWithRetryAsync(url, cancellationToken, CreateRetryReporter(log, url));
                 if (!resp.IsSuccessStatusCode)
                 {
                     continue;
@@ -1995,6 +2223,10 @@ public sealed class WooScraper : IDisposable
             }
             catch (TaskCanceledException ex)
             {
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    throw;
+                }
                 log?.Report($"SEO fallback request timed out: {ex.Message}");
             }
             catch (AuthenticationException ex)
@@ -2013,6 +2245,7 @@ public sealed class WooScraper : IDisposable
 
         foreach (var product in products)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (!string.IsNullOrWhiteSpace(product.MetaDescription))
             {
                 continue;
@@ -2418,18 +2651,20 @@ public sealed class WooScraper : IDisposable
         string resource,
         int perPage,
         int maxPages,
-        IProgress<string>? log) where T : WordPressContentBase
+        IProgress<string>? log,
+        CancellationToken cancellationToken) where T : WordPressContentBase
     {
         baseUrl = CleanBaseUrl(baseUrl);
         var all = new List<T>();
 
         for (int page = 1; page <= maxPages; page++)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var url = $"{baseUrl}/wp-json/wp/v2/{resource}?per_page={perPage}&page={page}&_embed=1";
             try
             {
                 log?.Report($"GET {url}");
-                using var resp = await GetWithRetryAsync(url, default, CreateRetryReporter(log, url));
+                using var resp = await GetWithRetryAsync(url, cancellationToken, CreateRetryReporter(log, url));
                 if (!resp.IsSuccessStatusCode)
                 {
                     if ((int)resp.StatusCode == 404)
@@ -2464,6 +2699,10 @@ public sealed class WooScraper : IDisposable
             }
             catch (TaskCanceledException ex)
             {
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    throw;
+                }
                 log?.Report($"WordPress {resource} request timed out: {ex.Message}");
                 break;
             }
@@ -2490,13 +2729,14 @@ public sealed class WooScraper : IDisposable
     private async Task<WordPressMenuCollection?> TryFetchMenusFromEndpointAsync(
         string baseUrl,
         string endpoint,
-        IProgress<string>? log)
+        IProgress<string>? log,
+        CancellationToken cancellationToken)
     {
         var url = CombineEndpoint(baseUrl, endpoint);
         try
         {
             log?.Report($"GET {url}");
-            using var resp = await GetWithRetryAsync(url, default, CreateRetryReporter(log, url));
+            using var resp = await GetWithRetryAsync(url, cancellationToken, CreateRetryReporter(log, url));
             if (!resp.IsSuccessStatusCode)
             {
                 if ((int)resp.StatusCode == 404)
@@ -2516,13 +2756,15 @@ public sealed class WooScraper : IDisposable
             List<WordPressMenu> menus;
             if (doc.RootElement.ValueKind == JsonValueKind.Array)
             {
-                menus = await DeserializeMenusAsync(baseUrl, endpoint, doc.RootElement, log);
+                menus = await DeserializeMenusAsync(baseUrl, endpoint, doc.RootElement, log, cancellationToken)
+                    .ConfigureAwait(false);
             }
             else if (doc.RootElement.ValueKind == JsonValueKind.Object
                      && doc.RootElement.TryGetProperty("menus", out var menusProperty)
                      && menusProperty.ValueKind == JsonValueKind.Array)
             {
-                menus = await DeserializeMenusAsync(baseUrl, endpoint, menusProperty, log);
+                menus = await DeserializeMenusAsync(baseUrl, endpoint, menusProperty, log, cancellationToken)
+                    .ConfigureAwait(false);
             }
             else
             {
@@ -2530,7 +2772,7 @@ public sealed class WooScraper : IDisposable
                 return null;
             }
 
-            var locations = await FetchMenuLocationsAsync(baseUrl, log);
+            var locations = await FetchMenuLocationsAsync(baseUrl, log, cancellationToken).ConfigureAwait(false);
             return new WordPressMenuCollection
             {
                 Menus = menus,
@@ -2539,6 +2781,10 @@ public sealed class WooScraper : IDisposable
         }
         catch (TaskCanceledException ex)
         {
+            if (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
             log?.Report($"Menus request timed out for {endpoint}: {ex.Message}");
         }
         catch (AuthenticationException ex)
@@ -2565,11 +2811,13 @@ public sealed class WooScraper : IDisposable
         string baseUrl,
         string endpoint,
         JsonElement array,
-        IProgress<string>? log)
+        IProgress<string>? log,
+        CancellationToken cancellationToken)
     {
         var menus = new List<WordPressMenu>();
         foreach (var element in array.EnumerateArray())
         {
+            cancellationToken.ThrowIfCancellationRequested();
             WordPressMenu? menu = null;
             try
             {
@@ -2585,12 +2833,14 @@ public sealed class WooScraper : IDisposable
                 continue;
             }
 
-            var detailed = await FetchMenuDetailAsync(baseUrl, endpoint, menu, log);
+            var detailed = await FetchMenuDetailAsync(baseUrl, endpoint, menu, log, cancellationToken)
+                .ConfigureAwait(false);
             var resolved = detailed ?? menu;
 
             if (resolved.Items is null || resolved.Items.Count == 0)
             {
-                var fallbackItems = await FetchMenuItemsAsync(baseUrl, resolved, log);
+                var fallbackItems = await FetchMenuItemsAsync(baseUrl, resolved, log, cancellationToken)
+                    .ConfigureAwait(false);
                 if (fallbackItems.Count > 0)
                 {
                     resolved.Items = fallbackItems;
@@ -2607,13 +2857,15 @@ public sealed class WooScraper : IDisposable
         string baseUrl,
         string endpoint,
         WordPressMenu summary,
-        IProgress<string>? log)
+        IProgress<string>? log,
+        CancellationToken cancellationToken)
     {
         if (summary.Id > 0)
         {
             var detailById = await FetchMenuDetailInternalAsync(
                 CombineEndpoint(baseUrl, $"{TrimEndpoint(endpoint)}/{summary.Id}"),
-                log);
+                log,
+                cancellationToken).ConfigureAwait(false);
             if (detailById is not null)
             {
                 return MergeMenu(summary, detailById);
@@ -2624,7 +2876,8 @@ public sealed class WooScraper : IDisposable
         {
             var detailBySlug = await FetchMenuDetailInternalAsync(
                 CombineEndpoint(baseUrl, $"{TrimEndpoint(endpoint)}/{summary.Slug}"),
-                log);
+                log,
+                cancellationToken).ConfigureAwait(false);
             if (detailBySlug is not null)
             {
                 return MergeMenu(summary, detailBySlug);
@@ -2643,12 +2896,15 @@ public sealed class WooScraper : IDisposable
         return detail;
     }
 
-    private async Task<WordPressMenu?> FetchMenuDetailInternalAsync(string url, IProgress<string>? log)
+    private async Task<WordPressMenu?> FetchMenuDetailInternalAsync(
+        string url,
+        IProgress<string>? log,
+        CancellationToken cancellationToken)
     {
         try
         {
             log?.Report($"GET {url}");
-            using var resp = await GetWithRetryAsync(url, default, CreateRetryReporter(log, url));
+            using var resp = await GetWithRetryAsync(url, cancellationToken, CreateRetryReporter(log, url));
             if (!resp.IsSuccessStatusCode)
             {
                 if ((int)resp.StatusCode == 404)
@@ -2669,6 +2925,10 @@ public sealed class WooScraper : IDisposable
         }
         catch (TaskCanceledException ex)
         {
+            if (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
             log?.Report($"Menu detail request timed out: {ex.Message}");
         }
         catch (AuthenticationException ex)
@@ -2694,7 +2954,8 @@ public sealed class WooScraper : IDisposable
     private async Task<List<WordPressMenuItem>> FetchMenuItemsAsync(
         string baseUrl,
         WordPressMenu menu,
-        IProgress<string>? log)
+        IProgress<string>? log,
+        CancellationToken cancellationToken)
     {
         if (menu is null)
         {
@@ -2710,7 +2971,9 @@ public sealed class WooScraper : IDisposable
 
         foreach (var candidate in candidates)
         {
-            var items = await FetchMenuItemsFromEndpointAsync(baseUrl, candidate, menu, log);
+            cancellationToken.ThrowIfCancellationRequested();
+            var items = await FetchMenuItemsFromEndpointAsync(baseUrl, candidate, menu, log, cancellationToken)
+                .ConfigureAwait(false);
             if (items.Count > 0)
             {
                 return BuildMenuTree(items);
@@ -2724,17 +2987,20 @@ public sealed class WooScraper : IDisposable
         string baseUrl,
         string endpoint,
         WordPressMenu menu,
-        IProgress<string>? log)
+        IProgress<string>? log,
+        CancellationToken cancellationToken)
     {
         var queries = BuildMenuItemQueryCandidates(menu);
         var results = new List<WordPressMenuItem>();
 
         foreach (var query in queries)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var collected = new List<WordPressMenuItem>();
 
             for (var page = 1; page <= 50; page++)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 var baseEndpoint = CombineEndpoint(baseUrl, endpoint);
                 var separator = baseEndpoint.Contains('?', StringComparison.Ordinal) ? '&' : '?';
                 var url = $"{baseEndpoint}{separator}per_page=100&page={page}";
@@ -2746,7 +3012,7 @@ public sealed class WooScraper : IDisposable
                 try
                 {
                     log?.Report($"GET {url}");
-                    using var resp = await GetWithRetryAsync(url, default, CreateRetryReporter(log, url));
+                    using var resp = await GetWithRetryAsync(url, cancellationToken, CreateRetryReporter(log, url));
                     if (!resp.IsSuccessStatusCode)
                     {
                         if ((int)resp.StatusCode is 400 or 404)
@@ -2777,6 +3043,10 @@ public sealed class WooScraper : IDisposable
                 }
                 catch (TaskCanceledException ex)
                 {
+                    if (cancellationToken.IsCancellationRequested)
+                    {
+                        throw;
+                    }
                     log?.Report($"Menu items request timed out for {endpoint}: {ex.Message}");
                     break;
                 }
@@ -2882,13 +3152,16 @@ public sealed class WooScraper : IDisposable
             .ToList();
     }
 
-    private async Task<List<WordPressMenuLocation>> FetchMenuLocationsAsync(string baseUrl, IProgress<string>? log)
+    private async Task<List<WordPressMenuLocation>> FetchMenuLocationsAsync(
+        string baseUrl,
+        IProgress<string>? log,
+        CancellationToken cancellationToken)
     {
         var url = $"{baseUrl}/wp-json/wp/v2/menu-locations";
         try
         {
             log?.Report($"GET {url}");
-            using var resp = await GetWithRetryAsync(url, default, CreateRetryReporter(log, url));
+            using var resp = await GetWithRetryAsync(url, cancellationToken, CreateRetryReporter(log, url));
             if (!resp.IsSuccessStatusCode)
             {
                 if ((int)resp.StatusCode == 404)
@@ -2933,6 +3206,10 @@ public sealed class WooScraper : IDisposable
         }
         catch (TaskCanceledException ex)
         {
+            if (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
             log?.Report($"Menu locations request timed out: {ex.Message}");
         }
         catch (AuthenticationException ex)
@@ -3081,12 +3358,13 @@ public sealed class WooScraper : IDisposable
     private static async Task<JsonDocument?> ParseDocumentAsync(
         HttpResponseMessage response,
         IProgress<string>? log,
-        string errorPrefix)
+        string errorPrefix,
+        CancellationToken cancellationToken)
     {
         try
         {
-            await using var stream = await response.Content.ReadAsStreamAsync();
-            return await JsonDocument.ParseAsync(stream);
+            await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
+            return await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
         }
         catch (JsonException ex)
         {
@@ -3106,7 +3384,8 @@ public sealed class WooScraper : IDisposable
         string username,
         string applicationPassword,
         IProgress<string>? log,
-        string context)
+        string context,
+        CancellationToken cancellationToken)
     {
         var url = CombineUrl(baseUrl, path);
         try
@@ -3117,7 +3396,7 @@ public sealed class WooScraper : IDisposable
                 var request = new HttpRequestMessage(HttpMethod.Get, url);
                 request.Headers.Authorization = CreateBasicAuthHeader(username, applicationPassword);
                 return request;
-            }, HttpCompletionOption.ResponseHeadersRead, default, CreateRetryReporter(log, url));
+            }, HttpCompletionOption.ResponseHeadersRead, cancellationToken, CreateRetryReporter(log, url)).ConfigureAwait(false);
             if (!resp.IsSuccessStatusCode)
             {
                 if ((int)resp.StatusCode != 404)
@@ -3127,12 +3406,16 @@ public sealed class WooScraper : IDisposable
                 return null;
             }
 
-            await using var stream = await resp.Content.ReadAsStreamAsync();
-            using var doc = await JsonDocument.ParseAsync(stream);
+            await using var stream = await resp.Content.ReadAsStreamAsync(cancellationToken);
+            using var doc = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
             return doc.RootElement.Clone();
         }
         catch (TaskCanceledException ex)
         {
+            if (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
             log?.Report($"{context} request timed out: {ex.Message}");
         }
         catch (AuthenticationException ex)
@@ -3161,9 +3444,11 @@ public sealed class WooScraper : IDisposable
         string username,
         string applicationPassword,
         IProgress<string>? log,
-        string context)
+        string context,
+        CancellationToken cancellationToken)
     {
-        var element = await TryFetchJsonAsync(baseUrl, path, username, applicationPassword, log, context);
+        var element = await TryFetchJsonAsync(baseUrl, path, username, applicationPassword, log, context, cancellationToken)
+            .ConfigureAwait(false);
         if (element is not JsonElement json)
         {
             return new ExtensionAssetSnapshot(null, null);
@@ -3181,9 +3466,11 @@ public sealed class WooScraper : IDisposable
         string username,
         string applicationPassword,
         IProgress<string>? log,
-        string context)
+        string context,
+        CancellationToken cancellationToken)
     {
-        var element = await TryFetchJsonAsync(baseUrl, path, username, applicationPassword, log, context);
+        var element = await TryFetchJsonAsync(baseUrl, path, username, applicationPassword, log, context, cancellationToken)
+            .ConfigureAwait(false);
         if (element is not JsonElement json)
         {
             return new();
@@ -3200,7 +3487,8 @@ public sealed class WooScraper : IDisposable
         string applicationPassword,
         string destinationPath,
         IProgress<string>? log,
-        string context)
+        string context,
+        CancellationToken cancellationToken)
     {
         var url = CombineUrl(baseUrl, path);
         try
@@ -3211,7 +3499,7 @@ public sealed class WooScraper : IDisposable
                 var request = new HttpRequestMessage(HttpMethod.Get, url);
                 request.Headers.Authorization = CreateBasicAuthHeader(username, applicationPassword);
                 return request;
-            }, HttpCompletionOption.ResponseHeadersRead, default, CreateRetryReporter(log, url));
+            }, HttpCompletionOption.ResponseHeadersRead, cancellationToken, CreateRetryReporter(log, url)).ConfigureAwait(false);
             if (!resp.IsSuccessStatusCode)
             {
                 if ((int)resp.StatusCode != 404)
@@ -3222,14 +3510,18 @@ public sealed class WooScraper : IDisposable
             }
 
             Directory.CreateDirectory(Path.GetDirectoryName(destinationPath)!);
-            await using var source = await resp.Content.ReadAsStreamAsync();
+            await using var source = await resp.Content.ReadAsStreamAsync(cancellationToken);
             await using var target = new FileStream(destinationPath, FileMode.Create, FileAccess.Write, FileShare.None);
-            await source.CopyToAsync(target);
+            await source.CopyToAsync(target, cancellationToken);
             log?.Report($"{context} downloaded to {destinationPath}.");
             return true;
         }
         catch (TaskCanceledException ex)
         {
+            if (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
             log?.Report($"{context} download timed out: {ex.Message}");
         }
         catch (AuthenticationException ex)
@@ -3632,7 +3924,8 @@ public sealed class WooScraper : IDisposable
         string baseUrl,
         string username,
         string applicationPassword,
-        IProgress<string>? log)
+        IProgress<string>? log,
+        CancellationToken cancellationToken)
     {
         var url = $"{baseUrl}/wp-admin/plugins.php";
         try
@@ -3643,7 +3936,7 @@ public sealed class WooScraper : IDisposable
                 var request = new HttpRequestMessage(HttpMethod.Get, url);
                 request.Headers.Authorization = CreateBasicAuthHeader(username, applicationPassword);
                 return request;
-            }, default, CreateRetryReporter(log, url));
+            }, cancellationToken, CreateRetryReporter(log, url)).ConfigureAwait(false);
             if (!resp.IsSuccessStatusCode)
             {
                 log?.Report($"Plugins admin page returned {(int)resp.StatusCode} ({resp.ReasonPhrase}).");
@@ -3666,6 +3959,10 @@ public sealed class WooScraper : IDisposable
         }
         catch (TaskCanceledException ex)
         {
+            if (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
             log?.Report($"Plugins fallback request timed out: {ex.Message}");
             return new();
         }
@@ -3690,7 +3987,8 @@ public sealed class WooScraper : IDisposable
         string baseUrl,
         string username,
         string applicationPassword,
-        IProgress<string>? log)
+        IProgress<string>? log,
+        CancellationToken cancellationToken)
     {
         var url = $"{baseUrl}/wp-admin/themes.php";
         try
@@ -3701,7 +3999,7 @@ public sealed class WooScraper : IDisposable
                 var request = new HttpRequestMessage(HttpMethod.Get, url);
                 request.Headers.Authorization = CreateBasicAuthHeader(username, applicationPassword);
                 return request;
-            }, default, CreateRetryReporter(log, url));
+            }, cancellationToken, CreateRetryReporter(log, url)).ConfigureAwait(false);
             if (!resp.IsSuccessStatusCode)
             {
                 log?.Report($"Themes admin page returned {(int)resp.StatusCode} ({resp.ReasonPhrase}).");
@@ -3724,6 +4022,10 @@ public sealed class WooScraper : IDisposable
         }
         catch (TaskCanceledException ex)
         {
+            if (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
             log?.Report($"Themes fallback request timed out: {ex.Message}");
             return new();
         }
@@ -3749,7 +4051,8 @@ public sealed class WooScraper : IDisposable
         string entityName,
         string username,
         string applicationPassword,
-        IProgress<string>? log)
+        IProgress<string>? log,
+        CancellationToken cancellationToken)
     {
         try
         {
@@ -3759,7 +4062,7 @@ public sealed class WooScraper : IDisposable
                 var request = new HttpRequestMessage(HttpMethod.Get, url);
                 request.Headers.Authorization = CreateBasicAuthHeader(username, applicationPassword);
                 return request;
-            }, default, CreateRetryReporter(log, url));
+            }, cancellationToken, CreateRetryReporter(log, url)).ConfigureAwait(false);
             if (!resp.IsSuccessStatusCode)
             {
                 if ((int)resp.StatusCode == 404)
@@ -3783,6 +4086,10 @@ public sealed class WooScraper : IDisposable
         }
         catch (TaskCanceledException ex)
         {
+            if (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
             log?.Report($"{entityName} request timed out: {ex.Message}");
         }
         catch (AuthenticationException ex)
