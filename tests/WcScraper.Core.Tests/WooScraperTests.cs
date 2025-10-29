@@ -304,15 +304,98 @@ public sealed class WooScraperTests
 
     private sealed class StubHttpMessageHandler : HttpMessageHandler
     {
-        private readonly Func<HttpRequestMessage, HttpResponseMessage> _responder;
+        private readonly Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> _responder;
+        private int _requestCount;
 
         public StubHttpMessageHandler(Func<HttpRequestMessage, HttpResponseMessage> responder)
+            : this((request, _) => Task.FromResult(responder(request)))
         {
-            _responder = responder;
         }
 
+        public StubHttpMessageHandler(Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> responder)
+        {
+            _responder = responder ?? throw new ArgumentNullException(nameof(responder));
+        }
+
+        public int RequestCount => Volatile.Read(ref _requestCount);
+
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
-            => Task.FromResult(_responder(request));
+        {
+            Interlocked.Increment(ref _requestCount);
+            return _responder(request, cancellationToken);
+        }
+    }
+
+    [Fact]
+    public async Task FetchStoreProductsAsync_CancelsBeforeRequestingNextPage()
+    {
+        const string firstPagePayload = """
+        [
+          { "id": 1, "name": "Product", "description": "<p>One</p>", "short_description": "<p>Short</p>" },
+          { "id": 2, "name": "Product", "description": "<p>Two</p>", "short_description": "<p>Short</p>" }
+        ]
+        """;
+
+        var firstPageRequestStarted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var allowFirstResponse = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var firstPageResponseReturning = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        using var handler = new StubHttpMessageHandler(async (request, cancellationToken) =>
+        {
+            if (request.RequestUri is null)
+            {
+                return new HttpResponseMessage(HttpStatusCode.BadRequest);
+            }
+
+            if (request.RequestUri.AbsolutePath.StartsWith("/wp-json/wc/store/v1/products", StringComparison.Ordinal))
+            {
+                if (request.RequestUri.Query.Contains("page=1", StringComparison.Ordinal))
+                {
+                    firstPageRequestStarted.TrySetResult(true);
+                    await allowFirstResponse.Task.ConfigureAwait(false);
+
+                    var response = new HttpResponseMessage(HttpStatusCode.OK)
+                    {
+                        Content = new StringContent(firstPagePayload, Encoding.UTF8, "application/json")
+                    };
+
+                    firstPageResponseReturning.TrySetResult(true);
+                    return response;
+                }
+
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent("[]", Encoding.UTF8, "application/json")
+                };
+            }
+
+            return new HttpResponseMessage(HttpStatusCode.NotFound);
+        });
+
+        using var client = new HttpClient(handler);
+        var scraper = new WooScraper(client, allowLegacyTls: false, loggerFactory: NullLoggerFactory.Instance);
+
+        using var cts = new CancellationTokenSource();
+        var progressMessages = new List<string>();
+        var progress = new Progress<string>(msg => progressMessages.Add(msg));
+
+        var fetchTask = scraper.FetchStoreProductsAsync(
+            "https://example.com",
+            perPage: 2,
+            log: progress,
+            cancellationToken: cts.Token);
+
+        await firstPageRequestStarted.Task.ConfigureAwait(false);
+        allowFirstResponse.TrySetResult(true);
+        await firstPageResponseReturning.Task.ConfigureAwait(false);
+
+        cts.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => await fetchTask.ConfigureAwait(false));
+
+        Assert.Equal(1, handler.RequestCount);
+        Assert.Contains(progressMessages, msg => msg.Contains("page=1", StringComparison.Ordinal));
+        Assert.DoesNotContain(progressMessages, msg => msg.Contains("page=2", StringComparison.Ordinal));
     }
 
     [Fact]
