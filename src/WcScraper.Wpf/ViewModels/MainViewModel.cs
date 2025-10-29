@@ -158,6 +158,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private AssistantDirectiveBatch? _pendingAssistantDirectives;
     private RunPlan? _activeRunPlan;
     private RunPlanExecutionOutcome? _activeRunPlanOutcome;
+    private CancellationTokenSource? _runCts;
     private CancellationTokenSource? _chatCts;
     private readonly Dictionary<string, (Func<bool> Getter, Action<bool> Setter)> _assistantToggleBindings;
     private readonly ObservableCollection<AutomationScriptDisplay> _latestAutomationScripts = new();
@@ -250,6 +251,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         _runPlanner.PlanExecutionCompleted += OnRunPlanExecutionCompleted;
         BrowseCommand = new RelayCommand(OnBrowse);
         RunCommand = new RelayCommand(async () => await OnRunAsync(), () => !IsRunning);
+        CancelRunCommand = new RelayCommand(OnCancelRun, () => _runCts is not null);
         SelectAllCategoriesCommand = new RelayCommand(() => SetSelection(CategoryChoices, true));
         ClearCategoriesCommand = new RelayCommand(() => SetSelection(CategoryChoices, false));
         SelectAllTagsCommand = new RelayCommand(() => SetSelection(TagChoices, true));
@@ -633,10 +635,14 @@ public sealed class MainViewModel : INotifyPropertyChanged
         get => _isRunning;
         private set
         {
+            if (_isRunning == value)
+            {
+                return;
+            }
+
             _isRunning = value;
             OnPropertyChanged();
-            RunCommand.RaiseCanExecuteChanged();
-            ReplicateCommand.RaiseCanExecuteChanged();
+            RaiseRunCommandStates();
         }
     }
 
@@ -1670,6 +1676,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
     public RelayCommand BrowseCommand { get; }
     public RelayCommand RunCommand { get; }
+    public RelayCommand CancelRunCommand { get; }
     public RelayCommand SelectAllCategoriesCommand { get; }
     public RelayCommand ClearCategoriesCommand { get; }
     public RelayCommand SelectAllTagsCommand { get; }
@@ -3850,15 +3857,16 @@ public sealed class MainViewModel : INotifyPropertyChanged
         };
     }
 
-    private async Task LoadFiltersForStoreAsync(string baseUrl, ILogger logger)
+    private async Task LoadFiltersForStoreAsync(string baseUrl, ILogger logger, CancellationToken cancellationToken)
     {
         var progress = RequireProgressLogger(logger);
         try
         {
             if (SelectedPlatform == PlatformMode.WooCommerce)
             {
-                var cats = await _wooScraper.FetchProductCategoriesAsync(baseUrl, progress);
-                var tags = await _wooScraper.FetchProductTagsAsync(baseUrl, progress);
+                var cats = await _wooScraper.FetchProductCategoriesAsync(baseUrl, progress, cancellationToken);
+                cancellationToken.ThrowIfCancellationRequested();
+                var tags = await _wooScraper.FetchProductTagsAsync(baseUrl, progress, cancellationToken);
                 System.Windows.Application.Current?.Dispatcher.Invoke(() =>
                 {
                     CategoryChoices.Clear();
@@ -3870,8 +3878,9 @@ public sealed class MainViewModel : INotifyPropertyChanged
             else
             {
                 var settings = BuildShopifySettings(baseUrl);
-                var collections = await _shopifyScraper.FetchCollectionsAsync(settings, progress);
-                var tags = await _shopifyScraper.FetchProductTagsAsync(settings, progress);
+                var collections = await _shopifyScraper.FetchCollectionsAsync(settings, progress, cancellationToken);
+                cancellationToken.ThrowIfCancellationRequested();
+                var tags = await _shopifyScraper.FetchProductTagsAsync(settings, progress, cancellationToken);
                 System.Windows.Application.Current?.Dispatcher.Invoke(() =>
                 {
                     CategoryChoices.Clear();
@@ -3926,6 +3935,36 @@ public sealed class MainViewModel : INotifyPropertyChanged
         return outcome;
     }
 
+    private void OnCancelRun()
+    {
+        var cts = _runCts;
+        if (cts is null)
+        {
+            return;
+        }
+
+        _runCts = null;
+
+        try
+        {
+            cts.Cancel();
+        }
+        finally
+        {
+            cts.Dispose();
+        }
+
+        IsRunning = false;
+        RaiseRunCommandStates();
+    }
+
+    private void RaiseRunCommandStates()
+    {
+        RunCommand.RaiseCanExecuteChanged();
+        ReplicateCommand.RaiseCanExecuteChanged();
+        CancelRunCommand.RaiseCanExecuteChanged();
+    }
+
     private async Task OnRunAsync()
     {
         var targetUrl = SelectedPlatform == PlatformMode.WooCommerce ? StoreUrl : ShopifyStoreUrl;
@@ -3945,25 +3984,37 @@ public sealed class MainViewModel : INotifyPropertyChanged
             return;
         }
 
-        var runGoals = ManualRunGoals?.Trim();
-
-        var retrySettings = GetRetrySettings();
-        var retryPolicy = new HttpRetryPolicy(
-            retrySettings.Attempts,
-            retrySettings.BaseDelay,
-            retrySettings.MaxDelay,
-            logger: _loggerFactory.CreateLogger<HttpRetryPolicy>());
-        _wooScraper.HttpPolicy = retryPolicy;
-        _wpDirectoryClient.RetryPolicy = retryPolicy;
-
-        _latestManualBundlePath = null;
-        _latestManualReportPath = null;
-        _latestRunDeltaPath = null;
-
-        ResetProvisioningContext();
-
         try
         {
+            var previousCts = _runCts;
+            if (previousCts is not null)
+            {
+                previousCts.Cancel();
+                previousCts.Dispose();
+            }
+
+            var runCts = new CancellationTokenSource();
+            _runCts = runCts;
+            RaiseRunCommandStates();
+            var cancellationToken = runCts.Token;
+
+            var runGoals = ManualRunGoals?.Trim();
+
+            var retrySettings = GetRetrySettings();
+            var retryPolicy = new HttpRetryPolicy(
+                retrySettings.Attempts,
+                retrySettings.BaseDelay,
+                retrySettings.MaxDelay,
+                logger: _loggerFactory.CreateLogger<HttpRetryPolicy>());
+            _wooScraper.HttpPolicy = retryPolicy;
+            _wpDirectoryClient.RetryPolicy = retryPolicy;
+
+            _latestManualBundlePath = null;
+            _latestManualReportPath = null;
+            _latestRunDeltaPath = null;
+
+            ResetProvisioningContext();
+
             IsRunning = true;
             ExecuteOnUiThread(() =>
             {
@@ -4005,7 +4056,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
             UpdateChatConfigurationStatus();
 
             // Refresh filters for this store
-            await LoadFiltersForStoreAsync(targetUrl, operationLogger);
+            await LoadFiltersForStoreAsync(targetUrl, operationLogger, cancellationToken);
 
             // Build filters
             string? categoryFilter = null;
@@ -4073,12 +4124,12 @@ public sealed class MainViewModel : INotifyPropertyChanged
             if (SelectedPlatform == PlatformMode.WooCommerce)
             {
                 Append($"Fetching products via Store API… {targetUrl}");
-                prods = await _wooScraper.FetchStoreProductsAsync(targetUrl, log: progressLogger, categoryFilter: categoryFilter, tagFilter: tagFilter);
+                prods = await _wooScraper.FetchStoreProductsAsync(targetUrl, log: progressLogger, categoryFilter: categoryFilter, tagFilter: tagFilter, cancellationToken: cancellationToken);
 
                 if (prods.Count == 0)
                 {
                     Append("Store API empty. Trying WordPress REST fallback (basic fields)…");
-                    prods = await _wooScraper.FetchWpProductsBasicAsync(targetUrl, log: progressLogger);
+                    prods = await _wooScraper.FetchWpProductsBasicAsync(targetUrl, log: progressLogger, cancellationToken: cancellationToken);
                 }
 
                 if (prods.Count == 0)
@@ -4096,7 +4147,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 }
                 else
                 {
-                    categoryTerms = await _wooScraper.FetchProductCategoriesAsync(targetUrl, progressLogger);
+                    categoryTerms = await _wooScraper.FetchProductCategoriesAsync(targetUrl, progressLogger, cancellationToken);
                 }
 
                 // Variations for variable products
@@ -4105,7 +4156,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 if (parentIds.Count > 0)
                 {
                     Append($"Fetching variations for {parentIds.Count} variable products…");
-                    variations = await _wooScraper.FetchStoreVariationsAsync(targetUrl, parentIds, log: progressLogger);
+                    variations = await _wooScraper.FetchStoreVariationsAsync(targetUrl, parentIds, log: progressLogger, cancellationToken: cancellationToken);
                     Append($"Found {variations.Count} variations.");
                 }
             }
@@ -4113,7 +4164,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
             {
                 var settings = BuildShopifySettings(targetUrl);
                 Append($"Fetching products via Shopify API… {settings.BaseUrl}");
-                var rawProducts = await _shopifyScraper.FetchShopifyProductsAsync(settings, log: progressLogger);
+                var rawProducts = await _shopifyScraper.FetchShopifyProductsAsync(settings, log: progressLogger, cancellationToken: cancellationToken);
                 var pairs = rawProducts
                     .Select(p => (Product: p, Store: ShopifyConverters.ToStoreProduct(p, settings)))
                     .ToList();
@@ -4174,7 +4225,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                     {
                         attemptedPluginFetch = true;
                         Append("Fetching installed plugins…");
-                        plugins = await _wooScraper.FetchPluginsAsync(targetUrl, WordPressUsername, WordPressApplicationPassword, progressLogger);
+                        plugins = await _wooScraper.FetchPluginsAsync(targetUrl, WordPressUsername, WordPressApplicationPassword, progressLogger, cancellationToken: cancellationToken);
                         Append(plugins.Count > 0
                             ? $"Found {plugins.Count} plugins."
                             : "No plugins returned by the authenticated endpoint.");
@@ -4184,7 +4235,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                     {
                         attemptedThemeFetch = true;
                         Append("Fetching installed themes…");
-                        themes = await _wooScraper.FetchThemeAsync(targetUrl, WordPressUsername, WordPressApplicationPassword, progressLogger);
+                        themes = await _wooScraper.FetchThemeAsync(targetUrl, WordPressUsername, WordPressApplicationPassword, progressLogger, cancellationToken: cancellationToken);
                         Append(themes.Count > 0
                             ? $"Found {themes.Count} themes."
                             : "No themes returned by the authenticated endpoint.");
@@ -4218,7 +4269,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
                         log: progressLogger,
                         additionalEntryUrls: additionalEntryUrls,
                         maxPages: pageLimit,
-                        maxBytes: byteLimit);
+                        maxBytes: byteLimit,
+                        cancellationToken: cancellationToken);
                     publicExtensionDetection = _wooScraper.LastPublicExtensionDetection;
                     if (publicExtensionFootprints.Count > 0)
                     {
@@ -4285,7 +4337,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                         Append($"Including {additionalDesignPages.Count} additional design page(s).");
                     }
 
-                    designSnapshot = await _wooScraper.FetchPublicDesignSnapshotAsync(targetUrl, progressLogger, additionalDesignPages);
+                    designSnapshot = await _wooScraper.FetchPublicDesignSnapshotAsync(targetUrl, progressLogger, additionalDesignPages, cancellationToken);
                     if (designSnapshot is null || string.IsNullOrWhiteSpace(designSnapshot.RawHtml))
                     {
                         Append("Public design snapshot capture returned no HTML.");
@@ -4313,7 +4365,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                     Append("Capturing public design screenshots…");
                     var screenshotFolder = Path.Combine(storeOutputFolder, "design", "screenshots");
                     var breakpoints = GetDesignScreenshotBreakpoints();
-                    var screenshots = await _designScreenshotService.CaptureScreenshotsAsync(targetUrl, screenshotFolder, breakpoints);
+                    var screenshots = await _designScreenshotService.CaptureScreenshotsAsync(targetUrl, screenshotFolder, breakpoints, cancellationToken);
 
                     if (screenshots.Count > 0)
                     {
@@ -4346,28 +4398,28 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 {
                     attemptedCustomerFetch = true;
                     Append("Fetching customers…");
-                    customers = await _wooScraper.FetchCustomersAsync(targetUrl, WordPressUsername, WordPressApplicationPassword, progressLogger);
+                    customers = await _wooScraper.FetchCustomersAsync(targetUrl, WordPressUsername, WordPressApplicationPassword, progressLogger, cancellationToken: cancellationToken);
                     Append(customers.Count > 0
                         ? $"Found {customers.Count} customers."
                         : "No customers returned by the authenticated endpoint.");
 
                     attemptedCouponFetch = true;
                     Append("Fetching coupons…");
-                    coupons = await _wooScraper.FetchCouponsAsync(targetUrl, WordPressUsername, WordPressApplicationPassword, progressLogger);
+                    coupons = await _wooScraper.FetchCouponsAsync(targetUrl, WordPressUsername, WordPressApplicationPassword, progressLogger, cancellationToken: cancellationToken);
                     Append(coupons.Count > 0
                         ? $"Found {coupons.Count} coupons."
                         : "No coupons returned by the authenticated endpoint.");
 
                     attemptedOrderFetch = true;
                     Append("Fetching orders…");
-                    orders = await _wooScraper.FetchOrdersAsync(targetUrl, WordPressUsername, WordPressApplicationPassword, progressLogger);
+                    orders = await _wooScraper.FetchOrdersAsync(targetUrl, WordPressUsername, WordPressApplicationPassword, progressLogger, cancellationToken: cancellationToken);
                     Append(orders.Count > 0
                         ? $"Found {orders.Count} orders."
                         : "No orders returned by the authenticated endpoint.");
 
                     attemptedSubscriptionFetch = true;
                     Append("Fetching subscriptions…");
-                    subscriptions = await _wooScraper.FetchSubscriptionsAsync(targetUrl, WordPressUsername, WordPressApplicationPassword, progressLogger);
+                    subscriptions = await _wooScraper.FetchSubscriptionsAsync(targetUrl, WordPressUsername, WordPressApplicationPassword, progressLogger, cancellationToken: cancellationToken);
                     Append(subscriptions.Count > 0
                         ? $"Found {subscriptions.Count} subscriptions."
                         : "No subscriptions returned by the authenticated endpoint.");
@@ -4379,7 +4431,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 && !string.IsNullOrWhiteSpace(WordPressUsername)
                 && !string.IsNullOrWhiteSpace(WordPressApplicationPassword))
             {
-                wpSettingsSnapshot = await _wooScraper.FetchWordPressSettingsAsync(targetUrl, WordPressUsername, WordPressApplicationPassword, progressLogger);
+                wpSettingsSnapshot = await _wooScraper.FetchWordPressSettingsAsync(targetUrl, WordPressUsername, WordPressApplicationPassword, progressLogger, cancellationToken);
                 if (wpSettingsSnapshot.Count > 0)
                 {
                     Append($"Captured {wpSettingsSnapshot.Count} WordPress settings entries for extension option discovery.");
@@ -4389,37 +4441,37 @@ public sealed class MainViewModel : INotifyPropertyChanged
             if (SelectedPlatform == PlatformMode.WooCommerce && plugins.Count > 0)
             {
                 var pluginRoot = Path.Combine(storeOutputFolder, "plugins");
-                pluginBundles = await CapturePluginBundlesAsync(targetUrl, WordPressUsername, WordPressApplicationPassword, plugins, pluginRoot, wpSettingsSnapshot, operationLogger);
+                pluginBundles = await CapturePluginBundlesAsync(targetUrl, WordPressUsername, WordPressApplicationPassword, plugins, pluginRoot, wpSettingsSnapshot, operationLogger, cancellationToken);
             }
 
             if (SelectedPlatform == PlatformMode.WooCommerce && themes.Count > 0)
             {
                 var themeRoot = Path.Combine(storeOutputFolder, "themes");
-                themeBundles = await CaptureThemeBundlesAsync(targetUrl, WordPressUsername, WordPressApplicationPassword, themes, themeRoot, wpSettingsSnapshot, operationLogger);
+                themeBundles = await CaptureThemeBundlesAsync(targetUrl, WordPressUsername, WordPressApplicationPassword, themes, themeRoot, wpSettingsSnapshot, operationLogger, cancellationToken);
             }
 
             if (SelectedPlatform == PlatformMode.WooCommerce)
             {
                 Append("Fetching WordPress pages…");
-                pages = await _wooScraper.FetchWordPressPagesAsync(targetUrl, log: progressLogger);
+                pages = await _wooScraper.FetchWordPressPagesAsync(targetUrl, log: progressLogger, cancellationToken: cancellationToken);
                 Append(pages.Count > 0
                     ? $"Captured {pages.Count} pages."
                     : "No pages returned by the REST API.");
 
                 Append("Fetching WordPress posts…");
-                posts = await _wooScraper.FetchWordPressPostsAsync(targetUrl, log: progressLogger);
+                posts = await _wooScraper.FetchWordPressPostsAsync(targetUrl, log: progressLogger, cancellationToken: cancellationToken);
                 Append(posts.Count > 0
                     ? $"Captured {posts.Count} posts."
                     : "No posts returned by the REST API.");
 
                 Append("Fetching WordPress media library…");
-                mediaLibrary = await _wooScraper.FetchWordPressMediaAsync(targetUrl, log: progressLogger);
+                mediaLibrary = await _wooScraper.FetchWordPressMediaAsync(targetUrl, log: progressLogger, cancellationToken: cancellationToken);
                 Append(mediaLibrary.Count > 0
                     ? $"Captured {mediaLibrary.Count} media entries."
                     : "No media entries returned by the REST API.");
 
                 Append("Discovering WordPress menus…");
-                menuCollection = await _wooScraper.FetchWordPressMenusAsync(targetUrl, log: progressLogger);
+                menuCollection = await _wooScraper.FetchWordPressMenusAsync(targetUrl, log: progressLogger, cancellationToken: cancellationToken);
                 if (menuCollection is not null && menuCollection.Menus.Count > 0)
                 {
                     Append($"Captured {menuCollection.Menus.Count} menus from {menuCollection.Endpoint}.");
@@ -4432,7 +4484,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 if (!string.IsNullOrWhiteSpace(WordPressUsername) && !string.IsNullOrWhiteSpace(WordPressApplicationPassword))
                 {
                     Append("Fetching WordPress widgets…");
-                    widgets = await _wooScraper.FetchWordPressWidgetsAsync(targetUrl, WordPressUsername, WordPressApplicationPassword, progressLogger);
+                    widgets = await _wooScraper.FetchWordPressWidgetsAsync(targetUrl, WordPressUsername, WordPressApplicationPassword, progressLogger, cancellationToken: cancellationToken);
                     Append(widgets.Widgets.Count > 0
                         ? $"Captured {widgets.Widgets.Count} widgets across {widgets.Areas.Count} areas."
                         : "No widgets returned by the REST API.");
@@ -4531,7 +4583,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 else
                 {
                     Append("Capturing store configuration…");
-                    configuration = await FetchStoreConfigurationAsync(targetUrl, WordPressUsername, WordPressApplicationPassword, operationLogger);
+                    configuration = await FetchStoreConfigurationAsync(targetUrl, WordPressUsername, WordPressApplicationPassword, operationLogger, cancellationToken);
                     if (configuration is not null && HasConfigurationData(configuration))
                     {
                         var configPath = Path.Combine(storeOutputFolder, $"{storeId}_{timestamp}_configuration.json");
@@ -5188,7 +5240,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 if (SelectedPlatform == PlatformMode.WooCommerce && prods.Count > 0 && prods[0].Prices is not null)
                 {
                     var ids = prods.Select(p => p.Id).Where(id => id > 0);
-                    var revs = await _wooScraper.FetchStoreReviewsAsync(targetUrl, ids, log: progressLogger);
+                    var revs = await _wooScraper.FetchStoreReviewsAsync(targetUrl, ids, log: progressLogger, cancellationToken: cancellationToken);
                     if (revs.Count > 0)
                     {
                         var path = Path.Combine(storeOutputFolder, $"{storeId}_{timestamp}_reviews.csv");
@@ -5744,7 +5796,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                         distinctWarnings,
                         deltaNarrativePath,
                         deltaDataPath,
-                        CancellationToken.None);
+                        cancellationToken);
                 }
                 catch (Exception ex)
                 {
@@ -5781,7 +5833,15 @@ public sealed class MainViewModel : INotifyPropertyChanged
         }
         finally
         {
+            var runCts = _runCts;
+            if (runCts is not null)
+            {
+                _runCts = null;
+                runCts.Dispose();
+            }
+
             IsRunning = false;
+            RaiseRunCommandStates();
         }
     }
 
@@ -5789,12 +5849,13 @@ public sealed class MainViewModel : INotifyPropertyChanged
         string baseUrl,
         string username,
         string applicationPassword,
-        ILogger logger)
+        ILogger logger,
+        CancellationToken cancellationToken)
     {
         var configuration = new StoreConfiguration();
         var progress = RequireProgressLogger(logger);
 
-        var settings = await _wooScraper.FetchStoreSettingsAsync(baseUrl, username, applicationPassword, progress);
+        var settings = await _wooScraper.FetchStoreSettingsAsync(baseUrl, username, applicationPassword, progress, cancellationToken);
         if (settings.Count > 0)
         {
             configuration.StoreSettings.AddRange(settings);
@@ -5805,7 +5866,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
             logger.Report("No store settings returned or endpoint unavailable.");
         }
 
-        var zones = await _wooScraper.FetchShippingZonesAsync(baseUrl, username, applicationPassword, progress);
+        var zones = await _wooScraper.FetchShippingZonesAsync(baseUrl, username, applicationPassword, progress, cancellationToken);
         if (zones.Count > 0)
         {
             configuration.ShippingZones.AddRange(zones);
@@ -5816,7 +5877,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
             logger.Report("No shipping zones returned or endpoint unavailable.");
         }
 
-        var gateways = await _wooScraper.FetchPaymentGatewaysAsync(baseUrl, username, applicationPassword, progress);
+        var gateways = await _wooScraper.FetchPaymentGatewaysAsync(baseUrl, username, applicationPassword, progress, cancellationToken);
         if (gateways.Count > 0)
         {
             configuration.PaymentGateways.AddRange(gateways);
@@ -5844,7 +5905,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
         List<InstalledPlugin> plugins,
         string rootFolder,
         IReadOnlyDictionary<string, JsonElement>? settingsSnapshot,
-        ILogger logger)
+        ILogger logger,
+        CancellationToken cancellationToken)
     {
         var bundles = new List<ExtensionArtifact>();
         Directory.CreateDirectory(rootFolder);
@@ -5852,6 +5914,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
         foreach (var plugin in plugins)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var slug = ResolvePluginSlug(plugin);
             var folderName = SanitizeForPath(slug ?? plugin.Name ?? plugin.PluginFile ?? Guid.NewGuid().ToString("N"));
             var bundleFolder = Path.Combine(rootFolder, folderName);
@@ -5864,7 +5927,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 plugin.AssetManifest = null;
                 plugin.AssetPaths.Clear();
 
-                var options = await _wooScraper.FetchPluginOptionsAsync(baseUrl, username, applicationPassword, plugin, progress, settingsSnapshot);
+                var options = await _wooScraper.FetchPluginOptionsAsync(baseUrl, username, applicationPassword, plugin, progress, settingsSnapshot, cancellationToken);
                 if (options.Count > 0)
                 {
                     foreach (var kvp in options)
@@ -5880,14 +5943,14 @@ public sealed class MainViewModel : INotifyPropertyChanged
                     {
                         var optionsPath = Path.Combine(bundleFolder, "options.json");
                         var json = JsonSerializer.Serialize(plugin.OptionData, _artifactWriteOptions);
-                        await File.WriteAllTextAsync(optionsPath, json, Encoding.UTF8);
+                        await File.WriteAllTextAsync(optionsPath, json, Encoding.UTF8, cancellationToken);
                         var keys = plugin.OptionData.Keys.OrderBy(k => k, StringComparer.OrdinalIgnoreCase).ToList();
                         plugin.OptionKeys.AddRange(keys);
                         logger.Report($"Captured {keys.Count} options for plugin {plugin.Name ?? slug ?? plugin.PluginFile ?? folderName}.");
                     }
                 }
 
-                var manifest = await _wooScraper.FetchPluginAssetManifestAsync(baseUrl, username, applicationPassword, plugin, progress);
+                var manifest = await _wooScraper.FetchPluginAssetManifestAsync(baseUrl, username, applicationPassword, plugin, progress, cancellationToken);
                 if (manifest.Paths.Count > 0 || !string.IsNullOrWhiteSpace(manifest.ManifestJson))
                 {
                     if (manifest.Paths.Count > 0)
@@ -5902,7 +5965,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                         {
                             var manifestPath = Path.Combine(bundleFolder, "manifest.json");
                             var manifestJson = plugin.AssetManifest.ToJsonString(_artifactWriteOptions);
-                            await File.WriteAllTextAsync(manifestPath, manifestJson, Encoding.UTF8);
+                            await File.WriteAllTextAsync(manifestPath, manifestJson, Encoding.UTF8, cancellationToken);
                         }
                     }
 
@@ -5924,7 +5987,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 }
 
                 var archivePath = Path.Combine(bundleFolder, "archive.zip");
-                var downloaded = await _wooScraper.DownloadPluginArchiveAsync(baseUrl, username, applicationPassword, plugin, archivePath, progress);
+                var downloaded = await _wooScraper.DownloadPluginArchiveAsync(baseUrl, username, applicationPassword, plugin, archivePath, progress, cancellationToken);
                 if (!downloaded && File.Exists(archivePath))
                 {
                     File.Delete(archivePath);
@@ -5949,7 +6012,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
         List<InstalledTheme> themes,
         string rootFolder,
         IReadOnlyDictionary<string, JsonElement>? settingsSnapshot,
-        ILogger logger)
+        ILogger logger,
+        CancellationToken cancellationToken)
     {
         var bundles = new List<ExtensionArtifact>();
         Directory.CreateDirectory(rootFolder);
@@ -5957,6 +6021,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
         foreach (var theme in themes)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var slug = ResolveThemeSlug(theme);
             var folderName = SanitizeForPath(slug ?? theme.Name ?? theme.Stylesheet ?? Guid.NewGuid().ToString("N"));
             var bundleFolder = Path.Combine(rootFolder, folderName);
@@ -5969,7 +6034,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 theme.AssetManifest = null;
                 theme.AssetPaths.Clear();
 
-                var options = await _wooScraper.FetchThemeOptionsAsync(baseUrl, username, applicationPassword, theme, progress, settingsSnapshot);
+                var options = await _wooScraper.FetchThemeOptionsAsync(baseUrl, username, applicationPassword, theme, progress, settingsSnapshot, cancellationToken);
                 if (options.Count > 0)
                 {
                     foreach (var kvp in options)
@@ -5985,14 +6050,14 @@ public sealed class MainViewModel : INotifyPropertyChanged
                     {
                         var optionsPath = Path.Combine(bundleFolder, "options.json");
                         var json = JsonSerializer.Serialize(theme.OptionData, _artifactWriteOptions);
-                        await File.WriteAllTextAsync(optionsPath, json, Encoding.UTF8);
+                        await File.WriteAllTextAsync(optionsPath, json, Encoding.UTF8, cancellationToken);
                         var keys = theme.OptionData.Keys.OrderBy(k => k, StringComparer.OrdinalIgnoreCase).ToList();
                         theme.OptionKeys.AddRange(keys);
                         logger.Report($"Captured {keys.Count} options for theme {theme.Name ?? slug ?? folderName}.");
                     }
                 }
 
-                var manifest = await _wooScraper.FetchThemeAssetManifestAsync(baseUrl, username, applicationPassword, theme, progress);
+                var manifest = await _wooScraper.FetchThemeAssetManifestAsync(baseUrl, username, applicationPassword, theme, progress, cancellationToken);
                 if (manifest.Paths.Count > 0 || !string.IsNullOrWhiteSpace(manifest.ManifestJson))
                 {
                     if (manifest.Paths.Count > 0)
@@ -6007,7 +6072,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                         {
                             var manifestPath = Path.Combine(bundleFolder, "manifest.json");
                             var manifestJson = theme.AssetManifest.ToJsonString(_artifactWriteOptions);
-                            await File.WriteAllTextAsync(manifestPath, manifestJson, Encoding.UTF8);
+                            await File.WriteAllTextAsync(manifestPath, manifestJson, Encoding.UTF8, cancellationToken);
                         }
                     }
 
@@ -6029,7 +6094,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 }
 
                 var archivePath = Path.Combine(bundleFolder, "archive.zip");
-                var downloaded = await _wooScraper.DownloadThemeArchiveAsync(baseUrl, username, applicationPassword, theme, archivePath, progress);
+                var downloaded = await _wooScraper.DownloadThemeArchiveAsync(baseUrl, username, applicationPassword, theme, archivePath, progress, cancellationToken);
                 if (!downloaded && File.Exists(archivePath))
                 {
                     File.Delete(archivePath);
@@ -8502,6 +8567,18 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
         try
         {
+            var previousCts = _runCts;
+            if (previousCts is not null)
+            {
+                previousCts.Cancel();
+                previousCts.Dispose();
+            }
+
+            var runCts = new CancellationTokenSource();
+            _runCts = runCts;
+            RaiseRunCommandStates();
+            var cancellationToken = runCts.Token;
+
             IsRunning = true;
             var provisioningContext = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
             {
@@ -8540,13 +8617,13 @@ public sealed class MainViewModel : INotifyPropertyChanged
             if (_lastProvisioningContext.PluginBundles.Count > 0)
             {
                 Append($"Uploading {_lastProvisioningContext.PluginBundles.Count} plugin bundles…");
-                await _wooProvisioningService.UploadPluginsAsync(settings, _lastProvisioningContext.PluginBundles, progressLogger);
+                await _wooProvisioningService.UploadPluginsAsync(settings, _lastProvisioningContext.PluginBundles, progressLogger, cancellationToken);
             }
 
             if (_lastProvisioningContext.ThemeBundles.Count > 0)
             {
                 Append($"Uploading {_lastProvisioningContext.ThemeBundles.Count} theme bundles…");
-                await _wooProvisioningService.UploadThemesAsync(settings, _lastProvisioningContext.ThemeBundles, progressLogger);
+                await _wooProvisioningService.UploadThemesAsync(settings, _lastProvisioningContext.ThemeBundles, progressLogger, cancellationToken);
             }
 
             await _wooProvisioningService.ProvisionAsync(
@@ -8561,7 +8638,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 subscriptions: _lastProvisioningContext.Subscriptions,
                 siteContent: _lastProvisioningContext.SiteContent,
                 categoryMetadata: _lastProvisioningContext.ProductCategories,
-                progress: progressLogger);
+                progress: progressLogger,
+                cancellationToken: cancellationToken);
         }
         catch (Exception ex)
         {
@@ -8569,7 +8647,15 @@ public sealed class MainViewModel : INotifyPropertyChanged
         }
         finally
         {
+            var runCts = _runCts;
+            if (runCts is not null)
+            {
+                _runCts = null;
+                runCts.Dispose();
+            }
+
             IsRunning = false;
+            RaiseRunCommandStates();
         }
     }
 
