@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.Specialized;
 using System.Diagnostics.CodeAnalysis;
 using System.IO;
 using System.Linq;
@@ -11,6 +12,7 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
+using System.Windows.Threading;
 using ClosedXML.Excel;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -153,6 +155,136 @@ public class MainViewModelTests
         thread.SetApartmentState(ApartmentState.STA);
         thread.Start();
         await completion.Task;
+    }
+
+    [Fact]
+    [SuppressMessage("xUnit.Analyzers", "xUnit1031", Justification = "Test uses an STA thread with dispatcher pumping to await async continuations.")]
+    public async Task CancelRunCommand_CancelsInFlightWooRunAndReports()
+    {
+        var completion = new TaskCompletionSource<object?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var thread = new Thread(() =>
+        {
+            Application? existingApp = Application.Current;
+            var createdApp = false;
+            Application app;
+            string? outputFolder = null;
+
+            try
+            {
+                if (existingApp is null)
+                {
+                    app = new Application
+                    {
+                        ShutdownMode = ShutdownMode.OnExplicitShutdown
+                    };
+                    createdApp = true;
+                }
+                else
+                {
+                    app = existingApp;
+                }
+
+                var runStarted = new TaskCompletionSource<object?>(TaskCreationOptions.RunContinuationsAsynchronously);
+                var runCancelled = new TaskCompletionSource<object?>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+                using var wooHandler = new StubHttpMessageHandler(async (request, cancellationToken) =>
+                {
+                    runStarted.TrySetResult(null);
+
+                    try
+                    {
+                        await Task.Delay(Timeout.Infinite, cancellationToken).ConfigureAwait(false);
+                        return new HttpResponseMessage(HttpStatusCode.OK);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        runCancelled.TrySetResult(null);
+                        throw;
+                    }
+                });
+                using var wooClient = new HttpClient(wooHandler, disposeHandler: false);
+                using var wooScraper = new WooScraper(wooClient);
+                using var shopifyScraper = new ShopifyScraper(new HttpClient(new StubHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.OK))));
+                using var httpClient = new HttpClient(new StubHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)));
+
+                var viewModel = new MainViewModel(
+                    new StubDialogService(),
+                    wooScraper,
+                    shopifyScraper,
+                    httpClient,
+                    NullLoggerFactory.Instance);
+
+                outputFolder = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+                viewModel.OutputFolder = outputFolder;
+                viewModel.SelectedPlatform = PlatformMode.WooCommerce;
+                viewModel.StoreUrl = "https://example.com";
+
+                var logSignal = new TaskCompletionSource<object?>(TaskCreationOptions.RunContinuationsAsynchronously);
+                ((INotifyCollectionChanged)viewModel.Logs).CollectionChanged += (_, _) =>
+                {
+                    if (viewModel.Logs.Any(log => log.Contains("Run cancelled.", StringComparison.Ordinal)))
+                    {
+                        logSignal.TrySetResult(null);
+                    }
+                };
+
+                var runCtsField = typeof(MainViewModel).GetField("_runCts", BindingFlags.NonPublic | BindingFlags.Instance);
+                Assert.NotNull(runCtsField);
+
+                viewModel.RunCommand.Execute(null);
+
+                runStarted.Task.GetAwaiter().GetResult();
+
+                Assert.True(viewModel.IsRunning);
+                var runCtsBeforeCancel = (CancellationTokenSource?)runCtsField!.GetValue(viewModel);
+                Assert.NotNull(runCtsBeforeCancel);
+
+                viewModel.CancelRunCommand.Execute(null);
+
+                runCancelled.Task.GetAwaiter().GetResult();
+
+                WaitForDispatcher(app.Dispatcher, logSignal.Task, TimeSpan.FromSeconds(5));
+
+                var finalRunCts = (CancellationTokenSource?)runCtsField.GetValue(viewModel);
+                Assert.Null(finalRunCts);
+                Assert.False(viewModel.IsRunning);
+                Assert.False(viewModel.CancelRunCommand.CanExecute(null));
+                Assert.Contains(viewModel.Logs, log => log.Contains("Run cancelled.", StringComparison.Ordinal));
+
+                completion.TrySetResult(null);
+
+                if (createdApp)
+                {
+                    app.Shutdown();
+                }
+            }
+            catch (Exception ex)
+            {
+                completion.TrySetException(ex);
+                if (createdApp && Application.Current is Application created)
+                {
+                    created.Shutdown();
+                }
+            }
+            finally
+            {
+                if (outputFolder is not null && Directory.Exists(outputFolder))
+                {
+                    try
+                    {
+                        Directory.Delete(outputFolder, recursive: true);
+                    }
+                    catch
+                    {
+                        // Ignore cleanup failures in tests.
+                    }
+                }
+            }
+        });
+
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+        await completion.Task.ConfigureAwait(false);
     }
 
     [Fact]
@@ -907,16 +1039,62 @@ public class MainViewModelTests
         public string? SaveFile(string filter, string defaultFileName, string? initialDirectory = null) => null;
     }
 
+    private static void WaitForDispatcher(Dispatcher dispatcher, Task task, TimeSpan timeout)
+    {
+        if (dispatcher is null)
+        {
+            throw new ArgumentNullException(nameof(dispatcher));
+        }
+
+        if (task is null)
+        {
+            throw new ArgumentNullException(nameof(task));
+        }
+
+        if (task.IsCompleted)
+        {
+            task.GetAwaiter().GetResult();
+            return;
+        }
+
+        var frame = new DispatcherFrame();
+        using var timeoutCts = new CancellationTokenSource(timeout);
+        using var timeoutRegistration = timeoutCts.Token.Register(() => frame.Continue = false);
+
+        _ = task.ContinueWith(_ => frame.Continue = false, CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.Default);
+
+        dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(() => { }));
+
+        Dispatcher.PushFrame(frame);
+
+        if (!task.IsCompleted)
+        {
+            throw new TimeoutException("The dispatcher operation did not complete within the allotted time.");
+        }
+
+        task.GetAwaiter().GetResult();
+    }
+
     private sealed class StubHttpMessageHandler : HttpMessageHandler
     {
-        private readonly Func<HttpRequestMessage, HttpResponseMessage> _responder;
+        private readonly Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> _responder;
 
         public StubHttpMessageHandler(Func<HttpRequestMessage, HttpResponseMessage> responder)
         {
-            _responder = responder;
+            if (responder is null)
+            {
+                throw new ArgumentNullException(nameof(responder));
+            }
+
+            _responder = (request, _) => Task.FromResult(responder(request));
+        }
+
+        public StubHttpMessageHandler(Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> responder)
+        {
+            _responder = responder ?? throw new ArgumentNullException(nameof(responder));
         }
 
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
-            => Task.FromResult(_responder(request));
+            => _responder(request, cancellationToken);
     }
 }
