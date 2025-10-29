@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Net;
 using System.Net.Http;
 using System.Text;
@@ -312,5 +313,37 @@ public sealed class WooScraperTests
 
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
             => Task.FromResult(_responder(request));
+    }
+
+    [Fact]
+    public async Task FetchStoreProductsAsync_CancellationPropagatesWithoutTimeoutLog()
+    {
+        using var handler = new DelayedResponseHandler();
+        using var client = new HttpClient(handler);
+        var scraper = new WooScraper(client, allowLegacyTls: false, loggerFactory: NullLoggerFactory.Instance);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(50));
+        var progressMessages = new List<string>();
+        var progress = new Progress<string>(msg => progressMessages.Add(msg));
+
+        await Assert.ThrowsAsync<TaskCanceledException>(() => scraper.FetchStoreProductsAsync(
+            "https://example.com",
+            log: progress,
+            cancellationToken: cts.Token));
+
+        Assert.DoesNotContain(progressMessages, msg =>
+            msg.Contains("timed out", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private sealed class DelayedResponseHandler : HttpMessageHandler
+    {
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            await Task.Delay(TimeSpan.FromSeconds(10), cancellationToken);
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("[]", Encoding.UTF8, "application/json")
+            };
+        }
     }
 }
