@@ -52,9 +52,16 @@ public sealed class HttpRetryPolicyTests
         Assert.Equal(HttpStatusCode.OK, instrumentationSuccess.StatusCode);
         Assert.True(instrumentationSuccess.Duration >= TimeSpan.Zero);
 
+        var scopeContext = Assert.Single(instrumentation.ScopeContexts);
+        Assert.Equal(context, scopeContext);
+
+        var startContext = Assert.Single(instrumentation.RequestStarts);
+        Assert.Equal(context, startContext);
+
         var instrumentationRetry = Assert.Single(instrumentation.Retries);
         Assert.Equal(1, instrumentationRetry.RetryAttempt);
         Assert.Equal("temporary network error", instrumentationRetry.RetryReason);
+        Assert.Equal(TimeSpan.FromMilliseconds(1), instrumentationRetry.RetryDelay);
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
     }
@@ -96,6 +103,12 @@ public sealed class HttpRetryPolicyTests
         var instrumentationSuccess = Assert.Single(instrumentation.Successes);
         Assert.Equal(success.StatusCode, instrumentationSuccess.StatusCode);
         Assert.Equal(success.RetryCount, instrumentationSuccess.RetryCount);
+
+        var scopeContext = Assert.Single(instrumentation.ScopeContexts);
+        Assert.Equal(context, scopeContext);
+
+        var startContext = Assert.Single(instrumentation.RequestStarts);
+        Assert.Equal(context, startContext);
 
         var instrumentationRetry = Assert.Single(instrumentation.Retries);
         Assert.True((instrumentationRetry.RetryDelay ?? TimeSpan.Zero) >= TimeSpan.FromMilliseconds(3));
@@ -143,8 +156,15 @@ public sealed class HttpRetryPolicyTests
         Assert.Equal(success.StatusCode, instrumentationSuccess.StatusCode);
         Assert.Equal(success.RetryCount, instrumentationSuccess.RetryCount);
 
+        var scopeContext = Assert.Single(instrumentation.ScopeContexts);
+        Assert.Equal(context, scopeContext);
+
+        var startContext = Assert.Single(instrumentation.RequestStarts);
+        Assert.Equal(context, startContext);
+
         var instrumentationRetry = Assert.Single(instrumentation.Retries);
         Assert.Contains(((int)statusCode).ToString(), instrumentationRetry.RetryReason ?? string.Empty);
+        Assert.Equal(TimeSpan.FromMilliseconds(1), instrumentationRetry.RetryDelay);
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
     }
@@ -185,7 +205,14 @@ public sealed class HttpRetryPolicyTests
         Assert.Equal(success.StatusCode, instrumentationSuccess.StatusCode);
         Assert.Equal(success.RetryCount, instrumentationSuccess.RetryCount);
 
+        var scopeContext = Assert.Single(instrumentation.ScopeContexts);
+        Assert.Equal(context, scopeContext);
+
+        var startContext = Assert.Single(instrumentation.RequestStarts);
+        Assert.Equal(context, startContext);
+
         Assert.Single(instrumentation.Retries);
+        Assert.Equal(TimeSpan.FromMilliseconds(1), instrumentation.Retries[0].RetryDelay);
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
     }
@@ -222,6 +249,12 @@ public sealed class HttpRetryPolicyTests
         var instrumentationSuccess = Assert.Single(instrumentation.Successes);
         Assert.Equal(success.StatusCode, instrumentationSuccess.StatusCode);
         Assert.Equal(success.RetryCount, instrumentationSuccess.RetryCount);
+
+        var scopeContext = Assert.Single(instrumentation.ScopeContexts);
+        Assert.Equal(context, scopeContext);
+
+        var startContext = Assert.Single(instrumentation.RequestStarts);
+        Assert.Equal(context, startContext);
 
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
     }
@@ -266,6 +299,13 @@ public sealed class HttpRetryPolicyTests
 
         var retryContext = Assert.Single(instrumentation.Retries);
         Assert.Equal(1, retryContext.RetryAttempt);
+        Assert.Equal(TimeSpan.FromMilliseconds(50), retryContext.RetryDelay);
+
+        var scopeContext = Assert.Single(instrumentation.ScopeContexts);
+        Assert.Equal(context, scopeContext);
+
+        var startContext = Assert.Single(instrumentation.RequestStarts);
+        Assert.Equal(context, startContext);
     }
 
     private sealed class TestScraperInstrumentation : IScraperInstrumentation
