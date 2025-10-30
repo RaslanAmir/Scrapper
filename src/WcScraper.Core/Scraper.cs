@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Linq;
@@ -298,13 +297,9 @@ public sealed class WooScraper : IDisposable
                       (string.IsNullOrWhiteSpace(tagFilter) ? string.Empty : $"&tag={Uri.EscapeDataString(tagFilter)}");
 
             var context = new ScraperOperationContext("WooScraper.FetchStoreProducts", url, "product");
-            using var scope = _instrumentation.BeginScope(context);
-            _instrumentation.RecordRequestStart(context);
             _logger.LogInformation("Requesting WooCommerce products from {Url}", url);
             log?.Report($"GET {url}");
 
-            var stopwatch = Stopwatch.StartNew();
-            var retryCount = 0;
             HttpRetryResult? retryResult = null;
             HttpResponseMessage? response = null;
 
@@ -317,13 +312,11 @@ public sealed class WooScraper : IDisposable
                     onSuccess: result =>
                     {
                         retryResult = result;
-                        retryCount = result.RetryCount;
                         ReportRetryOutcome(log, "Store products request", result, isFailure: false);
                     },
                     onFailure: result =>
                     {
                         retryResult = result;
-                        retryCount = result.RetryCount;
                         ReportRetryOutcome(log, "Store products request", result, isFailure: true);
                     }).ConfigureAwait(false);
 
@@ -331,10 +324,6 @@ public sealed class WooScraper : IDisposable
                 {
                     if ((int)response.StatusCode == 404)
                     {
-                        stopwatch.Stop();
-                        var notFoundException = new HttpRequestException(
-                            $"WooCommerce store products endpoint returned {(int)response.StatusCode} ({response.ReasonPhrase}).");
-                        _instrumentation.RecordRequestFailure(context, stopwatch.Elapsed, notFoundException, response.StatusCode, retryCount);
                         _logger.LogWarning("Store products endpoint returned 404 for {Url}", url);
                         log?.Report("Store API endpoint not found.");
                         break;
@@ -346,30 +335,29 @@ public sealed class WooScraper : IDisposable
                 var text = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
                 var payloadBytes = DeterminePayloadBytes(response, text);
 
+                var elapsed = retryResult?.Elapsed ?? TimeSpan.Zero;
+                var retryCount = retryResult?.RetryCount ?? 0;
+
                 if (string.IsNullOrWhiteSpace(text))
                 {
-                    stopwatch.Stop();
-                    var successContext = context with { PayloadBytes = payloadBytes };
-                    var elapsed = retryResult?.Elapsed ?? stopwatch.Elapsed;
-                    _instrumentation.RecordRequestSuccess(successContext, elapsed, response.StatusCode, retryCount);
                     _logger.LogInformation(
-                        "Store products request to {Url} completed with empty payload (status {StatusCode}).",
+                        "Store products request to {Url} completed with empty payload (status {StatusCode}) after {RetryCount} retries in {Elapsed}.",
                         url,
-                        (int)response.StatusCode);
+                        (int)response.StatusCode,
+                        retryCount,
+                        FormatElapsed(elapsed));
                     break;
                 }
 
                 var items = DeserializeListWithRecovery<StoreProduct>(text, "store products", log);
                 if (items.Count == 0)
                 {
-                    stopwatch.Stop();
-                    var successContext = context with { PayloadBytes = payloadBytes };
-                    var elapsed = retryResult?.Elapsed ?? stopwatch.Elapsed;
-                    _instrumentation.RecordRequestSuccess(successContext, elapsed, response.StatusCode, retryCount);
                     _logger.LogInformation(
-                        "Store products request to {Url} returned no items (status {StatusCode}).",
+                        "Store products request to {Url} returned no items (status {StatusCode}) after {RetryCount} retries in {Elapsed}.",
                         url,
-                        (int)response.StatusCode);
+                        (int)response.StatusCode,
+                        retryCount,
+                        FormatElapsed(elapsed));
                     break;
                 }
 
@@ -385,17 +373,14 @@ public sealed class WooScraper : IDisposable
 
                 all.AddRange(items);
 
-                stopwatch.Stop();
-                var completedContext = context with { PayloadBytes = payloadBytes };
-                var completedElapsed = retryResult?.Elapsed ?? stopwatch.Elapsed;
-                _instrumentation.RecordRequestSuccess(completedContext, completedElapsed, response.StatusCode, retryCount);
                 _logger.LogInformation(
-                    "Fetched {Count} store products from {Url} with status {StatusCode} after {RetryCount} retries (payload {PayloadBytes}).",
+                    "Fetched {Count} store products from {Url} with status {StatusCode} after {RetryCount} retries (payload {PayloadBytes}, elapsed {Elapsed}).",
                     items.Count,
                     url,
                     (int)response.StatusCode,
                     retryCount,
-                    completedContext.PayloadBytes ?? 0L);
+                    payloadBytes ?? 0L,
+                    FormatElapsed(elapsed));
 
                 if (items.Count < perPage)
                 {
@@ -410,38 +395,50 @@ public sealed class WooScraper : IDisposable
                     throw;
                 }
 
-                stopwatch.Stop();
-                var elapsed = retryResult?.Elapsed ?? stopwatch.Elapsed;
-                _instrumentation.RecordRequestFailure(context, elapsed, ex, response?.StatusCode, retryCount);
+                var elapsed = retryResult?.Elapsed ?? TimeSpan.Zero;
                 log?.Report($"Store API request timed out: {ex.Message}");
-                _logger.LogError(ex, "Store products request to {Url} timed out.", url);
+                _logger.LogError(
+                    ex,
+                    "Store products request to {Url} timed out after {Elapsed} and {RetryCount} retries.",
+                    url,
+                    FormatElapsed(elapsed),
+                    retryResult?.RetryCount ?? 0);
                 break;
             }
             catch (AuthenticationException ex)
             {
-                stopwatch.Stop();
-                var elapsed = retryResult?.Elapsed ?? stopwatch.Elapsed;
-                _instrumentation.RecordRequestFailure(context, elapsed, ex, response?.StatusCode, retryCount);
+                var elapsed = retryResult?.Elapsed ?? TimeSpan.Zero;
                 log?.Report($"Store API TLS handshake failed: {ex.Message}");
-                _logger.LogError(ex, "Store products request to {Url} failed TLS handshake.", url);
+                _logger.LogError(
+                    ex,
+                    "Store products request to {Url} failed TLS handshake after {Elapsed} and {RetryCount} retries.",
+                    url,
+                    FormatElapsed(elapsed),
+                    retryResult?.RetryCount ?? 0);
                 break;
             }
             catch (IOException ex)
             {
-                stopwatch.Stop();
-                var elapsed = retryResult?.Elapsed ?? stopwatch.Elapsed;
-                _instrumentation.RecordRequestFailure(context, elapsed, ex, response?.StatusCode, retryCount);
+                var elapsed = retryResult?.Elapsed ?? TimeSpan.Zero;
                 log?.Report($"Store API I/O failure: {ex.Message}");
-                _logger.LogError(ex, "Store products request to {Url} encountered an I/O error.", url);
+                _logger.LogError(
+                    ex,
+                    "Store products request to {Url} encountered an I/O error after {Elapsed} and {RetryCount} retries.",
+                    url,
+                    FormatElapsed(elapsed),
+                    retryResult?.RetryCount ?? 0);
                 break;
             }
             catch (HttpRequestException ex)
             {
-                stopwatch.Stop();
-                var elapsed = retryResult?.Elapsed ?? stopwatch.Elapsed;
-                _instrumentation.RecordRequestFailure(context, elapsed, ex, response?.StatusCode, retryCount);
+                var elapsed = retryResult?.Elapsed ?? TimeSpan.Zero;
                 log?.Report($"Store API request failed: {ex.Message}");
-                _logger.LogError(ex, "Store products request to {Url} failed.", url);
+                _logger.LogError(
+                    ex,
+                    "Store products request to {Url} failed after {Elapsed} and {RetryCount} retries.",
+                    url,
+                    FormatElapsed(elapsed),
+                    retryResult?.RetryCount ?? 0);
                 break;
             }
             finally
@@ -510,13 +507,9 @@ public sealed class WooScraper : IDisposable
             cancellationToken.ThrowIfCancellationRequested();
             var url = $"{baseUrl}/wp-json/wp/v2/media?per_page={perPage}&page={page}&orderby=date&order=asc";
             var context = new ScraperOperationContext("WooScraper.FetchWordPressMedia", url, "media");
-            using var scope = _instrumentation.BeginScope(context);
-            _instrumentation.RecordRequestStart(context);
             _logger.LogInformation("Requesting WordPress media from {Url}", url);
             log?.Report($"GET {url}");
 
-            var stopwatch = Stopwatch.StartNew();
-            var retryCount = 0;
             HttpRetryResult? retryResult = null;
             HttpResponseMessage? response = null;
 
@@ -529,13 +522,11 @@ public sealed class WooScraper : IDisposable
                     onSuccess: result =>
                     {
                         retryResult = result;
-                        retryCount = result.RetryCount;
                         ReportRetryOutcome(log, "Media request", result, isFailure: false);
                     },
                     onFailure: result =>
                     {
                         retryResult = result;
-                        retryCount = result.RetryCount;
                         ReportRetryOutcome(log, "Media request", result, isFailure: true);
                     }).ConfigureAwait(false);
 
@@ -543,10 +534,6 @@ public sealed class WooScraper : IDisposable
                 {
                     if ((int)response.StatusCode == 404)
                     {
-                        stopwatch.Stop();
-                        var notFound = new HttpRequestException(
-                            $"WordPress media endpoint returned {(int)response.StatusCode} ({response.ReasonPhrase}).");
-                        _instrumentation.RecordRequestFailure(context, stopwatch.Elapsed, notFound, response.StatusCode, retryCount);
                         _logger.LogWarning("WordPress media endpoint returned 404 for {Url}", url);
                         log?.Report("Media API endpoint not found.");
                         break;
@@ -557,25 +544,27 @@ public sealed class WooScraper : IDisposable
 
                 var text = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
                 var payloadBytes = DeterminePayloadBytes(response, text);
+                var elapsed = retryResult?.Elapsed ?? TimeSpan.Zero;
+                var retryCount = retryResult?.RetryCount ?? 0;
 
                 if (string.IsNullOrWhiteSpace(text))
                 {
-                    stopwatch.Stop();
-                    var successContext = context with { PayloadBytes = payloadBytes };
-                    var elapsed = retryResult?.Elapsed ?? stopwatch.Elapsed;
-                    _instrumentation.RecordRequestSuccess(successContext, elapsed, response.StatusCode, retryCount);
-                    _logger.LogInformation("WordPress media request to {Url} returned empty payload.", url);
+                    _logger.LogInformation(
+                        "WordPress media request to {Url} returned empty payload after {RetryCount} retries in {Elapsed}.",
+                        url,
+                        retryCount,
+                        FormatElapsed(elapsed));
                     break;
                 }
 
                 var items = DeserializeListWithRecovery<WordPressMediaItem>(text, "media library", log);
                 if (items.Count == 0)
                 {
-                    stopwatch.Stop();
-                    var successContext = context with { PayloadBytes = payloadBytes };
-                    var elapsed = retryResult?.Elapsed ?? stopwatch.Elapsed;
-                    _instrumentation.RecordRequestSuccess(successContext, elapsed, response.StatusCode, retryCount);
-                    _logger.LogInformation("WordPress media request to {Url} returned no items.", url);
+                    _logger.LogInformation(
+                        "WordPress media request to {Url} returned no items after {RetryCount} retries in {Elapsed}.",
+                        url,
+                        retryCount,
+                        FormatElapsed(elapsed));
                     break;
                 }
 
@@ -586,17 +575,14 @@ public sealed class WooScraper : IDisposable
 
                 all.AddRange(items);
 
-                stopwatch.Stop();
-                var completedContext = context with { PayloadBytes = payloadBytes };
-                var completedElapsed = retryResult?.Elapsed ?? stopwatch.Elapsed;
-                _instrumentation.RecordRequestSuccess(completedContext, completedElapsed, response.StatusCode, retryCount);
                 _logger.LogInformation(
-                    "Fetched {Count} WordPress media items from {Url} with status {StatusCode} after {RetryCount} retries (payload {PayloadBytes}).",
+                    "Fetched {Count} WordPress media items from {Url} with status {StatusCode} after {RetryCount} retries (payload {PayloadBytes}, elapsed {Elapsed}).",
                     items.Count,
                     url,
                     (int)response.StatusCode,
                     retryCount,
-                    completedContext.PayloadBytes ?? 0L);
+                    payloadBytes ?? 0L,
+                    FormatElapsed(elapsed));
 
                 if (items.Count < perPage)
                 {
@@ -611,38 +597,50 @@ public sealed class WooScraper : IDisposable
                     throw;
                 }
 
-                stopwatch.Stop();
-                var elapsed = retryResult?.Elapsed ?? stopwatch.Elapsed;
-                _instrumentation.RecordRequestFailure(context, elapsed, ex, response?.StatusCode, retryCount);
+                var elapsed = retryResult?.Elapsed ?? TimeSpan.Zero;
                 log?.Report($"Media request timed out: {ex.Message}");
-                _logger.LogError(ex, "WordPress media request to {Url} timed out.", url);
+                _logger.LogError(
+                    ex,
+                    "WordPress media request to {Url} timed out after {Elapsed} and {RetryCount} retries.",
+                    url,
+                    FormatElapsed(elapsed),
+                    retryResult?.RetryCount ?? 0);
                 break;
             }
             catch (AuthenticationException ex)
             {
-                stopwatch.Stop();
-                var elapsed = retryResult?.Elapsed ?? stopwatch.Elapsed;
-                _instrumentation.RecordRequestFailure(context, elapsed, ex, response?.StatusCode, retryCount);
+                var elapsed = retryResult?.Elapsed ?? TimeSpan.Zero;
                 log?.Report($"Media request TLS handshake failed: {ex.Message}");
-                _logger.LogError(ex, "WordPress media request to {Url} failed TLS handshake.", url);
+                _logger.LogError(
+                    ex,
+                    "WordPress media request to {Url} failed TLS handshake after {Elapsed} and {RetryCount} retries.",
+                    url,
+                    FormatElapsed(elapsed),
+                    retryResult?.RetryCount ?? 0);
                 break;
             }
             catch (IOException ex)
             {
-                stopwatch.Stop();
-                var elapsed = retryResult?.Elapsed ?? stopwatch.Elapsed;
-                _instrumentation.RecordRequestFailure(context, elapsed, ex, response?.StatusCode, retryCount);
+                var elapsed = retryResult?.Elapsed ?? TimeSpan.Zero;
                 log?.Report($"Media request I/O failure: {ex.Message}");
-                _logger.LogError(ex, "WordPress media request to {Url} encountered an I/O error.", url);
+                _logger.LogError(
+                    ex,
+                    "WordPress media request to {Url} encountered an I/O error after {Elapsed} and {RetryCount} retries.",
+                    url,
+                    FormatElapsed(elapsed),
+                    retryResult?.RetryCount ?? 0);
                 break;
             }
             catch (HttpRequestException ex)
             {
-                stopwatch.Stop();
-                var elapsed = retryResult?.Elapsed ?? stopwatch.Elapsed;
-                _instrumentation.RecordRequestFailure(context, elapsed, ex, response?.StatusCode, retryCount);
+                var elapsed = retryResult?.Elapsed ?? TimeSpan.Zero;
                 log?.Report($"Media request failed: {ex.Message}");
-                _logger.LogError(ex, "WordPress media request to {Url} failed.", url);
+                _logger.LogError(
+                    ex,
+                    "WordPress media request to {Url} failed after {Elapsed} and {RetryCount} retries.",
+                    url,
+                    FormatElapsed(elapsed),
+                    retryResult?.RetryCount ?? 0);
                 break;
             }
             finally
@@ -3094,13 +3092,9 @@ public sealed class WooScraper : IDisposable
                 : resource;
 
             var context = new ScraperOperationContext(operationName, url, entityType);
-            using var scope = _instrumentation.BeginScope(context);
-            _instrumentation.RecordRequestStart(context);
             _logger.LogInformation("Requesting WordPress {Resource} from {Url}", resource, url);
             log?.Report($"GET {url}");
 
-            var stopwatch = Stopwatch.StartNew();
-            var retryCount = 0;
             HttpRetryResult? retryResult = null;
             HttpResponseMessage? response = null;
 
@@ -3113,13 +3107,11 @@ public sealed class WooScraper : IDisposable
                     onSuccess: result =>
                     {
                         retryResult = result;
-                        retryCount = result.RetryCount;
                         ReportRetryOutcome(log, $"WordPress {resource} request", result, isFailure: false);
                     },
                     onFailure: result =>
                     {
                         retryResult = result;
-                        retryCount = result.RetryCount;
                         ReportRetryOutcome(log, $"WordPress {resource} request", result, isFailure: true);
                     }).ConfigureAwait(false);
 
@@ -3127,10 +3119,6 @@ public sealed class WooScraper : IDisposable
                 {
                     if ((int)response.StatusCode == 404)
                     {
-                        stopwatch.Stop();
-                        var notFound = new HttpRequestException(
-                            $"WordPress {resource} endpoint returned {(int)response.StatusCode} ({response.ReasonPhrase}).");
-                        _instrumentation.RecordRequestFailure(context, stopwatch.Elapsed, notFound, response.StatusCode, retryCount);
                         _logger.LogWarning("WordPress {Resource} endpoint returned 404 for {Url}", resource, url);
                         log?.Report($"WordPress {resource} endpoint not found.");
                         break;
@@ -3141,25 +3129,29 @@ public sealed class WooScraper : IDisposable
 
                 var text = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
                 var payloadBytes = DeterminePayloadBytes(response, text);
+                var elapsed = retryResult?.Elapsed ?? TimeSpan.Zero;
+                var retryCount = retryResult?.RetryCount ?? 0;
 
                 if (string.IsNullOrWhiteSpace(text))
                 {
-                    stopwatch.Stop();
-                    var successContext = context with { PayloadBytes = payloadBytes };
-                    var elapsed = retryResult?.Elapsed ?? stopwatch.Elapsed;
-                    _instrumentation.RecordRequestSuccess(successContext, elapsed, response.StatusCode, retryCount);
-                    _logger.LogInformation("WordPress {Resource} request to {Url} returned empty payload.", resource, url);
+                    _logger.LogInformation(
+                        "WordPress {Resource} request to {Url} returned empty payload after {RetryCount} retries in {Elapsed}.",
+                        resource,
+                        url,
+                        retryCount,
+                        FormatElapsed(elapsed));
                     break;
                 }
 
                 var items = DeserializeListWithRecovery<T>(text, $"WordPress {resource}", log);
                 if (items.Count == 0)
                 {
-                    stopwatch.Stop();
-                    var successContext = context with { PayloadBytes = payloadBytes };
-                    var elapsed = retryResult?.Elapsed ?? stopwatch.Elapsed;
-                    _instrumentation.RecordRequestSuccess(successContext, elapsed, response.StatusCode, retryCount);
-                    _logger.LogInformation("WordPress {Resource} request to {Url} returned no items.", resource, url);
+                    _logger.LogInformation(
+                        "WordPress {Resource} request to {Url} returned no items after {RetryCount} retries in {Elapsed}.",
+                        resource,
+                        url,
+                        retryCount,
+                        FormatElapsed(elapsed));
                     break;
                 }
 
@@ -3170,18 +3162,15 @@ public sealed class WooScraper : IDisposable
 
                 all.AddRange(items);
 
-                stopwatch.Stop();
-                var completedContext = context with { PayloadBytes = payloadBytes };
-                var completedElapsed = retryResult?.Elapsed ?? stopwatch.Elapsed;
-                _instrumentation.RecordRequestSuccess(completedContext, completedElapsed, response.StatusCode, retryCount);
                 _logger.LogInformation(
-                    "Fetched {Count} WordPress {Resource} items from {Url} with status {StatusCode} after {RetryCount} retries (payload {PayloadBytes}).",
+                    "Fetched {Count} WordPress {Resource} items from {Url} with status {StatusCode} after {RetryCount} retries (payload {PayloadBytes}, elapsed {Elapsed}).",
                     items.Count,
                     resource,
                     url,
                     (int)response.StatusCode,
                     retryCount,
-                    completedContext.PayloadBytes ?? 0L);
+                    payloadBytes ?? 0L,
+                    FormatElapsed(elapsed));
 
                 if (items.Count < perPage)
                 {
@@ -3196,38 +3185,54 @@ public sealed class WooScraper : IDisposable
                     throw;
                 }
 
-                stopwatch.Stop();
-                var elapsed = retryResult?.Elapsed ?? stopwatch.Elapsed;
-                _instrumentation.RecordRequestFailure(context, elapsed, ex, response?.StatusCode, retryCount);
+                var elapsed = retryResult?.Elapsed ?? TimeSpan.Zero;
                 log?.Report($"WordPress {resource} request timed out: {ex.Message}");
-                _logger.LogError(ex, "WordPress {Resource} request to {Url} timed out.", resource, url);
+                _logger.LogError(
+                    ex,
+                    "WordPress {Resource} request to {Url} timed out after {Elapsed} and {RetryCount} retries.",
+                    resource,
+                    url,
+                    FormatElapsed(elapsed),
+                    retryResult?.RetryCount ?? 0);
                 break;
             }
             catch (AuthenticationException ex)
             {
-                stopwatch.Stop();
-                var elapsed = retryResult?.Elapsed ?? stopwatch.Elapsed;
-                _instrumentation.RecordRequestFailure(context, elapsed, ex, response?.StatusCode, retryCount);
+                var elapsed = retryResult?.Elapsed ?? TimeSpan.Zero;
                 log?.Report($"WordPress {resource} TLS handshake failed: {ex.Message}");
-                _logger.LogError(ex, "WordPress {Resource} request to {Url} failed TLS handshake.", resource, url);
+                _logger.LogError(
+                    ex,
+                    "WordPress {Resource} request to {Url} failed TLS handshake after {Elapsed} and {RetryCount} retries.",
+                    resource,
+                    url,
+                    FormatElapsed(elapsed),
+                    retryResult?.RetryCount ?? 0);
                 break;
             }
             catch (IOException ex)
             {
-                stopwatch.Stop();
-                var elapsed = retryResult?.Elapsed ?? stopwatch.Elapsed;
-                _instrumentation.RecordRequestFailure(context, elapsed, ex, response?.StatusCode, retryCount);
+                var elapsed = retryResult?.Elapsed ?? TimeSpan.Zero;
                 log?.Report($"WordPress {resource} request I/O failure: {ex.Message}");
-                _logger.LogError(ex, "WordPress {Resource} request to {Url} encountered an I/O error.", resource, url);
+                _logger.LogError(
+                    ex,
+                    "WordPress {Resource} request to {Url} encountered an I/O error after {Elapsed} and {RetryCount} retries.",
+                    resource,
+                    url,
+                    FormatElapsed(elapsed),
+                    retryResult?.RetryCount ?? 0);
                 break;
             }
             catch (HttpRequestException ex)
             {
-                stopwatch.Stop();
-                var elapsed = retryResult?.Elapsed ?? stopwatch.Elapsed;
-                _instrumentation.RecordRequestFailure(context, elapsed, ex, response?.StatusCode, retryCount);
+                var elapsed = retryResult?.Elapsed ?? TimeSpan.Zero;
                 log?.Report($"WordPress {resource} request failed: {ex.Message}");
-                _logger.LogError(ex, "WordPress {Resource} request to {Url} failed.", resource, url);
+                _logger.LogError(
+                    ex,
+                    "WordPress {Resource} request to {Url} failed after {Elapsed} and {RetryCount} retries.",
+                    resource,
+                    url,
+                    FormatElapsed(elapsed),
+                    retryResult?.RetryCount ?? 0);
                 break;
             }
             finally

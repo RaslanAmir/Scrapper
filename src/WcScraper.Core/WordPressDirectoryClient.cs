@@ -1,5 +1,4 @@
 using System;
-using System.Diagnostics;
 using System.IO;
 using System.Net;
 using System.Net.Http;
@@ -120,39 +119,22 @@ public sealed class WordPressDirectoryClient
 
         var context = new ScraperOperationContext(requestName, requestUri, entityType: entityType);
 
-        using var scope = _instrumentation.BeginScope(context);
-        _instrumentation.RecordRequestStart(context);
-
-        var stopwatch = Stopwatch.StartNew();
-        var retryCount = 0;
+        HttpRetryResult? retryResult = null;
         HttpResponseMessage? response = null;
 
         try
         {
-            var retryInstrumentation = new DelegatingScraperInstrumentation(
-                NullScraperInstrumentation.Instance,
-                retry: retryContext =>
-                {
-                    if (retryContext.RetryAttempt is { } attemptNumber)
-                    {
-                        retryCount = attemptNumber;
-                    }
-
-                    using var retryScope = _instrumentation.BeginScope(retryContext);
-                    _instrumentation.RecordRetry(retryContext);
-                });
-
             response = await _retryPolicy.SendAsync(
                     () => _httpClient.GetAsync(requestUri, cancellationToken),
                     context,
-                    retryInstrumentation,
-                    cancellationToken)
+                    _instrumentation,
+                    cancellationToken,
+                    onSuccess: result => retryResult = result,
+                    onFailure: result => retryResult = result)
                 .ConfigureAwait(false);
 
             if (response.StatusCode == HttpStatusCode.NotFound)
             {
-                stopwatch.Stop();
-                _instrumentation.RecordRequestSuccess(context, stopwatch.Elapsed, response.StatusCode, retryCount);
                 return null;
             }
 
@@ -161,15 +143,20 @@ public sealed class WordPressDirectoryClient
             await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
             var entry = await parser(stream, cancellationToken).ConfigureAwait(false);
 
-            stopwatch.Stop();
-            _instrumentation.RecordRequestSuccess(context, stopwatch.Elapsed, response.StatusCode, retryCount);
             return entry;
         }
         catch (Exception ex)
         {
-            stopwatch.Stop();
+            var elapsed = retryResult?.Elapsed ?? TimeSpan.Zero;
             var statusCode = response?.StatusCode ?? (ex as HttpRequestException)?.StatusCode;
-            _instrumentation.RecordRequestFailure(context, stopwatch.Elapsed, ex, statusCode, retryCount);
+            _logger.LogError(
+                ex,
+                "WordPress directory request {Action} for '{Slug}' failed after {ElapsedMs}ms and {RetryCount} retries (status: {Status}).",
+                action,
+                slug,
+                elapsed.TotalMilliseconds,
+                retryResult?.RetryCount ?? 0,
+                statusCode is { } code ? (int?)code : null);
             throw;
         }
         finally
