@@ -141,12 +141,13 @@ public static class FrontEndDesignSnapshot
                     "FrontEndDesignSnapshot.FetchFont",
                     request.ResolvedUrl,
                     entityType: "font");
-                var fontInstrumentation = CreateRetryInstrumentation(log, request.ResolvedUrl);
+                var fontRetryReporter = CreateRetryReporter(log, request.ResolvedUrl);
                 using var fontResponse = await retryPolicy.SendAsync(
                     () => httpClient.GetAsync(request.ResolvedUrl, cancellationToken),
                     fontContext,
-                    fontInstrumentation,
-                    cancellationToken);
+                    NullScraperInstrumentation.Instance,
+                    cancellationToken,
+                    onRetry: fontRetryReporter);
                 if (!fontResponse.IsSuccessStatusCode)
                 {
                     log?.Report($"Font request failed for {request.ResolvedUrl}: {(int)fontResponse.StatusCode} {fontResponse.ReasonPhrase}");
@@ -189,12 +190,13 @@ public static class FrontEndDesignSnapshot
                     "FrontEndDesignSnapshot.FetchIcon",
                     request.ResolvedUrl,
                     entityType: "icon");
-                var iconInstrumentation = CreateRetryInstrumentation(log, request.ResolvedUrl);
+                var iconRetryReporter = CreateRetryReporter(log, request.ResolvedUrl);
                 using var iconResponse = await retryPolicy.SendAsync(
                     () => httpClient.GetAsync(request.ResolvedUrl, cancellationToken),
                     iconContext,
-                    iconInstrumentation,
-                    cancellationToken);
+                    NullScraperInstrumentation.Instance,
+                    cancellationToken,
+                    onRetry: iconRetryReporter);
                 if (!iconResponse.IsSuccessStatusCode)
                 {
                     log?.Report($"Icon request failed for {request.ResolvedUrl}: {(int)iconResponse.StatusCode} {iconResponse.ReasonPhrase}");
@@ -239,12 +241,13 @@ public static class FrontEndDesignSnapshot
                     "FrontEndDesignSnapshot.FetchImage",
                     request.ResolvedUrl,
                     entityType: "image");
-                var imageInstrumentation = CreateRetryInstrumentation(log, request.ResolvedUrl);
+                var imageRetryReporter = CreateRetryReporter(log, request.ResolvedUrl);
                 using var imageResponse = await retryPolicy.SendAsync(
                     () => httpClient.GetAsync(request.ResolvedUrl, cancellationToken),
                     imageContext,
-                    imageInstrumentation,
-                    cancellationToken);
+                    NullScraperInstrumentation.Instance,
+                    cancellationToken,
+                    onRetry: imageRetryReporter);
                 if (!imageResponse.IsSuccessStatusCode)
                 {
                     log?.Report($"Image request failed for {request.ResolvedUrl}: {(int)imageResponse.StatusCode} {imageResponse.ReasonPhrase}");
@@ -375,12 +378,13 @@ public static class FrontEndDesignSnapshot
             "FrontEndDesignSnapshot.FetchPage",
             pageUrl,
             entityType: "page");
-        var pageInstrumentation = CreateRetryInstrumentation(log, pageUrl);
+        var pageRetryReporter = CreateRetryReporter(log, pageUrl);
         using var response = await retryPolicy.SendAsync(
             () => httpClient.GetAsync(pageUrl, cancellationToken),
             pageContext,
-            pageInstrumentation,
-            cancellationToken);
+            NullScraperInstrumentation.Instance,
+            cancellationToken,
+            onRetry: pageRetryReporter);
         response.EnsureSuccessStatusCode();
 
         var html = await response.Content.ReadAsStringAsync(cancellationToken) ?? string.Empty;
@@ -522,12 +526,13 @@ public static class FrontEndDesignSnapshot
                     "FrontEndDesignSnapshot.FetchStylesheet",
                     request.ResolvedUrl,
                     entityType: "stylesheet");
-                var stylesheetInstrumentation = CreateRetryInstrumentation(log, request.ResolvedUrl);
+                var stylesheetRetryReporter = CreateRetryReporter(log, request.ResolvedUrl);
                 using var cssResponse = await retryPolicy.SendAsync(
                     () => httpClient.GetAsync(request.ResolvedUrl, cancellationToken),
                     stylesheetContext,
-                    stylesheetInstrumentation,
-                    cancellationToken);
+                    NullScraperInstrumentation.Instance,
+                    cancellationToken,
+                    onRetry: stylesheetRetryReporter);
                 if (!cssResponse.IsSuccessStatusCode)
                 {
                     log?.Report($"Stylesheet request failed for {request.ResolvedUrl}: {(int)cssResponse.StatusCode} {cssResponse.ReasonPhrase}");
@@ -1106,12 +1111,10 @@ public static class FrontEndDesignSnapshot
         return null;
     }
 
-    private static IScraperInstrumentation CreateRetryInstrumentation(IProgress<string>? log, string target)
+    private static Action<ScraperOperationContext>? CreateRetryReporter(IProgress<string>? log, string target)
         => log is null
-            ? NullScraperInstrumentation.Instance
-            : new DelegatingScraperInstrumentation(
-                NullScraperInstrumentation.Instance,
-                retry: context => ReportRetry(log, target, context));
+            ? null
+            : context => ReportRetry(log, target, context);
 
     private static void ReportRetry(IProgress<string>? log, string url, ScraperOperationContext retryContext)
     {
