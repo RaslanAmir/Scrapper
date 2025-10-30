@@ -19,9 +19,6 @@ public sealed class HttpRetryPolicyTests
         var policy = new HttpRetryPolicy(maxRetries: 2, baseDelay: TimeSpan.FromMilliseconds(1), maxDelay: TimeSpan.FromMilliseconds(2));
         var attempts = 0;
         var notifications = new List<ScraperOperationContext>();
-        var instrumentation = new DelegatingScraperInstrumentation(
-            NullScraperInstrumentation.Instance,
-            retry: notifications.Add);
         var context = new ScraperOperationContext("HttpRetryPolicyTests.Transient", "https://example.com/transient");
 
         using var response = await policy.SendAsync(() =>
@@ -33,7 +30,7 @@ public sealed class HttpRetryPolicyTests
             }
 
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK));
-        }, context, instrumentation);
+        }, context, onRetry: notifications.Add);
 
         Assert.Equal(2, attempts);
         Assert.Single(notifications);
@@ -55,15 +52,12 @@ public sealed class HttpRetryPolicyTests
         responses.Enqueue(new HttpResponseMessage(HttpStatusCode.OK));
 
         var context = new ScraperOperationContext("HttpRetryPolicyTests.RetryAfter", "https://example.com/retry-after");
-        var instrumentation = new DelegatingScraperInstrumentation(
-            NullScraperInstrumentation.Instance,
-            retry: retryContext => delays.Add(retryContext.RetryDelay));
 
         using var response = await policy.SendAsync(() =>
         {
             attempts++;
             return Task.FromResult(responses.Dequeue());
-        }, context, instrumentation);
+        }, context, onRetry: retryContext => delays.Add(retryContext.RetryDelay));
 
         Assert.Equal(2, attempts);
         Assert.Single(delays);
@@ -88,15 +82,11 @@ public sealed class HttpRetryPolicyTests
         responses.Enqueue(new HttpResponseMessage(HttpStatusCode.OK));
 
         var context = new ScraperOperationContext("HttpRetryPolicyTests.Status", $"https://example.com/{(int)statusCode}");
-        var instrumentation = new DelegatingScraperInstrumentation(
-            NullScraperInstrumentation.Instance,
-            retry: notifications.Add);
-
         using var response = await policy.SendAsync(() =>
         {
             attempts++;
             return Task.FromResult(responses.Dequeue());
-        }, context, instrumentation);
+        }, context, onRetry: notifications.Add);
 
         Assert.Equal(2, attempts);
         Assert.Single(notifications);
@@ -153,14 +143,6 @@ public sealed class HttpRetryPolicyTests
         var notifications = 0;
 
         var context = new ScraperOperationContext("HttpRetryPolicyTests.Cancellation", "https://example.com/cancel");
-        var instrumentation = new DelegatingScraperInstrumentation(
-            NullScraperInstrumentation.Instance,
-            retry: _ =>
-            {
-                notifications++;
-                cancellationSource.Cancel();
-            });
-
         async Task<HttpResponseMessage> SendOperation()
         {
             attempts++;
@@ -168,7 +150,15 @@ public sealed class HttpRetryPolicyTests
         }
 
         await Assert.ThrowsAsync<OperationCanceledException>(() =>
-            policy.SendAsync(SendOperation, context, instrumentation, cancellationSource.Token));
+            policy.SendAsync(
+                SendOperation,
+                context,
+                cancellationToken: cancellationSource.Token,
+                onRetry: _ =>
+                {
+                    notifications++;
+                    cancellationSource.Cancel();
+                }));
 
         Assert.Equal(1, attempts);
         Assert.Equal(1, notifications);
