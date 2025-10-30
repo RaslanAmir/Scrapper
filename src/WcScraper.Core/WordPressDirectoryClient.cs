@@ -120,6 +120,7 @@ public sealed class WordPressDirectoryClient
         var context = new ScraperOperationContext(requestName, requestUri, entityType: entityType);
 
         HttpResponseMessage? response = null;
+        HttpRetryResult? retryResult = null;
 
         try
         {
@@ -127,7 +128,9 @@ public sealed class WordPressDirectoryClient
                     () => _httpClient.GetAsync(requestUri, cancellationToken),
                     context,
                     _instrumentation,
-                    cancellationToken)
+                    cancellationToken,
+                    onSuccess: result => retryResult = result,
+                    onFailure: result => retryResult = result)
                 .ConfigureAwait(false);
 
             if (response.StatusCode == HttpStatusCode.NotFound)
@@ -147,10 +150,12 @@ public sealed class WordPressDirectoryClient
             var statusCode = response?.StatusCode ?? (ex as HttpRequestException)?.StatusCode;
             _logger.LogError(
                 ex,
-                "WordPress directory request {Action} for '{Slug}' failed (status: {Status}).",
+                "WordPress directory request {Action} for '{Slug}' failed (status: {Status}, retries: {RetryCount}, elapsed: {Elapsed}).",
                 action,
                 slug,
-                statusCode is { } code ? (int?)code : null);
+                statusCode is { } code ? (int?)code : null,
+                retryResult?.RetryCount ?? 0,
+                retryResult?.Elapsed ?? TimeSpan.Zero);
             throw;
         }
         finally

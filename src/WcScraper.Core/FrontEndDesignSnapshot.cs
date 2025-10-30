@@ -150,7 +150,7 @@ public static class FrontEndDesignSnapshot
                     () => httpClient.GetAsync(request.ResolvedUrl, cancellationToken),
                     fontContext,
                     fontInstrumentation,
-                    cancellationToken);
+                    cancellationToken).ConfigureAwait(false);
                 if (!fontResponse.IsSuccessStatusCode)
                 {
                     log?.Report($"Font request failed for {request.ResolvedUrl}: {(int)fontResponse.StatusCode} {fontResponse.ReasonPhrase}");
@@ -198,7 +198,7 @@ public static class FrontEndDesignSnapshot
                     () => httpClient.GetAsync(request.ResolvedUrl, cancellationToken),
                     iconContext,
                     iconInstrumentation,
-                    cancellationToken);
+                    cancellationToken).ConfigureAwait(false);
                 if (!iconResponse.IsSuccessStatusCode)
                 {
                     log?.Report($"Icon request failed for {request.ResolvedUrl}: {(int)iconResponse.StatusCode} {iconResponse.ReasonPhrase}");
@@ -248,7 +248,7 @@ public static class FrontEndDesignSnapshot
                     () => httpClient.GetAsync(request.ResolvedUrl, cancellationToken),
                     imageContext,
                     imageInstrumentation,
-                    cancellationToken);
+                    cancellationToken).ConfigureAwait(false);
                 if (!imageResponse.IsSuccessStatusCode)
                 {
                     log?.Report($"Image request failed for {request.ResolvedUrl}: {(int)imageResponse.StatusCode} {imageResponse.ReasonPhrase}");
@@ -385,7 +385,7 @@ public static class FrontEndDesignSnapshot
             () => httpClient.GetAsync(pageUrl, cancellationToken),
             pageContext,
             pageInstrumentation,
-            cancellationToken);
+            cancellationToken).ConfigureAwait(false);
         response.EnsureSuccessStatusCode();
 
         var html = await response.Content.ReadAsStringAsync(cancellationToken) ?? string.Empty;
@@ -532,7 +532,7 @@ public static class FrontEndDesignSnapshot
                     () => httpClient.GetAsync(request.ResolvedUrl, cancellationToken),
                     stylesheetContext,
                     stylesheetInstrumentation,
-                    cancellationToken);
+                    cancellationToken).ConfigureAwait(false);
                 if (!cssResponse.IsSuccessStatusCode)
                 {
                     log?.Report($"Stylesheet request failed for {request.ResolvedUrl}: {(int)cssResponse.StatusCode} {cssResponse.ReasonPhrase}");
