@@ -113,7 +113,8 @@ public sealed class HttpRetryPolicy
                 if (!ShouldRetryResponse(response, retryCount, out var delay, out var reason))
                 {
                     stopwatch.Stop();
-                    instrumentation.RecordRequestSuccess(context, stopwatch.Elapsed, response.StatusCode, retryCount);
+                    var completedContext = context with { RetryAttempt = retryCount };
+                    instrumentation.RecordRequestSuccess(completedContext, stopwatch.Elapsed, response.StatusCode, retryCount);
                     onSuccess?.Invoke(new HttpRetryResult(stopwatch.Elapsed, response.StatusCode, retryCount, null));
                     return response;
                 }
@@ -139,7 +140,8 @@ public sealed class HttpRetryPolicy
                 {
                     stopwatch.Stop();
                     var statusCode = response?.StatusCode ?? (ex as HttpRequestException)?.StatusCode;
-                    instrumentation.RecordRequestFailure(context, stopwatch.Elapsed, ex, statusCode, retryCount);
+                    var failedContext = context with { RetryAttempt = retryCount };
+                    instrumentation.RecordRequestFailure(failedContext, stopwatch.Elapsed, ex, statusCode, retryCount);
                     onFailure?.Invoke(new HttpRetryResult(stopwatch.Elapsed, statusCode, retryCount, ex));
                     throw;
                 }
@@ -163,7 +165,8 @@ public sealed class HttpRetryPolicy
                 response?.Dispose();
                 stopwatch.Stop();
                 var statusCode = response?.StatusCode ?? (ex as HttpRequestException)?.StatusCode;
-                instrumentation.RecordRequestFailure(context, stopwatch.Elapsed, ex, statusCode, retryCount);
+                var failedContext = context with { RetryAttempt = retryCount };
+                instrumentation.RecordRequestFailure(failedContext, stopwatch.Elapsed, ex, statusCode, retryCount);
                 onFailure?.Invoke(new HttpRetryResult(stopwatch.Elapsed, statusCode, retryCount, ex));
                 throw;
             }
