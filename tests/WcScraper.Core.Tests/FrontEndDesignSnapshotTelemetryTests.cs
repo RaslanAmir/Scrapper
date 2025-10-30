@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using System.Net;
@@ -8,6 +9,7 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using WcScraper.Core;
+using WcScraper.Core.Telemetry;
 using WcScraper.Core.Tests.Telemetry;
 using WcScraper.Wpf.Services;
 using Xunit;
@@ -110,13 +112,14 @@ public sealed class FrontEndDesignSnapshotTelemetryTests
             retryPolicy: retryPolicy,
             loggerFactory: telemetry.LoggerFactory));
 
-        var retryScope = Assert.Contains(telemetry.LoggerFactory.Scopes, record =>
-            record.Values.TryGetValue("RetryAttempt", out var attempt)
-            && Convert.ToInt32(attempt, CultureInfo.InvariantCulture) == 1);
+        var retryLog = Assert.Single(telemetry.LoggerFactory.Logs.Where(record =>
+            record.EventId == ScraperTelemetry.Events.RetryScheduled &&
+            string.Equals(Convert.ToString(GetStateValue(record.State, "Operation"), CultureInfo.InvariantCulture), OperationName, StringComparison.Ordinal)));
 
-        Assert.True(retryScope.Values.TryGetValue("RetryDelayMs", out var delayValue));
+        Assert.Equal(1, Convert.ToInt32(GetStateValue(retryLog.State, "Attempt"), CultureInfo.InvariantCulture));
+        var delayValue = GetStateValue(retryLog.State, "DelayMs");
         Assert.True(Convert.ToDouble(delayValue, CultureInfo.InvariantCulture) >= 0);
-        Assert.False(string.IsNullOrWhiteSpace(Convert.ToString(retryScope.Values["RetryReason"], CultureInfo.InvariantCulture)));
+        Assert.False(string.IsNullOrWhiteSpace(Convert.ToString(GetStateValue(retryLog.State, "Reason"), CultureInfo.InvariantCulture)));
 
         var retryAttemptMeasurement = Assert.Single(telemetry.MeterListener.CounterMeasurements.Where(m =>
             string.Equals(m.InstrumentName, "scraper.request.retry.attempt", StringComparison.Ordinal)
@@ -126,6 +129,13 @@ public sealed class FrontEndDesignSnapshotTelemetryTests
         Assert.Equal("scheduled", Assert.IsType<string>(retryAttemptMeasurement.Tags["retry.outcome"]));
         Assert.Equal(1, Convert.ToInt32(retryAttemptMeasurement.Tags["retry.count"], CultureInfo.InvariantCulture));
         Assert.False(string.IsNullOrWhiteSpace(Convert.ToString(retryAttemptMeasurement.Tags["retry.reason"], CultureInfo.InvariantCulture)));
+
+        var retryOutcomeLog = Assert.Single(telemetry.LoggerFactory.Logs.Where(record =>
+            record.EventId == ScraperTelemetry.Events.RetryOutcome &&
+            string.Equals(Convert.ToString(GetStateValue(record.State, "Operation"), CultureInfo.InvariantCulture), OperationName, StringComparison.Ordinal)));
+
+        Assert.Equal("failure", Convert.ToString(GetStateValue(retryOutcomeLog.State, "Outcome"), CultureInfo.InvariantCulture));
+        Assert.Equal(EntityType, Convert.ToString(GetStateValue(retryOutcomeLog.State, "EntityType"), CultureInfo.InvariantCulture));
 
         var failureMeasurement = Assert.Single(telemetry.MeterListener.CounterMeasurements.Where(m =>
             string.Equals(m.InstrumentName, "scraper.request.failure", StringComparison.Ordinal)
@@ -207,5 +217,18 @@ public sealed class FrontEndDesignSnapshotTelemetryTests
                 Content = new StringContent("error", Encoding.UTF8, "text/plain")
             });
         }
+    }
+
+    private static object? GetStateValue(IReadOnlyList<KeyValuePair<string, object?>> values, string key)
+    {
+        foreach (var kvp in values)
+        {
+            if (string.Equals(kvp.Key, key, StringComparison.Ordinal))
+            {
+                return kvp.Value;
+            }
+        }
+
+        return null;
     }
 }

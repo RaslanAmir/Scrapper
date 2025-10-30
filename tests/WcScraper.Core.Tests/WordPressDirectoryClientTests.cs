@@ -47,8 +47,8 @@ public sealed class WordPressDirectoryClientTests
         Assert.Null(result);
         Assert.Equal(2, handler.CallCount);
 
-        AssertScopes(
-            telemetry.LoggerFactory.Scopes,
+        AssertTelemetry(
+            telemetry,
             "WordPressDirectory.plugin_information",
             "plugin",
             handler.RequestUris,
@@ -110,8 +110,8 @@ public sealed class WordPressDirectoryClientTests
         Assert.Equal("Test Theme", result.Title);
         Assert.Equal(2, handler.CallCount);
 
-        AssertScopes(
-            telemetry.LoggerFactory.Scopes,
+        AssertTelemetry(
+            telemetry,
             "WordPressDirectory.theme_information",
             "theme",
             handler.RequestUris,
@@ -141,13 +141,14 @@ public sealed class WordPressDirectoryClientTests
         Assert.Equal(1, Convert.ToInt32(durationMeasurement.Tags["retry.count"], CultureInfo.InvariantCulture));
     }
 
-    private static void AssertScopes(
-        IReadOnlyCollection<ScopeRecord> scopes,
+    private static void AssertTelemetry(
+        TelemetryTestContext telemetry,
         string expectedOperation,
         string expectedEntity,
         IReadOnlyList<Uri> requestUris,
         bool retryExpected)
     {
+        var scopes = telemetry.LoggerFactory.Scopes;
         Assert.NotEmpty(requestUris);
 
         var baseScope = scopes.FirstOrDefault(scope =>
@@ -160,18 +161,25 @@ public sealed class WordPressDirectoryClientTests
         Assert.Equal(requestUris.First().ToString(), Assert.IsType<string>(baseScope.Values["Url"]));
         Assert.Equal(expectedEntity, Assert.IsType<string>(baseScope.Values["EntityType"]));
 
+        var logs = telemetry.LoggerFactory.Logs;
+
         if (retryExpected)
         {
-            var retryScope = scopes.FirstOrDefault(scope =>
-                string.Equals(scope.Category, typeof(WordPressDirectoryClient).FullName, StringComparison.Ordinal) &&
-                scope.Values.TryGetValue("RetryAttempt", out _) &&
-                scope.Values.TryGetValue("Operation", out var operation) &&
-                string.Equals(Convert.ToString(operation, CultureInfo.InvariantCulture), expectedOperation, StringComparison.Ordinal));
+            var retryLog = Assert.Single(logs.Where(record =>
+                record.EventId == ScraperTelemetry.Events.RetryScheduled &&
+                string.Equals(Convert.ToString(GetStateValue(record.State, "Operation"), CultureInfo.InvariantCulture), expectedOperation, StringComparison.Ordinal)));
 
-            Assert.NotNull(retryScope);
-            Assert.Equal(1, Convert.ToInt32(retryScope!.Values["RetryAttempt"], CultureInfo.InvariantCulture));
-            Assert.True(TryGetDelayMilliseconds(retryScope.Values, out var delayMs) && delayMs > 0);
-            Assert.False(string.IsNullOrWhiteSpace(Convert.ToString(retryScope.Values["RetryReason"], CultureInfo.InvariantCulture)));
+            Assert.Equal(1, Convert.ToInt32(GetStateValue(retryLog.State, "Attempt"), CultureInfo.InvariantCulture));
+            var delayValue = GetStateValue(retryLog.State, "DelayMs");
+            Assert.True(Convert.ToDouble(delayValue, CultureInfo.InvariantCulture) >= 0);
+            Assert.False(string.IsNullOrWhiteSpace(Convert.ToString(GetStateValue(retryLog.State, "Reason"), CultureInfo.InvariantCulture)));
+
+            var outcomeLog = Assert.Single(logs.Where(record =>
+                record.EventId == ScraperTelemetry.Events.RetryOutcome &&
+                string.Equals(Convert.ToString(GetStateValue(record.State, "Operation"), CultureInfo.InvariantCulture), expectedOperation, StringComparison.Ordinal)));
+
+            Assert.Equal("success", Convert.ToString(GetStateValue(outcomeLog.State, "Outcome"), CultureInfo.InvariantCulture));
+            Assert.Equal(expectedEntity, Convert.ToString(GetStateValue(outcomeLog.State, "EntityType"), CultureInfo.InvariantCulture));
         }
     }
 
@@ -288,5 +296,18 @@ public sealed class WordPressDirectoryClientTests
 
             base.Dispose(disposing);
         }
+    }
+
+    private static object? GetStateValue(IReadOnlyList<KeyValuePair<string, object?>> values, string key)
+    {
+        foreach (var kvp in values)
+        {
+            if (string.Equals(kvp.Key, key, StringComparison.Ordinal))
+            {
+                return kvp.Value;
+            }
+        }
+
+        return null;
     }
 }
