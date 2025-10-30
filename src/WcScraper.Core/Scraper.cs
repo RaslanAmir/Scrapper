@@ -227,16 +227,6 @@ public sealed class WooScraper : IDisposable
             onSuccess,
             onFailure);
 
-    private static string FormatRetryDelay(TimeSpan delay)
-    {
-        if (delay.TotalSeconds >= 1)
-        {
-            return $"{delay.TotalSeconds:F1}s";
-        }
-
-        return $"{Math.Max(1, delay.TotalMilliseconds):F0}ms";
-    }
-
     private static string FormatElapsed(TimeSpan elapsed)
     {
         if (elapsed.TotalSeconds >= 1)
