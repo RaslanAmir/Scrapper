@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Net;
 using System.Net.Http;
 using System.Security.Authentication;
 using System.Text;
@@ -50,6 +51,7 @@ public sealed class PublicExtensionDetector : IDisposable
     private readonly ILogger<PublicExtensionDetector> _logger;
     private readonly ILoggerFactory _loggerFactory;
     private readonly ScraperInstrumentationOptions _instrumentationOptions;
+    private readonly IScraperInstrumentation _instrumentation;
     private readonly HttpRetryPolicy _httpPolicy;
 
     private VersionEvidence _wordpressVersion = VersionEvidence.None;
@@ -78,7 +80,8 @@ public sealed class PublicExtensionDetector : IDisposable
         HttpRetryPolicy? httpRetryPolicy = null,
         ILogger<PublicExtensionDetector>? logger = null,
         ILoggerFactory? loggerFactory = null,
-        ScraperInstrumentationOptions? instrumentationOptions = null)
+        ScraperInstrumentationOptions? instrumentationOptions = null,
+        IScraperInstrumentation? instrumentation = null)
     {
         var providedInstrumentationOptions = instrumentationOptions ?? ScraperInstrumentationOptions.SharedDefaults;
         _loggerFactory = loggerFactory
@@ -86,6 +89,8 @@ public sealed class PublicExtensionDetector : IDisposable
             ?? NullLoggerFactory.Instance;
         _instrumentationOptions = providedInstrumentationOptions.WithFallbackLoggerFactory(_loggerFactory);
         _logger = logger ?? _loggerFactory.CreateLogger<PublicExtensionDetector>();
+        _instrumentation = instrumentation
+            ?? ScraperInstrumentation.Create(_instrumentationOptions);
 
         if (httpClient is null)
         {
@@ -260,42 +265,27 @@ public sealed class PublicExtensionDetector : IDisposable
         IProgress<string>? log,
         CancellationToken cancellationToken)
     {
+        HttpRetryResult? retryResult = null;
+
         try
         {
             log?.Report($"GET {url}");
             var context = new ScraperOperationContext(
                 "PublicExtensionDetector.Download",
                 url);
-            var instrumentation = log is null
-                ? NullScraperInstrumentation.Instance
-                : new DelegatingScraperInstrumentation(
-                    NullScraperInstrumentation.Instance,
-                    retry: retryContext =>
-                    {
-                        if (retryContext.RetryAttempt is not { } attemptNumber)
-                        {
-                            return;
-                        }
-
-                        var delayValue = retryContext.RetryDelay ?? TimeSpan.Zero;
-                        var delay = delayValue.TotalSeconds >= 1
-                            ? $"{delayValue.TotalSeconds:F1}s"
-                            : $"{Math.Max(1, delayValue.TotalMilliseconds):F0}ms";
-                        var reason = string.IsNullOrWhiteSpace(retryContext.RetryReason)
-                            ? "Retry scheduled."
-                            : retryContext.RetryReason;
-                        log!.Report($"Retrying {url} in {delay} (attempt {attemptNumber}): {reason}");
-                    });
             using var response = await _httpPolicy.SendAsync(
                 () => _httpClient.GetAsync(url, cancellationToken),
                 context,
-                instrumentation,
-                cancellationToken).ConfigureAwait(false);
+                _instrumentation,
+                cancellationToken,
+                onSuccess: result => retryResult = result,
+                onFailure: result => retryResult = result).ConfigureAwait(false);
             if (!response.IsSuccessStatusCode)
             {
-                if ((int)response.StatusCode == 404)
+                if (response.StatusCode == HttpStatusCode.NotFound)
                 {
-                    log?.Report($"Public extension detection received 404 for {url}");
+                    log?.Report(AppendRetrySummary($"Public extension detection received 404 for {url}", retryResult));
+                    ReportRetryOutcome(log, url, retryResult, "returning 404");
                     return (null, 0);
                 }
 
@@ -305,26 +295,68 @@ public sealed class PublicExtensionDetector : IDisposable
             var content = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
             var byteCount = response.Content.Headers.ContentLength
                 ?? Encoding.UTF8.GetByteCount(content);
+            ReportRetryOutcome(log, url, retryResult, "succeeding");
             return (content, byteCount);
         }
         catch (TaskCanceledException ex)
         {
-            log?.Report($"Public extension detection request timed out: {ex.Message}");
+            log?.Report(AppendRetrySummary($"Public extension detection request timed out: {ex.Message}", retryResult));
+            ReportRetryOutcome(log, url, retryResult, "timing out");
         }
         catch (AuthenticationException ex)
         {
-            log?.Report($"Public extension detection TLS handshake failed: {ex.Message}");
+            log?.Report(AppendRetrySummary($"Public extension detection TLS handshake failed: {ex.Message}", retryResult));
+            ReportRetryOutcome(log, url, retryResult, "failing");
         }
         catch (IOException ex)
         {
-            log?.Report($"Public extension detection I/O failure: {ex.Message}");
+            log?.Report(AppendRetrySummary($"Public extension detection I/O failure: {ex.Message}", retryResult));
+            ReportRetryOutcome(log, url, retryResult, "failing");
         }
         catch (HttpRequestException ex)
         {
-            log?.Report($"Public extension detection request failed: {ex.Message}");
+            log?.Report(AppendRetrySummary($"Public extension detection request failed: {ex.Message}", retryResult));
+            ReportRetryOutcome(log, url, retryResult, "failing");
         }
 
         return (null, 0);
+    }
+
+    private static void ReportRetryOutcome(
+        IProgress<string>? log,
+        string url,
+        HttpRetryResult? retryResult,
+        string outcome)
+    {
+        if (log is null || retryResult is not { RetryCount: > 0 } result)
+        {
+            return;
+        }
+
+        var elapsed = FormatElapsed(result.Elapsed);
+        log.Report($"Public extension detection request for {url} retried {result.RetryCount} times before {outcome} ({elapsed} elapsed).");
+    }
+
+    private static string AppendRetrySummary(string message, HttpRetryResult? retryResult)
+    {
+        if (retryResult is not { } result)
+        {
+            return message;
+        }
+
+        var trimmed = message.TrimEnd('.');
+        var elapsed = FormatElapsed(result.Elapsed);
+        return $"{trimmed} (retries: {result.RetryCount}, elapsed: {elapsed}).";
+    }
+
+    private static string FormatElapsed(TimeSpan elapsed)
+    {
+        if (elapsed.TotalSeconds >= 1)
+        {
+            return $"{elapsed.TotalSeconds:F1}s";
+        }
+
+        return $"{Math.Max(1, elapsed.TotalMilliseconds):F0}ms";
     }
 
     private bool TryScheduleUrl(string url)
