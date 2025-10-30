@@ -19,7 +19,6 @@ public sealed class HttpRetryPolicyTests
         var policy = new HttpRetryPolicy(maxRetries: 2, baseDelay: TimeSpan.FromMilliseconds(1), maxDelay: TimeSpan.FromMilliseconds(2));
         var attempts = 0;
         var instrumentation = new TestScraperInstrumentation();
-        var retryCallbacks = new List<ScraperOperationContext>();
         var successResults = new List<HttpRetryResult>();
         var failureResults = new List<HttpRetryResult>();
         var context = new ScraperOperationContext("HttpRetryPolicyTests.Transient", "https://example.com/transient");
@@ -37,8 +36,7 @@ public sealed class HttpRetryPolicyTests
         context,
         instrumentation,
         onSuccess: successResults.Add,
-        onFailure: failureResults.Add,
-        onRetry: retryCallbacks.Add);
+        onFailure: failureResults.Add);
 
         Assert.Equal(2, attempts);
         Assert.Empty(failureResults);
@@ -54,12 +52,9 @@ public sealed class HttpRetryPolicyTests
         Assert.Equal(HttpStatusCode.OK, instrumentationSuccess.StatusCode);
         Assert.True(instrumentationSuccess.Duration >= TimeSpan.Zero);
 
-        var retryContext = Assert.Single(retryCallbacks);
-        Assert.Equal(1, retryContext.RetryAttempt);
-        Assert.Equal("temporary network error", retryContext.RetryReason);
-
         var instrumentationRetry = Assert.Single(instrumentation.Retries);
-        Assert.Equal(retryContext, instrumentationRetry);
+        Assert.Equal(1, instrumentationRetry.RetryAttempt);
+        Assert.Equal("temporary network error", instrumentationRetry.RetryReason);
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
     }
@@ -70,7 +65,6 @@ public sealed class HttpRetryPolicyTests
         var policy = new HttpRetryPolicy(maxRetries: 1, baseDelay: TimeSpan.FromMilliseconds(1), maxDelay: TimeSpan.FromMilliseconds(5));
         var attempts = 0;
         var instrumentation = new TestScraperInstrumentation();
-        var retryCallbacks = new List<ScraperOperationContext>();
         var successResults = new List<HttpRetryResult>();
         var failureResults = new List<HttpRetryResult>();
 
@@ -90,8 +84,7 @@ public sealed class HttpRetryPolicyTests
         context,
         instrumentation,
         onSuccess: successResults.Add,
-        onFailure: failureResults.Add,
-        onRetry: retryCallbacks.Add);
+        onFailure: failureResults.Add);
 
         Assert.Equal(2, attempts);
         Assert.Empty(failureResults);
@@ -104,11 +97,8 @@ public sealed class HttpRetryPolicyTests
         Assert.Equal(success.StatusCode, instrumentationSuccess.StatusCode);
         Assert.Equal(success.RetryCount, instrumentationSuccess.RetryCount);
 
-        var retryContext = Assert.Single(retryCallbacks);
-        Assert.True((retryContext.RetryDelay ?? TimeSpan.Zero) >= TimeSpan.FromMilliseconds(3));
-
         var instrumentationRetry = Assert.Single(instrumentation.Retries);
-        Assert.Equal(retryContext, instrumentationRetry);
+        Assert.True((instrumentationRetry.RetryDelay ?? TimeSpan.Zero) >= TimeSpan.FromMilliseconds(3));
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
     }
@@ -124,7 +114,6 @@ public sealed class HttpRetryPolicyTests
         var policy = new HttpRetryPolicy(maxRetries: 1, baseDelay: TimeSpan.FromMilliseconds(1), maxDelay: TimeSpan.FromMilliseconds(5));
         var attempts = 0;
         var instrumentation = new TestScraperInstrumentation();
-        var retryCallbacks = new List<ScraperOperationContext>();
         var successResults = new List<HttpRetryResult>();
         var failureResults = new List<HttpRetryResult>();
 
@@ -141,8 +130,7 @@ public sealed class HttpRetryPolicyTests
         context,
         instrumentation,
         onSuccess: successResults.Add,
-        onFailure: failureResults.Add,
-        onRetry: retryCallbacks.Add);
+        onFailure: failureResults.Add);
 
         Assert.Equal(2, attempts);
         Assert.Empty(failureResults);
@@ -155,11 +143,8 @@ public sealed class HttpRetryPolicyTests
         Assert.Equal(success.StatusCode, instrumentationSuccess.StatusCode);
         Assert.Equal(success.RetryCount, instrumentationSuccess.RetryCount);
 
-        var retryContext = Assert.Single(retryCallbacks);
-        Assert.Contains(((int)statusCode).ToString(), retryContext.RetryReason ?? string.Empty);
-
         var instrumentationRetry = Assert.Single(instrumentation.Retries);
-        Assert.Equal(retryContext, instrumentationRetry);
+        Assert.Contains(((int)statusCode).ToString(), instrumentationRetry.RetryReason ?? string.Empty);
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
     }
@@ -170,7 +155,6 @@ public sealed class HttpRetryPolicyTests
         var policy = new HttpRetryPolicy(maxRetries: 1, baseDelay: TimeSpan.FromMilliseconds(1), maxDelay: TimeSpan.FromMilliseconds(5), retryableStatusCodes: new[] { HttpStatusCode.BadRequest });
         var attempts = 0;
         var instrumentation = new TestScraperInstrumentation();
-        var retryCallbacks = new List<ScraperOperationContext>();
         var successResults = new List<HttpRetryResult>();
         var failureResults = new List<HttpRetryResult>();
 
@@ -188,8 +172,7 @@ public sealed class HttpRetryPolicyTests
         context,
         instrumentation,
         onSuccess: successResults.Add,
-        onFailure: failureResults.Add,
-        onRetry: retryCallbacks.Add);
+        onFailure: failureResults.Add);
 
         Assert.Equal(2, attempts);
         Assert.Empty(failureResults);
@@ -202,7 +185,6 @@ public sealed class HttpRetryPolicyTests
         Assert.Equal(success.StatusCode, instrumentationSuccess.StatusCode);
         Assert.Equal(success.RetryCount, instrumentationSuccess.RetryCount);
 
-        Assert.Single(retryCallbacks);
         Assert.Single(instrumentation.Retries);
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
@@ -214,7 +196,6 @@ public sealed class HttpRetryPolicyTests
         var policy = new HttpRetryPolicy(maxRetries: 2, baseDelay: TimeSpan.FromMilliseconds(1), maxDelay: TimeSpan.FromMilliseconds(2));
         var attempts = 0;
         var instrumentation = new TestScraperInstrumentation();
-        var retryCallbacks = new List<ScraperOperationContext>();
         var successResults = new List<HttpRetryResult>();
         var failureResults = new List<HttpRetryResult>();
 
@@ -228,11 +209,9 @@ public sealed class HttpRetryPolicyTests
         context,
         instrumentation,
         onSuccess: successResults.Add,
-        onFailure: failureResults.Add,
-        onRetry: retryCallbacks.Add);
+        onFailure: failureResults.Add);
 
         Assert.Equal(1, attempts);
-        Assert.Empty(retryCallbacks);
         Assert.Empty(instrumentation.Retries);
         Assert.Empty(failureResults);
 
@@ -254,7 +233,7 @@ public sealed class HttpRetryPolicyTests
         var policy = new HttpRetryPolicy(maxRetries: 2, baseDelay: TimeSpan.FromMilliseconds(50), maxDelay: TimeSpan.FromMilliseconds(50));
         var attempts = 0;
         var instrumentation = new TestScraperInstrumentation();
-        var retryCallbacks = new List<ScraperOperationContext>();
+        instrumentation.RetryCallback = _ => cancellationSource.Cancel();
         var successResults = new List<HttpRetryResult>();
         var failureResults = new List<HttpRetryResult>();
 
@@ -272,12 +251,7 @@ public sealed class HttpRetryPolicyTests
                 instrumentation,
                 cancellationToken: cancellationSource.Token,
                 onSuccess: successResults.Add,
-                onFailure: failureResults.Add,
-                onRetry: retryContext =>
-                {
-                    retryCallbacks.Add(retryContext);
-                    cancellationSource.Cancel();
-                }));
+                onFailure: failureResults.Add));
 
         Assert.Equal(1, attempts);
         Assert.Empty(successResults);
@@ -290,9 +264,8 @@ public sealed class HttpRetryPolicyTests
         Assert.Equal(1, instrumentationFailure.RetryCount);
         Assert.IsAssignableFrom<OperationCanceledException>(instrumentationFailure.Exception);
 
-        var retryContext = Assert.Single(retryCallbacks);
+        var retryContext = Assert.Single(instrumentation.Retries);
         Assert.Equal(1, retryContext.RetryAttempt);
-        Assert.Single(instrumentation.Retries);
     }
 
     private sealed class TestScraperInstrumentation : IScraperInstrumentation
@@ -313,6 +286,8 @@ public sealed class HttpRetryPolicyTests
         public List<(ScraperOperationContext Context, TimeSpan Duration, Exception Exception, HttpStatusCode? StatusCode, int RetryCount)> Failures { get; } = new();
 
         public List<ScraperOperationContext> Retries { get; } = new();
+
+        public Action<ScraperOperationContext>? RetryCallback { get; set; }
 
         public IDisposable BeginScope(ScraperOperationContext context)
         {
@@ -338,6 +313,7 @@ public sealed class HttpRetryPolicyTests
         public void RecordRetry(ScraperOperationContext context)
         {
             Retries.Add(context);
+            RetryCallback?.Invoke(context);
         }
     }
 }

@@ -69,8 +69,7 @@ public sealed class HttpRetryPolicy
         IScraperInstrumentation? instrumentation = null,
         CancellationToken cancellationToken = default,
         Action<HttpRetryResult>? onSuccess = null,
-        Action<HttpRetryResult>? onFailure = null,
-        Action<ScraperOperationContext>? onRetry = null)
+        Action<HttpRetryResult>? onFailure = null)
     {
         if (sendOperation is null)
         {
@@ -85,8 +84,7 @@ public sealed class HttpRetryPolicy
             instrumentation,
             cancellationToken,
             onSuccess,
-            onFailure,
-            onRetry);
+            onFailure);
     }
 
     private async Task<HttpResponseMessage> ExecuteAsync(
@@ -95,8 +93,7 @@ public sealed class HttpRetryPolicy
         IScraperInstrumentation instrumentation,
         CancellationToken cancellationToken,
         Action<HttpRetryResult>? onSuccess,
-        Action<HttpRetryResult>? onFailure,
-        Action<ScraperOperationContext>? onRetry)
+        Action<HttpRetryResult>? onFailure)
     {
         using var scope = instrumentation.BeginScope(context);
         instrumentation.RecordRequestStart(context);
@@ -131,7 +128,6 @@ public sealed class HttpRetryPolicy
 
                 instrumentation.RecordRetry(retryContext);
                 _logger.LogRetryScheduled(delay, retryCount, reason);
-                onRetry?.Invoke(retryContext);
 
                 response.Dispose();
                 await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
@@ -160,7 +156,6 @@ public sealed class HttpRetryPolicy
 
                 instrumentation.RecordRetry(retryContext);
                 _logger.LogRetryScheduled(delay, retryCount, reason);
-                onRetry?.Invoke(retryContext);
                 await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
             }
             catch (Exception ex)
