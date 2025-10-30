@@ -153,64 +153,129 @@ public sealed class WooScraper : IDisposable
 
     private Task<HttpResponseMessage> GetWithRetryAsync(
         string url,
+        ScraperOperationContext context,
+        IScraperInstrumentation instrumentation,
         CancellationToken cancellationToken = default,
-        Action<HttpRetryAttempt>? onRetry = null)
-        => _httpPolicy.SendAsync(() => _http.GetAsync(url, cancellationToken), cancellationToken, onRetry);
+        Action<HttpRetryResult>? onSuccess = null,
+        Action<HttpRetryResult>? onFailure = null)
+        => _httpPolicy.SendAsync(
+            () => _http.GetAsync(url, cancellationToken),
+            context,
+            instrumentation,
+            cancellationToken,
+            onSuccess,
+            onFailure);
+
+    private Task<HttpResponseMessage> GetWithRetryAsync(
+        string url,
+        IScraperInstrumentation instrumentation,
+        CancellationToken cancellationToken = default,
+        Action<HttpRetryResult>? onSuccess = null,
+        Action<HttpRetryResult>? onFailure = null)
+        => GetWithRetryAsync(
+            url,
+            new ScraperOperationContext("WooScraper.HttpGet", url),
+            instrumentation,
+            cancellationToken,
+            onSuccess,
+            onFailure);
 
     private Task<HttpResponseMessage> SendWithRetryAsync(
         Func<HttpRequestMessage> requestFactory,
+        ScraperOperationContext context,
+        IScraperInstrumentation instrumentation,
         CancellationToken cancellationToken = default,
-        Action<HttpRetryAttempt>? onRetry = null)
+        Action<HttpRetryResult>? onSuccess = null,
+        Action<HttpRetryResult>? onFailure = null)
         => _httpPolicy.SendAsync(async () =>
         {
             using var request = requestFactory();
             return await _http.SendAsync(request, cancellationToken).ConfigureAwait(false);
-        }, cancellationToken, onRetry);
+        }, context, instrumentation, cancellationToken, onSuccess, onFailure);
+
+    private Task<HttpResponseMessage> SendWithRetryAsync(
+        Func<HttpRequestMessage> requestFactory,
+        IScraperInstrumentation instrumentation,
+        CancellationToken cancellationToken = default,
+        Action<HttpRetryResult>? onSuccess = null,
+        Action<HttpRetryResult>? onFailure = null)
+        => SendWithRetryAsync(
+            requestFactory,
+            new ScraperOperationContext("WooScraper.HttpSend"),
+            instrumentation,
+            cancellationToken,
+            onSuccess,
+            onFailure);
 
     private Task<HttpResponseMessage> SendWithRetryAsync(
         Func<HttpRequestMessage> requestFactory,
         HttpCompletionOption completionOption,
+        ScraperOperationContext context,
+        IScraperInstrumentation instrumentation,
         CancellationToken cancellationToken = default,
-        Action<HttpRetryAttempt>? onRetry = null)
+        Action<HttpRetryResult>? onSuccess = null,
+        Action<HttpRetryResult>? onFailure = null)
         => _httpPolicy.SendAsync(async () =>
         {
             using var request = requestFactory();
             return await _http.SendAsync(request, completionOption, cancellationToken).ConfigureAwait(false);
-        }, cancellationToken, onRetry);
+        }, context, instrumentation, cancellationToken, onSuccess, onFailure);
 
-    private Action<HttpRetryAttempt> CreateRetryHandler(
+    private Task<HttpResponseMessage> SendWithRetryAsync(
+        Func<HttpRequestMessage> requestFactory,
+        HttpCompletionOption completionOption,
+        IScraperInstrumentation instrumentation,
+        CancellationToken cancellationToken = default,
+        Action<HttpRetryResult>? onSuccess = null,
+        Action<HttpRetryResult>? onFailure = null)
+        => SendWithRetryAsync(
+            requestFactory,
+            completionOption,
+            new ScraperOperationContext("WooScraper.HttpSend"),
+            instrumentation,
+            cancellationToken,
+            onSuccess,
+            onFailure);
+
+    private IScraperInstrumentation CreateRetryInstrumentation(
         ScraperOperationContext context,
         IProgress<string>? log,
-        Action<int> onRetryCountUpdated)
-    {
-        return attempt =>
-        {
-            if (onRetryCountUpdated is not null)
+        Action<int>? onRetryCountUpdated = null)
+        => new DelegatingScraperInstrumentation(
+            NullScraperInstrumentation.Instance,
+            retry: retryContext =>
             {
-                onRetryCountUpdated(attempt.AttemptNumber);
-            }
+                if (retryContext.RetryAttempt is not { } attemptNumber)
+                {
+                    return;
+                }
 
-            var retryContext = context with
-            {
-                RetryAttempt = attempt.AttemptNumber,
-                RetryDelay = attempt.Delay,
-                RetryReason = attempt.Reason
-            };
+                onRetryCountUpdated?.Invoke(attemptNumber);
 
-            _instrumentation.RecordRetry(retryContext);
+                var updatedContext = context with
+                {
+                    RetryAttempt = attemptNumber,
+                    RetryDelay = retryContext.RetryDelay,
+                    RetryReason = retryContext.RetryReason
+                };
 
-            var delayMessage = FormatRetryDelay(attempt.Delay);
-            _logger.LogWarning(
-                "Retrying {Operation} request to {Url} in {Delay} (attempt {Attempt}): {Reason}",
-                context.OperationName,
-                context.Url,
-                delayMessage,
-                attempt.AttemptNumber,
-                attempt.Reason);
+                _instrumentation.RecordRetry(updatedContext);
 
-            log?.Report($"Retrying {context.Url} in {delayMessage} (attempt {attempt.AttemptNumber}): {attempt.Reason}");
-        };
-    }
+                var delay = FormatRetryDelay(retryContext.RetryDelay ?? TimeSpan.Zero);
+                var reason = string.IsNullOrWhiteSpace(retryContext.RetryReason)
+                    ? "Retry scheduled."
+                    : retryContext.RetryReason;
+
+                _logger.LogWarning(
+                    "Retrying {Operation} request to {Url} in {Delay} (attempt {Attempt}): {Reason}",
+                    context.OperationName,
+                    context.Url,
+                    delay,
+                    attemptNumber,
+                    reason);
+
+                log?.Report($"Retrying {context.Url} in {delay} (attempt {attemptNumber}): {reason}");
+            });
 
     private static string FormatRetryDelay(TimeSpan delay)
     {
@@ -237,23 +302,25 @@ public sealed class WooScraper : IDisposable
         return System.Text.Encoding.UTF8.GetByteCount(content);
     }
 
-    private static Action<HttpRetryAttempt>? CreateRetryReporter(IProgress<string>? log, string target)
-        => log is null ? null : attempt => ReportRetry(log, target, attempt);
+    private static IScraperInstrumentation CreateRetryReporter(IProgress<string>? log, string target)
+        => log is null
+            ? NullScraperInstrumentation.Instance
+            : new DelegatingScraperInstrumentation(
+                NullScraperInstrumentation.Instance,
+                retry: context =>
+                {
+                    if (context.RetryAttempt is not { } attempt)
+                    {
+                        return;
+                    }
 
-    private static void ReportRetry(IProgress<string> log, string target, HttpRetryAttempt attempt)
-    {
-        string delay;
-        if (attempt.Delay.TotalSeconds >= 1)
-        {
-            delay = $"{attempt.Delay.TotalSeconds:F1}s";
-        }
-        else
-        {
-            delay = $"{Math.Max(1, attempt.Delay.TotalMilliseconds):F0}ms";
-        }
+                    var delay = FormatRetryDelay(context.RetryDelay ?? TimeSpan.Zero);
+                    var reason = string.IsNullOrWhiteSpace(context.RetryReason)
+                        ? "Retry scheduled."
+                        : context.RetryReason;
 
-        log.Report($"Retrying {target} in {delay} (attempt {attempt.AttemptNumber}): {attempt.Reason}");
-    }
+                    log.Report($"Retrying {target} in {delay} (attempt {attempt}): {reason}");
+                });
 
     public async Task<List<StoreProduct>> FetchStoreProductsAsync(
         string baseUrl,
@@ -286,10 +353,12 @@ public sealed class WooScraper : IDisposable
 
             try
             {
+                var retryInstrumentation = CreateRetryInstrumentation(context, log, attempt => retryCount = attempt);
                 response = await GetWithRetryAsync(
                     url,
-                    cancellationToken,
-                    CreateRetryHandler(context, log, attempt => retryCount = attempt)).ConfigureAwait(false);
+                    context,
+                    retryInstrumentation,
+                    cancellationToken).ConfigureAwait(false);
 
                 if (!response.IsSuccessStatusCode)
                 {
@@ -478,10 +547,12 @@ public sealed class WooScraper : IDisposable
 
             try
             {
+                var retryInstrumentation = CreateRetryInstrumentation(context, log, attempt => retryCount = attempt);
                 response = await GetWithRetryAsync(
                     url,
-                    cancellationToken,
-                    CreateRetryHandler(context, log, attempt => retryCount = attempt)).ConfigureAwait(false);
+                    context,
+                    retryInstrumentation,
+                    cancellationToken).ConfigureAwait(false);
 
                 if (!response.IsSuccessStatusCode)
                 {
@@ -965,7 +1036,7 @@ public sealed class WooScraper : IDisposable
                     var request = new HttpRequestMessage(HttpMethod.Get, url);
                     request.Headers.Authorization = CreateBasicAuthHeader(username, applicationPassword);
                     return request;
-                }, cancellationToken, CreateRetryReporter(log, url)).ConfigureAwait(false);
+                }, CreateRetryReporter(log, url), cancellationToken).ConfigureAwait(false);
                 if (!resp.IsSuccessStatusCode)
                 {
                     if ((int)resp.StatusCode == 404)
@@ -1074,7 +1145,7 @@ public sealed class WooScraper : IDisposable
                     var request = new HttpRequestMessage(HttpMethod.Get, url);
                     request.Headers.Authorization = CreateBasicAuthHeader(username, applicationPassword);
                     return request;
-                }, cancellationToken, CreateRetryReporter(log, url)).ConfigureAwait(false);
+                }, CreateRetryReporter(log, url), cancellationToken).ConfigureAwait(false);
                 if (!resp.IsSuccessStatusCode)
                 {
                     if ((int)resp.StatusCode == 404)
@@ -1484,7 +1555,10 @@ public sealed class WooScraper : IDisposable
             try
             {
                 log?.Report($"GET {url}");
-                using var resp = await GetWithRetryAsync(url, cancellationToken, CreateRetryReporter(log, url));
+                var context = new ScraperOperationContext("WooScraper.FetchStoreReviews", url, "review");
+                var retryInstrumentation = CreateRetryReporter(log, url);
+                using var resp = await GetWithRetryAsync(url, context, retryInstrumentation, cancellationToken)
+                    .ConfigureAwait(false);
                 if (!resp.IsSuccessStatusCode) continue;
 
                 var text = await resp.Content.ReadAsStringAsync();
@@ -2034,7 +2108,7 @@ public sealed class WooScraper : IDisposable
             try
             {
                 log?.Report($"GET {url}");
-                using var resp = await GetWithRetryAsync(url, cancellationToken, CreateRetryReporter(log, url));
+                using var resp = await GetWithRetryAsync(url, CreateRetryReporter(log, url), cancellationToken);
                 if (!resp.IsSuccessStatusCode)
                 {
                     if ((int)resp.StatusCode == 404) break;
@@ -2155,7 +2229,7 @@ public sealed class WooScraper : IDisposable
         try
         {
             log?.Report($"GET {url}");
-            using var resp = await GetWithRetryAsync(url, cancellationToken, CreateRetryReporter(log, url));
+            using var resp = await GetWithRetryAsync(url, CreateRetryReporter(log, url), cancellationToken);
             if (!resp.IsSuccessStatusCode) return new();
 
             var text = await resp.Content.ReadAsStringAsync();
@@ -2203,7 +2277,7 @@ public sealed class WooScraper : IDisposable
         try
         {
             log?.Report($"GET {url}");
-            using var resp = await GetWithRetryAsync(url, cancellationToken, CreateRetryReporter(log, url));
+            using var resp = await GetWithRetryAsync(url, CreateRetryReporter(log, url), cancellationToken);
             if (!resp.IsSuccessStatusCode) return new();
 
             var text = await resp.Content.ReadAsStringAsync();
@@ -2245,7 +2319,7 @@ public sealed class WooScraper : IDisposable
         try
         {
             log?.Report($"GET {url}");
-            using var resp = await GetWithRetryAsync(url, cancellationToken, CreateRetryReporter(log, url));
+            using var resp = await GetWithRetryAsync(url, CreateRetryReporter(log, url), cancellationToken);
             if (!resp.IsSuccessStatusCode) return new();
 
             var text = await resp.Content.ReadAsStringAsync();
@@ -2303,7 +2377,7 @@ public sealed class WooScraper : IDisposable
                 try
                 {
                     log?.Report($"GET {url}");
-                    using var resp = await GetWithRetryAsync(url, cancellationToken, CreateRetryReporter(log, url));
+                    using var resp = await GetWithRetryAsync(url, CreateRetryReporter(log, url), cancellationToken);
                     if (!resp.IsSuccessStatusCode) break;
 
                     var text = await resp.Content.ReadAsStringAsync();
@@ -2391,7 +2465,7 @@ public sealed class WooScraper : IDisposable
             try
             {
                 log?.Report($"GET {url} (SEO fallback)");
-                using var resp = await GetWithRetryAsync(url, cancellationToken, CreateRetryReporter(log, url));
+                using var resp = await GetWithRetryAsync(url, CreateRetryReporter(log, url), cancellationToken);
                 if (!resp.IsSuccessStatusCode)
                 {
                     continue;
@@ -2879,10 +2953,12 @@ public sealed class WooScraper : IDisposable
 
             try
             {
+                var retryInstrumentation = CreateRetryInstrumentation(context, log, attempt => retryCount = attempt);
                 response = await GetWithRetryAsync(
                     url,
-                    cancellationToken,
-                    CreateRetryHandler(context, log, attempt => retryCount = attempt)).ConfigureAwait(false);
+                    context,
+                    retryInstrumentation,
+                    cancellationToken).ConfigureAwait(false);
 
                 if (!response.IsSuccessStatusCode)
                 {
@@ -3003,7 +3079,7 @@ public sealed class WooScraper : IDisposable
         try
         {
             log?.Report($"GET {url}");
-            using var resp = await GetWithRetryAsync(url, cancellationToken, CreateRetryReporter(log, url));
+            using var resp = await GetWithRetryAsync(url, CreateRetryReporter(log, url), cancellationToken);
             if (!resp.IsSuccessStatusCode)
             {
                 if ((int)resp.StatusCode == 404)
@@ -3171,7 +3247,7 @@ public sealed class WooScraper : IDisposable
         try
         {
             log?.Report($"GET {url}");
-            using var resp = await GetWithRetryAsync(url, cancellationToken, CreateRetryReporter(log, url));
+            using var resp = await GetWithRetryAsync(url, CreateRetryReporter(log, url), cancellationToken);
             if (!resp.IsSuccessStatusCode)
             {
                 if ((int)resp.StatusCode == 404)
@@ -3279,7 +3355,7 @@ public sealed class WooScraper : IDisposable
                 try
                 {
                     log?.Report($"GET {url}");
-                    using var resp = await GetWithRetryAsync(url, cancellationToken, CreateRetryReporter(log, url));
+                    using var resp = await GetWithRetryAsync(url, CreateRetryReporter(log, url), cancellationToken);
                     if (!resp.IsSuccessStatusCode)
                     {
                         if ((int)resp.StatusCode is 400 or 404)
@@ -3428,7 +3504,7 @@ public sealed class WooScraper : IDisposable
         try
         {
             log?.Report($"GET {url}");
-            using var resp = await GetWithRetryAsync(url, cancellationToken, CreateRetryReporter(log, url));
+            using var resp = await GetWithRetryAsync(url, CreateRetryReporter(log, url), cancellationToken);
             if (!resp.IsSuccessStatusCode)
             {
                 if ((int)resp.StatusCode == 404)
@@ -3663,7 +3739,8 @@ public sealed class WooScraper : IDisposable
                 var request = new HttpRequestMessage(HttpMethod.Get, url);
                 request.Headers.Authorization = CreateBasicAuthHeader(username, applicationPassword);
                 return request;
-            }, HttpCompletionOption.ResponseHeadersRead, cancellationToken, CreateRetryReporter(log, url)).ConfigureAwait(false);
+            }, HttpCompletionOption.ResponseHeadersRead, CreateRetryReporter(log, url), cancellationToken)
+                .ConfigureAwait(false);
             if (!resp.IsSuccessStatusCode)
             {
                 if ((int)resp.StatusCode != 404)

@@ -263,19 +263,34 @@ public sealed class PublicExtensionDetector : IDisposable
         try
         {
             log?.Report($"GET {url}");
+            var context = new ScraperOperationContext(
+                "PublicExtensionDetector.Download",
+                url);
+            var instrumentation = log is null
+                ? NullScraperInstrumentation.Instance
+                : new DelegatingScraperInstrumentation(
+                    NullScraperInstrumentation.Instance,
+                    retry: retryContext =>
+                    {
+                        if (retryContext.RetryAttempt is not { } attemptNumber)
+                        {
+                            return;
+                        }
+
+                        var delayValue = retryContext.RetryDelay ?? TimeSpan.Zero;
+                        var delay = delayValue.TotalSeconds >= 1
+                            ? $"{delayValue.TotalSeconds:F1}s"
+                            : $"{Math.Max(1, delayValue.TotalMilliseconds):F0}ms";
+                        var reason = string.IsNullOrWhiteSpace(retryContext.RetryReason)
+                            ? "Retry scheduled."
+                            : retryContext.RetryReason;
+                        log!.Report($"Retrying {url} in {delay} (attempt {attemptNumber}): {reason}");
+                    });
             using var response = await _httpPolicy.SendAsync(
                 () => _httpClient.GetAsync(url, cancellationToken),
-                cancellationToken,
-                attempt =>
-                {
-                    if (log is not null)
-                    {
-                        var delay = attempt.Delay.TotalSeconds >= 1
-                            ? $"{attempt.Delay.TotalSeconds:F1}s"
-                            : $"{attempt.Delay.TotalMilliseconds:F0}ms";
-                        log.Report($"Retrying {url} in {delay} (attempt {attempt.AttemptNumber}): {attempt.Reason}");
-                    }
-                }).ConfigureAwait(false);
+                context,
+                instrumentation,
+                cancellationToken).ConfigureAwait(false);
             if (!response.IsSuccessStatusCode)
             {
                 if ((int)response.StatusCode == 404)

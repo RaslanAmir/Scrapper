@@ -129,22 +129,24 @@ public sealed class WordPressDirectoryClient
 
         try
         {
+            var retryInstrumentation = new DelegatingScraperInstrumentation(
+                NullScraperInstrumentation.Instance,
+                retry: retryContext =>
+                {
+                    if (retryContext.RetryAttempt is { } attemptNumber)
+                    {
+                        retryCount = attemptNumber;
+                    }
+
+                    using var retryScope = _instrumentation.BeginScope(retryContext);
+                    _instrumentation.RecordRetry(retryContext);
+                });
+
             response = await _retryPolicy.SendAsync(
                     () => _httpClient.GetAsync(requestUri, cancellationToken),
-                    cancellationToken,
-                    attempt =>
-                    {
-                        retryCount = attempt.AttemptNumber;
-                        var retryContext = context with
-                        {
-                            RetryAttempt = attempt.AttemptNumber,
-                            RetryDelay = attempt.Delay,
-                            RetryReason = attempt.Reason
-                        };
-
-                        using var retryScope = _instrumentation.BeginScope(retryContext);
-                        _instrumentation.RecordRetry(retryContext);
-                    })
+                    context,
+                    retryInstrumentation,
+                    cancellationToken)
                 .ConfigureAwait(false);
 
             if (response.StatusCode == HttpStatusCode.NotFound)

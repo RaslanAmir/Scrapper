@@ -9,6 +9,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using WcScraper.Core.Telemetry;
 
 namespace WcScraper.Core;
 
@@ -136,10 +137,16 @@ public static class FrontEndDesignSnapshot
             try
             {
                 log?.Report($"GET {request.ResolvedUrl}");
+                var fontContext = new ScraperOperationContext(
+                    "FrontEndDesignSnapshot.FetchFont",
+                    request.ResolvedUrl,
+                    entityType: "font");
+                var fontInstrumentation = CreateRetryInstrumentation(log, request.ResolvedUrl);
                 using var fontResponse = await retryPolicy.SendAsync(
                     () => httpClient.GetAsync(request.ResolvedUrl, cancellationToken),
-                    cancellationToken,
-                    attempt => ReportRetry(log, request.ResolvedUrl, attempt));
+                    fontContext,
+                    fontInstrumentation,
+                    cancellationToken);
                 if (!fontResponse.IsSuccessStatusCode)
                 {
                     log?.Report($"Font request failed for {request.ResolvedUrl}: {(int)fontResponse.StatusCode} {fontResponse.ReasonPhrase}");
@@ -178,10 +185,16 @@ public static class FrontEndDesignSnapshot
             try
             {
                 log?.Report($"GET {request.ResolvedUrl}");
+                var iconContext = new ScraperOperationContext(
+                    "FrontEndDesignSnapshot.FetchIcon",
+                    request.ResolvedUrl,
+                    entityType: "icon");
+                var iconInstrumentation = CreateRetryInstrumentation(log, request.ResolvedUrl);
                 using var iconResponse = await retryPolicy.SendAsync(
                     () => httpClient.GetAsync(request.ResolvedUrl, cancellationToken),
-                    cancellationToken,
-                    attempt => ReportRetry(log, request.ResolvedUrl, attempt));
+                    iconContext,
+                    iconInstrumentation,
+                    cancellationToken);
                 if (!iconResponse.IsSuccessStatusCode)
                 {
                     log?.Report($"Icon request failed for {request.ResolvedUrl}: {(int)iconResponse.StatusCode} {iconResponse.ReasonPhrase}");
@@ -222,10 +235,16 @@ public static class FrontEndDesignSnapshot
             try
             {
                 log?.Report($"GET {request.ResolvedUrl}");
+                var imageContext = new ScraperOperationContext(
+                    "FrontEndDesignSnapshot.FetchImage",
+                    request.ResolvedUrl,
+                    entityType: "image");
+                var imageInstrumentation = CreateRetryInstrumentation(log, request.ResolvedUrl);
                 using var imageResponse = await retryPolicy.SendAsync(
                     () => httpClient.GetAsync(request.ResolvedUrl, cancellationToken),
-                    cancellationToken,
-                    attempt => ReportRetry(log, request.ResolvedUrl, attempt));
+                    imageContext,
+                    imageInstrumentation,
+                    cancellationToken);
                 if (!imageResponse.IsSuccessStatusCode)
                 {
                     log?.Report($"Image request failed for {request.ResolvedUrl}: {(int)imageResponse.StatusCode} {imageResponse.ReasonPhrase}");
@@ -352,10 +371,16 @@ public static class FrontEndDesignSnapshot
         var builder = new DesignPageSnapshotBuilder(pageUrl);
 
         log?.Report($"GET {pageUrl}");
+        var pageContext = new ScraperOperationContext(
+            "FrontEndDesignSnapshot.FetchPage",
+            pageUrl,
+            entityType: "page");
+        var pageInstrumentation = CreateRetryInstrumentation(log, pageUrl);
         using var response = await retryPolicy.SendAsync(
             () => httpClient.GetAsync(pageUrl, cancellationToken),
-            cancellationToken,
-            attempt => ReportRetry(log, pageUrl, attempt));
+            pageContext,
+            pageInstrumentation,
+            cancellationToken);
         response.EnsureSuccessStatusCode();
 
         var html = await response.Content.ReadAsStringAsync(cancellationToken) ?? string.Empty;
@@ -493,10 +518,16 @@ public static class FrontEndDesignSnapshot
             try
             {
                 log?.Report($"GET {request.ResolvedUrl}");
+                var stylesheetContext = new ScraperOperationContext(
+                    "FrontEndDesignSnapshot.FetchStylesheet",
+                    request.ResolvedUrl,
+                    entityType: "stylesheet");
+                var stylesheetInstrumentation = CreateRetryInstrumentation(log, request.ResolvedUrl);
                 using var cssResponse = await retryPolicy.SendAsync(
                     () => httpClient.GetAsync(request.ResolvedUrl, cancellationToken),
-                    cancellationToken,
-                    attempt => ReportRetry(log, request.ResolvedUrl, attempt));
+                    stylesheetContext,
+                    stylesheetInstrumentation,
+                    cancellationToken);
                 if (!cssResponse.IsSuccessStatusCode)
                 {
                     log?.Report($"Stylesheet request failed for {request.ResolvedUrl}: {(int)cssResponse.StatusCode} {cssResponse.ReasonPhrase}");
@@ -1075,24 +1106,36 @@ public static class FrontEndDesignSnapshot
         return null;
     }
 
-    private static void ReportRetry(IProgress<string>? log, string url, HttpRetryAttempt attempt)
+    private static IScraperInstrumentation CreateRetryInstrumentation(IProgress<string>? log, string target)
+        => log is null
+            ? NullScraperInstrumentation.Instance
+            : new DelegatingScraperInstrumentation(
+                NullScraperInstrumentation.Instance,
+                retry: context => ReportRetry(log, target, context));
+
+    private static void ReportRetry(IProgress<string>? log, string url, ScraperOperationContext retryContext)
     {
-        if (log is null)
+        if (log is null || retryContext.RetryAttempt is not { } attempt)
         {
             return;
         }
 
+        var delayValue = retryContext.RetryDelay ?? TimeSpan.Zero;
         string delay;
-        if (attempt.Delay.TotalSeconds >= 1)
+        if (delayValue.TotalSeconds >= 1)
         {
-            delay = $"{attempt.Delay.TotalSeconds:F1}s";
+            delay = $"{delayValue.TotalSeconds:F1}s";
         }
         else
         {
-            delay = $"{Math.Max(1, attempt.Delay.TotalMilliseconds):F0}ms";
+            delay = $"{Math.Max(1, delayValue.TotalMilliseconds):F0}ms";
         }
 
-        log.Report($"Retrying {url} in {delay} (attempt {attempt.AttemptNumber}): {attempt.Reason}");
+        var reason = string.IsNullOrWhiteSpace(retryContext.RetryReason)
+            ? "Retry scheduled."
+            : retryContext.RetryReason;
+
+        log.Report($"Retrying {url} in {delay} (attempt {attempt}): {reason}");
     }
 
     private static Uri? TryCreateUri(string value)
