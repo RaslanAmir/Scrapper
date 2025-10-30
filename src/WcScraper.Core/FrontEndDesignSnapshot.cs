@@ -81,6 +81,9 @@ public static class FrontEndDesignSnapshot
         loggerFactory ??= NullLoggerFactory.Instance;
         retryPolicy ??= new HttpRetryPolicy(logger: loggerFactory.CreateLogger<HttpRetryPolicy>());
 
+        var instrumentationOptions = ScraperInstrumentationOptions.SharedDefaults.WithFallbackLoggerFactory(loggerFactory);
+        var instrumentation = ScraperInstrumentation.Create(instrumentationOptions);
+
         var pageUrls = BuildPageUrlList(homeUrl, additionalPageUrls);
         var processedUrls = new List<string>(pageUrls.Count);
         var pageBuilders = new List<DesignPageSnapshotBuilder>(pageUrls.Count);
@@ -102,6 +105,7 @@ public static class FrontEndDesignSnapshot
             var builder = await CapturePageAsync(
                 httpClient,
                 retryPolicy,
+                instrumentation,
                 pageUrl,
                 aggregatedStylesheets,
                 stylesheetLookup,
@@ -145,7 +149,7 @@ public static class FrontEndDesignSnapshot
                 using var fontResponse = await retryPolicy.SendAsync(
                     () => httpClient.GetAsync(request.ResolvedUrl, cancellationToken),
                     fontContext,
-                    NullScraperInstrumentation.Instance,
+                    instrumentation,
                     cancellationToken,
                     onRetry: fontRetryReporter);
                 if (!fontResponse.IsSuccessStatusCode)
@@ -194,7 +198,7 @@ public static class FrontEndDesignSnapshot
                 using var iconResponse = await retryPolicy.SendAsync(
                     () => httpClient.GetAsync(request.ResolvedUrl, cancellationToken),
                     iconContext,
-                    NullScraperInstrumentation.Instance,
+                    instrumentation,
                     cancellationToken,
                     onRetry: iconRetryReporter);
                 if (!iconResponse.IsSuccessStatusCode)
@@ -245,7 +249,7 @@ public static class FrontEndDesignSnapshot
                 using var imageResponse = await retryPolicy.SendAsync(
                     () => httpClient.GetAsync(request.ResolvedUrl, cancellationToken),
                     imageContext,
-                    NullScraperInstrumentation.Instance,
+                    instrumentation,
                     cancellationToken,
                     onRetry: imageRetryReporter);
                 if (!imageResponse.IsSuccessStatusCode)
@@ -358,6 +362,7 @@ public static class FrontEndDesignSnapshot
     private static async Task<DesignPageSnapshotBuilder> CapturePageAsync(
         HttpClient httpClient,
         HttpRetryPolicy retryPolicy,
+        IScraperInstrumentation instrumentation,
         string pageUrl,
         List<StylesheetSnapshot> aggregatedStylesheets,
         Dictionary<string, StylesheetSnapshot> stylesheetLookup,
@@ -382,7 +387,7 @@ public static class FrontEndDesignSnapshot
         using var response = await retryPolicy.SendAsync(
             () => httpClient.GetAsync(pageUrl, cancellationToken),
             pageContext,
-            NullScraperInstrumentation.Instance,
+            instrumentation,
             cancellationToken,
             onRetry: pageRetryReporter);
         response.EnsureSuccessStatusCode();
@@ -530,7 +535,7 @@ public static class FrontEndDesignSnapshot
                 using var cssResponse = await retryPolicy.SendAsync(
                     () => httpClient.GetAsync(request.ResolvedUrl, cancellationToken),
                     stylesheetContext,
-                    NullScraperInstrumentation.Instance,
+                    instrumentation,
                     cancellationToken,
                     onRetry: stylesheetRetryReporter);
                 if (!cssResponse.IsSuccessStatusCode)
