@@ -5,10 +5,10 @@ using System.Net.Http;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Extensions.Logging;
 using WcScraper.Core;
 using WcScraper.Core.Telemetry;
 using WcScraper.Core.Tests.Telemetry;
-using WcScraper.Wpf.Services;
 using Xunit;
 
 namespace WcScraper.Core.Tests;
@@ -57,15 +57,7 @@ public sealed class WooScraperTelemetryTests
             loggerFactory: telemetry.LoggerFactory,
             instrumentationOptions: instrumentationOptions);
 
-        var progress = LoggerProgressAdapter.ForOperation(
-            telemetry.CreateLogger<WooScraperTelemetryTests>(),
-            callback: null,
-            operationName: OperationName,
-            url: requestUrl,
-            entityType: EntityType,
-            instrumentationOptions: instrumentationOptions);
-
-        var products = await scraper.FetchStoreProductsAsync(baseUrl, perPage: 100, maxPages: 1, log: progress);
+        var products = await scraper.FetchStoreProductsAsync(baseUrl, perPage: 100, maxPages: 1);
 
         Assert.Single(products);
 
@@ -75,6 +67,18 @@ public sealed class WooScraperTelemetryTests
         Assert.Equal(OperationName, Assert.IsType<string>(scope.Values["Operation"]));
         Assert.Equal(requestUrl, Assert.IsType<string>(scope.Values["Url"]));
         Assert.Equal(EntityType, Assert.IsType<string>(scope.Values["EntityType"]));
+
+        var logs = telemetry.LoggerFactory.Logs
+            .Where(l => string.Equals(l.Category, typeof(WooScraper).FullName, StringComparison.Ordinal))
+            .ToList();
+
+        Assert.Contains(logs, record =>
+            record.LogLevel == LogLevel.Information
+            && record.Message.Contains("Requesting WooCommerce products", StringComparison.Ordinal));
+
+        Assert.Contains(logs, record =>
+            record.LogLevel == LogLevel.Information
+            && record.Message.Contains("Fetched", StringComparison.Ordinal));
 
         var durationMeasurement = Assert.Single(telemetry.MeterListener.HistogramMeasurements
             .Where(m => string.Equals(m.InstrumentName, "scraper.request.duration", StringComparison.Ordinal)

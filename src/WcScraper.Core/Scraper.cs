@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Linq;
@@ -26,6 +27,7 @@ public sealed class WooScraper : IDisposable
     private readonly ILogger<WooScraper> _logger;
     private readonly ILoggerFactory _loggerFactory;
     private readonly ScraperInstrumentationOptions _instrumentationOptions;
+    private readonly IScraperInstrumentation _instrumentation;
     private HttpRetryPolicy _httpPolicy;
     private List<TermItem> _lastProductCategoryTerms = new();
     private readonly JsonSerializerOptions _jsonOptions = new()
@@ -49,6 +51,7 @@ public sealed class WooScraper : IDisposable
             ?? providedInstrumentationOptions.LoggerFactory
             ?? NullLoggerFactory.Instance;
         _instrumentationOptions = providedInstrumentationOptions.WithFallbackLoggerFactory(_loggerFactory);
+        _instrumentation = ScraperInstrumentation.Create(_instrumentationOptions);
         _logger = logger ?? _loggerFactory.CreateLogger<WooScraper>();
 
         if (httpClient is null)
@@ -175,6 +178,65 @@ public sealed class WooScraper : IDisposable
             return await _http.SendAsync(request, completionOption, cancellationToken).ConfigureAwait(false);
         }, cancellationToken, onRetry);
 
+    private Action<HttpRetryAttempt> CreateRetryHandler(
+        ScraperOperationContext context,
+        IProgress<string>? log,
+        Action<int> onRetryCountUpdated)
+    {
+        return attempt =>
+        {
+            if (onRetryCountUpdated is not null)
+            {
+                onRetryCountUpdated(attempt.AttemptNumber);
+            }
+
+            var retryContext = context with
+            {
+                RetryAttempt = attempt.AttemptNumber,
+                RetryDelay = attempt.Delay,
+                RetryReason = attempt.Reason
+            };
+
+            _instrumentation.RecordRetry(retryContext);
+
+            var delayMessage = FormatRetryDelay(attempt.Delay);
+            _logger.LogWarning(
+                "Retrying {Operation} request to {Url} in {Delay} (attempt {Attempt}): {Reason}",
+                context.OperationName,
+                context.Url,
+                delayMessage,
+                attempt.AttemptNumber,
+                attempt.Reason);
+
+            log?.Report($"Retrying {context.Url} in {delayMessage} (attempt {attempt.AttemptNumber}): {attempt.Reason}");
+        };
+    }
+
+    private static string FormatRetryDelay(TimeSpan delay)
+    {
+        if (delay.TotalSeconds >= 1)
+        {
+            return $"{delay.TotalSeconds:F1}s";
+        }
+
+        return $"{Math.Max(1, delay.TotalMilliseconds):F0}ms";
+    }
+
+    private static long? DeterminePayloadBytes(HttpResponseMessage response, string? content)
+    {
+        if (response.Content.Headers.ContentLength is { } length)
+        {
+            return length;
+        }
+
+        if (string.IsNullOrEmpty(content))
+        {
+            return 0;
+        }
+
+        return System.Text.Encoding.UTF8.GetByteCount(content);
+    }
+
     private static Action<HttpRetryAttempt>? CreateRetryReporter(IProgress<string>? log, string target)
         => log is null ? null : attempt => ReportRetry(log, target, attempt);
 
@@ -209,60 +271,139 @@ public sealed class WooScraper : IDisposable
         {
             cancellationToken.ThrowIfCancellationRequested();
             var url = $"{baseUrl}/wp-json/wc/store/v1/products?per_page={perPage}&page={page}" +
-                      (string.IsNullOrWhiteSpace(categoryFilter) ? "" : $"&category={Uri.EscapeDataString(categoryFilter)}") +
-                      (string.IsNullOrWhiteSpace(tagFilter) ? "" : $"&tag={Uri.EscapeDataString(tagFilter)}");
+                      (string.IsNullOrWhiteSpace(categoryFilter) ? string.Empty : $"&category={Uri.EscapeDataString(categoryFilter)}") +
+                      (string.IsNullOrWhiteSpace(tagFilter) ? string.Empty : $"&tag={Uri.EscapeDataString(tagFilter)}");
+
+            var context = new ScraperOperationContext("WooScraper.FetchStoreProducts", url, "product");
+            using var scope = _instrumentation.BeginScope(context);
+            _instrumentation.RecordRequestStart(context);
+            _logger.LogInformation("Requesting WooCommerce products from {Url}", url);
+            log?.Report($"GET {url}");
+
+            var stopwatch = Stopwatch.StartNew();
+            var retryCount = 0;
+            HttpResponseMessage? response = null;
+
             try
             {
-                log?.Report($"GET {url}");
-                using var resp = await GetWithRetryAsync(url, cancellationToken, CreateRetryReporter(log, url));
-                if (!resp.IsSuccessStatusCode)
+                response = await GetWithRetryAsync(
+                    url,
+                    cancellationToken,
+                    CreateRetryHandler(context, log, attempt => retryCount = attempt)).ConfigureAwait(false);
+
+                if (!response.IsSuccessStatusCode)
                 {
-                    if ((int)resp.StatusCode == 404) break;
-                    resp.EnsureSuccessStatusCode();
-                }
-
-                var text = await resp.Content.ReadAsStringAsync();
-                if (string.IsNullOrWhiteSpace(text)) break;
-
-                var items = DeserializeListWithRecovery<StoreProduct>(text, "store products", log);
-                if (items.Count == 0) break;
-
-                foreach (var it in items)
-                {
-                    if (string.IsNullOrWhiteSpace(it.ShortDescription) && !string.IsNullOrWhiteSpace(it.Summary))
+                    if ((int)response.StatusCode == 404)
                     {
-                        it.ShortDescription = it.Summary;
+                        stopwatch.Stop();
+                        var notFoundException = new HttpRequestException(
+                            $"WooCommerce store products endpoint returned {(int)response.StatusCode} ({response.ReasonPhrase}).");
+                        _instrumentation.RecordRequestFailure(context, stopwatch.Elapsed, notFoundException, response.StatusCode, retryCount);
+                        _logger.LogWarning("Store products endpoint returned 404 for {Url}", url);
+                        log?.Report("Store API endpoint not found.");
+                        break;
                     }
 
-                    PopulateWooSeoMetadata(it);
+                    response.EnsureSuccessStatusCode();
+                }
+
+                var text = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+                var payloadBytes = DeterminePayloadBytes(response, text);
+
+                if (string.IsNullOrWhiteSpace(text))
+                {
+                    stopwatch.Stop();
+                    var successContext = context with { PayloadBytes = payloadBytes };
+                    _instrumentation.RecordRequestSuccess(successContext, stopwatch.Elapsed, response.StatusCode, retryCount);
+                    _logger.LogInformation(
+                        "Store products request to {Url} completed with empty payload (status {StatusCode}).",
+                        url,
+                        (int)response.StatusCode);
+                    break;
+                }
+
+                var items = DeserializeListWithRecovery<StoreProduct>(text, "store products", log);
+                if (items.Count == 0)
+                {
+                    stopwatch.Stop();
+                    var successContext = context with { PayloadBytes = payloadBytes };
+                    _instrumentation.RecordRequestSuccess(successContext, stopwatch.Elapsed, response.StatusCode, retryCount);
+                    _logger.LogInformation(
+                        "Store products request to {Url} returned no items (status {StatusCode}).",
+                        url,
+                        (int)response.StatusCode);
+                    break;
+                }
+
+                foreach (var product in items)
+                {
+                    if (string.IsNullOrWhiteSpace(product.ShortDescription) && !string.IsNullOrWhiteSpace(product.Summary))
+                    {
+                        product.ShortDescription = product.Summary;
+                    }
+
+                    PopulateWooSeoMetadata(product);
                 }
 
                 all.AddRange(items);
-                if (items.Count < perPage) break;
+
+                stopwatch.Stop();
+                var completedContext = context with { PayloadBytes = payloadBytes };
+                _instrumentation.RecordRequestSuccess(completedContext, stopwatch.Elapsed, response.StatusCode, retryCount);
+                _logger.LogInformation(
+                    "Fetched {Count} store products from {Url} with status {StatusCode} after {RetryCount} retries (payload {PayloadBytes}).",
+                    items.Count,
+                    url,
+                    (int)response.StatusCode,
+                    retryCount,
+                    completedContext.PayloadBytes ?? 0L);
+
+                if (items.Count < perPage)
+                {
+                    break;
+                }
             }
             catch (TaskCanceledException ex)
             {
                 if (cancellationToken.IsCancellationRequested)
                 {
+                    response?.Dispose();
                     throw;
                 }
+
+                stopwatch.Stop();
+                _instrumentation.RecordRequestFailure(context, stopwatch.Elapsed, ex, response?.StatusCode, retryCount);
                 log?.Report($"Store API request timed out: {ex.Message}");
+                _logger.LogError(ex, "Store products request to {Url} timed out.", url);
                 break;
             }
             catch (AuthenticationException ex)
             {
+                stopwatch.Stop();
+                _instrumentation.RecordRequestFailure(context, stopwatch.Elapsed, ex, response?.StatusCode, retryCount);
                 log?.Report($"Store API TLS handshake failed: {ex.Message}");
+                _logger.LogError(ex, "Store products request to {Url} failed TLS handshake.", url);
                 break;
             }
             catch (IOException ex)
             {
+                stopwatch.Stop();
+                _instrumentation.RecordRequestFailure(context, stopwatch.Elapsed, ex, response?.StatusCode, retryCount);
                 log?.Report($"Store API I/O failure: {ex.Message}");
+                _logger.LogError(ex, "Store products request to {Url} encountered an I/O error.", url);
                 break;
             }
             catch (HttpRequestException ex)
             {
+                stopwatch.Stop();
+                _instrumentation.RecordRequestFailure(context, stopwatch.Elapsed, ex, response?.StatusCode, retryCount);
                 log?.Report($"Store API request failed: {ex.Message}");
+                _logger.LogError(ex, "Store products request to {Url} failed.", url);
                 break;
+            }
+            finally
+            {
+                response?.Dispose();
             }
         }
 
@@ -325,28 +466,58 @@ public sealed class WooScraper : IDisposable
         {
             cancellationToken.ThrowIfCancellationRequested();
             var url = $"{baseUrl}/wp-json/wp/v2/media?per_page={perPage}&page={page}&orderby=date&order=asc";
+            var context = new ScraperOperationContext("WooScraper.FetchWordPressMedia", url, "media");
+            using var scope = _instrumentation.BeginScope(context);
+            _instrumentation.RecordRequestStart(context);
+            _logger.LogInformation("Requesting WordPress media from {Url}", url);
+            log?.Report($"GET {url}");
+
+            var stopwatch = Stopwatch.StartNew();
+            var retryCount = 0;
+            HttpResponseMessage? response = null;
+
             try
             {
-                log?.Report($"GET {url}");
-                using var resp = await GetWithRetryAsync(url, cancellationToken, CreateRetryReporter(log, url));
-                if (!resp.IsSuccessStatusCode)
+                response = await GetWithRetryAsync(
+                    url,
+                    cancellationToken,
+                    CreateRetryHandler(context, log, attempt => retryCount = attempt)).ConfigureAwait(false);
+
+                if (!response.IsSuccessStatusCode)
                 {
-                    if ((int)resp.StatusCode == 404)
+                    if ((int)response.StatusCode == 404)
                     {
+                        stopwatch.Stop();
+                        var notFound = new HttpRequestException(
+                            $"WordPress media endpoint returned {(int)response.StatusCode} ({response.ReasonPhrase}).");
+                        _instrumentation.RecordRequestFailure(context, stopwatch.Elapsed, notFound, response.StatusCode, retryCount);
+                        _logger.LogWarning("WordPress media endpoint returned 404 for {Url}", url);
+                        log?.Report("Media API endpoint not found.");
                         break;
                     }
-                    resp.EnsureSuccessStatusCode();
+
+                    response.EnsureSuccessStatusCode();
                 }
 
-                var text = await resp.Content.ReadAsStringAsync();
+                var text = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+                var payloadBytes = DeterminePayloadBytes(response, text);
+
                 if (string.IsNullOrWhiteSpace(text))
                 {
+                    stopwatch.Stop();
+                    var successContext = context with { PayloadBytes = payloadBytes };
+                    _instrumentation.RecordRequestSuccess(successContext, stopwatch.Elapsed, response.StatusCode, retryCount);
+                    _logger.LogInformation("WordPress media request to {Url} returned empty payload.", url);
                     break;
                 }
 
                 var items = DeserializeListWithRecovery<WordPressMediaItem>(text, "media library", log);
                 if (items.Count == 0)
                 {
+                    stopwatch.Stop();
+                    var successContext = context with { PayloadBytes = payloadBytes };
+                    _instrumentation.RecordRequestSuccess(successContext, stopwatch.Elapsed, response.StatusCode, retryCount);
+                    _logger.LogInformation("WordPress media request to {Url} returned no items.", url);
                     break;
                 }
 
@@ -356,6 +527,18 @@ public sealed class WooScraper : IDisposable
                 }
 
                 all.AddRange(items);
+
+                stopwatch.Stop();
+                var completedContext = context with { PayloadBytes = payloadBytes };
+                _instrumentation.RecordRequestSuccess(completedContext, stopwatch.Elapsed, response.StatusCode, retryCount);
+                _logger.LogInformation(
+                    "Fetched {Count} WordPress media items from {Url} with status {StatusCode} after {RetryCount} retries (payload {PayloadBytes}).",
+                    items.Count,
+                    url,
+                    (int)response.StatusCode,
+                    retryCount,
+                    completedContext.PayloadBytes ?? 0L);
+
                 if (items.Count < perPage)
                 {
                     break;
@@ -365,25 +548,43 @@ public sealed class WooScraper : IDisposable
             {
                 if (cancellationToken.IsCancellationRequested)
                 {
+                    response?.Dispose();
                     throw;
                 }
+
+                stopwatch.Stop();
+                _instrumentation.RecordRequestFailure(context, stopwatch.Elapsed, ex, response?.StatusCode, retryCount);
                 log?.Report($"Media request timed out: {ex.Message}");
+                _logger.LogError(ex, "WordPress media request to {Url} timed out.", url);
                 break;
             }
             catch (AuthenticationException ex)
             {
+                stopwatch.Stop();
+                _instrumentation.RecordRequestFailure(context, stopwatch.Elapsed, ex, response?.StatusCode, retryCount);
                 log?.Report($"Media request TLS handshake failed: {ex.Message}");
+                _logger.LogError(ex, "WordPress media request to {Url} failed TLS handshake.", url);
                 break;
             }
             catch (IOException ex)
             {
+                stopwatch.Stop();
+                _instrumentation.RecordRequestFailure(context, stopwatch.Elapsed, ex, response?.StatusCode, retryCount);
                 log?.Report($"Media request I/O failure: {ex.Message}");
+                _logger.LogError(ex, "WordPress media request to {Url} encountered an I/O error.", url);
                 break;
             }
             catch (HttpRequestException ex)
             {
+                stopwatch.Stop();
+                _instrumentation.RecordRequestFailure(context, stopwatch.Elapsed, ex, response?.StatusCode, retryCount);
                 log?.Report($"Media request failed: {ex.Message}");
+                _logger.LogError(ex, "WordPress media request to {Url} failed.", url);
                 break;
+            }
+            finally
+            {
+                response?.Dispose();
             }
         }
 
@@ -2661,28 +2862,63 @@ public sealed class WooScraper : IDisposable
         {
             cancellationToken.ThrowIfCancellationRequested();
             var url = $"{baseUrl}/wp-json/wp/v2/{resource}?per_page={perPage}&page={page}&_embed=1";
+            var operationName = $"WooScraper.FetchWordPress{CultureInfo.InvariantCulture.TextInfo.ToTitleCase(resource)}";
+            var entityType = resource.EndsWith("s", StringComparison.Ordinal)
+                ? resource[..^1]
+                : resource;
+
+            var context = new ScraperOperationContext(operationName, url, entityType);
+            using var scope = _instrumentation.BeginScope(context);
+            _instrumentation.RecordRequestStart(context);
+            _logger.LogInformation("Requesting WordPress {Resource} from {Url}", resource, url);
+            log?.Report($"GET {url}");
+
+            var stopwatch = Stopwatch.StartNew();
+            var retryCount = 0;
+            HttpResponseMessage? response = null;
+
             try
             {
-                log?.Report($"GET {url}");
-                using var resp = await GetWithRetryAsync(url, cancellationToken, CreateRetryReporter(log, url));
-                if (!resp.IsSuccessStatusCode)
+                response = await GetWithRetryAsync(
+                    url,
+                    cancellationToken,
+                    CreateRetryHandler(context, log, attempt => retryCount = attempt)).ConfigureAwait(false);
+
+                if (!response.IsSuccessStatusCode)
                 {
-                    if ((int)resp.StatusCode == 404)
+                    if ((int)response.StatusCode == 404)
                     {
+                        stopwatch.Stop();
+                        var notFound = new HttpRequestException(
+                            $"WordPress {resource} endpoint returned {(int)response.StatusCode} ({response.ReasonPhrase}).");
+                        _instrumentation.RecordRequestFailure(context, stopwatch.Elapsed, notFound, response.StatusCode, retryCount);
+                        _logger.LogWarning("WordPress {Resource} endpoint returned 404 for {Url}", resource, url);
+                        log?.Report($"WordPress {resource} endpoint not found.");
                         break;
                     }
-                    resp.EnsureSuccessStatusCode();
+
+                    response.EnsureSuccessStatusCode();
                 }
 
-                var text = await resp.Content.ReadAsStringAsync();
+                var text = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+                var payloadBytes = DeterminePayloadBytes(response, text);
+
                 if (string.IsNullOrWhiteSpace(text))
                 {
+                    stopwatch.Stop();
+                    var successContext = context with { PayloadBytes = payloadBytes };
+                    _instrumentation.RecordRequestSuccess(successContext, stopwatch.Elapsed, response.StatusCode, retryCount);
+                    _logger.LogInformation("WordPress {Resource} request to {Url} returned empty payload.", resource, url);
                     break;
                 }
 
                 var items = DeserializeListWithRecovery<T>(text, $"WordPress {resource}", log);
                 if (items.Count == 0)
                 {
+                    stopwatch.Stop();
+                    var successContext = context with { PayloadBytes = payloadBytes };
+                    _instrumentation.RecordRequestSuccess(successContext, stopwatch.Elapsed, response.StatusCode, retryCount);
+                    _logger.LogInformation("WordPress {Resource} request to {Url} returned no items.", resource, url);
                     break;
                 }
 
@@ -2692,6 +2928,19 @@ public sealed class WooScraper : IDisposable
                 }
 
                 all.AddRange(items);
+
+                stopwatch.Stop();
+                var completedContext = context with { PayloadBytes = payloadBytes };
+                _instrumentation.RecordRequestSuccess(completedContext, stopwatch.Elapsed, response.StatusCode, retryCount);
+                _logger.LogInformation(
+                    "Fetched {Count} WordPress {Resource} items from {Url} with status {StatusCode} after {RetryCount} retries (payload {PayloadBytes}).",
+                    items.Count,
+                    resource,
+                    url,
+                    (int)response.StatusCode,
+                    retryCount,
+                    completedContext.PayloadBytes ?? 0L);
+
                 if (items.Count < perPage)
                 {
                     break;
@@ -2701,25 +2950,43 @@ public sealed class WooScraper : IDisposable
             {
                 if (cancellationToken.IsCancellationRequested)
                 {
+                    response?.Dispose();
                     throw;
                 }
+
+                stopwatch.Stop();
+                _instrumentation.RecordRequestFailure(context, stopwatch.Elapsed, ex, response?.StatusCode, retryCount);
                 log?.Report($"WordPress {resource} request timed out: {ex.Message}");
+                _logger.LogError(ex, "WordPress {Resource} request to {Url} timed out.", resource, url);
                 break;
             }
             catch (AuthenticationException ex)
             {
+                stopwatch.Stop();
+                _instrumentation.RecordRequestFailure(context, stopwatch.Elapsed, ex, response?.StatusCode, retryCount);
                 log?.Report($"WordPress {resource} TLS handshake failed: {ex.Message}");
+                _logger.LogError(ex, "WordPress {Resource} request to {Url} failed TLS handshake.", resource, url);
                 break;
             }
             catch (IOException ex)
             {
+                stopwatch.Stop();
+                _instrumentation.RecordRequestFailure(context, stopwatch.Elapsed, ex, response?.StatusCode, retryCount);
                 log?.Report($"WordPress {resource} request I/O failure: {ex.Message}");
+                _logger.LogError(ex, "WordPress {Resource} request to {Url} encountered an I/O error.", resource, url);
                 break;
             }
             catch (HttpRequestException ex)
             {
+                stopwatch.Stop();
+                _instrumentation.RecordRequestFailure(context, stopwatch.Elapsed, ex, response?.StatusCode, retryCount);
                 log?.Report($"WordPress {resource} request failed: {ex.Message}");
+                _logger.LogError(ex, "WordPress {Resource} request to {Url} failed.", resource, url);
                 break;
+            }
+            finally
+            {
+                response?.Dispose();
             }
         }
 
