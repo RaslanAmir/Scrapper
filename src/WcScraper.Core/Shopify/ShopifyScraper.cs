@@ -13,6 +13,7 @@ using System.Web;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using WcScraper.Core;
+using WcScraper.Core.Telemetry;
 
 namespace WcScraper.Core.Shopify;
 
@@ -21,6 +22,10 @@ public sealed class ShopifyScraper : IDisposable
     private readonly HttpClient _http;
     private readonly bool _ownsClient;
     private readonly ILogger<ShopifyScraper> _logger;
+    private readonly ILoggerFactory _loggerFactory;
+    private readonly ScraperInstrumentationOptions _instrumentationOptions;
+    private readonly IScraperInstrumentation _instrumentation;
+    private readonly HttpRetryPolicy _httpPolicy;
     private readonly JsonSerializerOptions _jsonOptions = new()
     {
         PropertyNameCaseInsensitive = true
@@ -29,10 +34,22 @@ public sealed class ShopifyScraper : IDisposable
     public ShopifyScraper(
         HttpClient? httpClient = null,
         ILogger<ShopifyScraper>? logger = null,
-        ILoggerFactory? loggerFactory = null)
+        ILoggerFactory? loggerFactory = null,
+        HttpRetryPolicy? httpPolicy = null,
+        IScraperInstrumentation? instrumentation = null,
+        ScraperInstrumentationOptions? instrumentationOptions = null)
     {
-        loggerFactory ??= NullLoggerFactory.Instance;
-        _logger = logger ?? loggerFactory.CreateLogger<ShopifyScraper>();
+        var providedInstrumentationOptions = instrumentationOptions ?? ScraperInstrumentationOptions.SharedDefaults;
+        _loggerFactory = loggerFactory
+            ?? providedInstrumentationOptions.LoggerFactory
+            ?? NullLoggerFactory.Instance;
+        var options = instrumentationOptions is null
+            ? ScraperInstrumentationOptions.SharedDefaults.WithFallbackLoggerFactory(_loggerFactory)
+            : instrumentationOptions.WithFallbackLoggerFactory(_loggerFactory);
+        _instrumentationOptions = options;
+        _instrumentation = instrumentation ?? ScraperInstrumentation.Create(options);
+        _logger = logger ?? _loggerFactory.CreateLogger<ShopifyScraper>();
+        _httpPolicy = httpPolicy ?? new HttpRetryPolicy(_loggerFactory.CreateLogger<HttpRetryPolicy>(), options);
 
         if (httpClient is null)
         {
