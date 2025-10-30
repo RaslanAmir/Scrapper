@@ -6,6 +6,7 @@ using System.Net.Http.Headers;
 using System.Threading;
 using System.Threading.Tasks;
 using WcScraper.Core;
+using WcScraper.Core.Telemetry;
 using Xunit;
 
 namespace WcScraper.Core.Tests;
@@ -17,7 +18,11 @@ public sealed class HttpRetryPolicyTests
     {
         var policy = new HttpRetryPolicy(maxRetries: 2, baseDelay: TimeSpan.FromMilliseconds(1), maxDelay: TimeSpan.FromMilliseconds(2));
         var attempts = 0;
-        var notifications = new List<HttpRetryAttempt>();
+        var notifications = new List<ScraperOperationContext>();
+        var instrumentation = new DelegatingScraperInstrumentation(
+            NullScraperInstrumentation.Instance,
+            retry: notifications.Add);
+        var context = new ScraperOperationContext("HttpRetryPolicyTests.Transient", "https://example.com/transient");
 
         using var response = await policy.SendAsync(() =>
         {
@@ -28,11 +33,11 @@ public sealed class HttpRetryPolicyTests
             }
 
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK));
-        }, onRetry: notifications.Add);
+        }, context, instrumentation);
 
         Assert.Equal(2, attempts);
         Assert.Single(notifications);
-        Assert.Equal(1, notifications[0].AttemptNumber);
+        Assert.Equal(1, notifications[0].RetryAttempt);
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
     }
 
@@ -41,7 +46,7 @@ public sealed class HttpRetryPolicyTests
     {
         var policy = new HttpRetryPolicy(maxRetries: 1, baseDelay: TimeSpan.FromMilliseconds(1), maxDelay: TimeSpan.FromMilliseconds(5));
         var attempts = 0;
-        var delays = new List<TimeSpan>();
+        var delays = new List<TimeSpan?>();
 
         var responses = new Queue<HttpResponseMessage>();
         var retryResponse = new HttpResponseMessage(HttpStatusCode.TooManyRequests);
@@ -49,15 +54,20 @@ public sealed class HttpRetryPolicyTests
         responses.Enqueue(retryResponse);
         responses.Enqueue(new HttpResponseMessage(HttpStatusCode.OK));
 
+        var context = new ScraperOperationContext("HttpRetryPolicyTests.RetryAfter", "https://example.com/retry-after");
+        var instrumentation = new DelegatingScraperInstrumentation(
+            NullScraperInstrumentation.Instance,
+            retry: retryContext => delays.Add(retryContext.RetryDelay));
+
         using var response = await policy.SendAsync(() =>
         {
             attempts++;
             return Task.FromResult(responses.Dequeue());
-        }, onRetry: attempt => delays.Add(attempt.Delay));
+        }, context, instrumentation);
 
         Assert.Equal(2, attempts);
         Assert.Single(delays);
-        Assert.True(delays[0] >= TimeSpan.FromMilliseconds(3));
+        Assert.True((delays[0] ?? TimeSpan.Zero) >= TimeSpan.FromMilliseconds(3));
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
     }
 
@@ -71,21 +81,26 @@ public sealed class HttpRetryPolicyTests
     {
         var policy = new HttpRetryPolicy(maxRetries: 1, baseDelay: TimeSpan.FromMilliseconds(1), maxDelay: TimeSpan.FromMilliseconds(5));
         var attempts = 0;
-        var notifications = new List<HttpRetryAttempt>();
+        var notifications = new List<ScraperOperationContext>();
 
         var responses = new Queue<HttpResponseMessage>();
         responses.Enqueue(new HttpResponseMessage(statusCode));
         responses.Enqueue(new HttpResponseMessage(HttpStatusCode.OK));
 
+        var context = new ScraperOperationContext("HttpRetryPolicyTests.Status", $"https://example.com/{(int)statusCode}");
+        var instrumentation = new DelegatingScraperInstrumentation(
+            NullScraperInstrumentation.Instance,
+            retry: notifications.Add);
+
         using var response = await policy.SendAsync(() =>
         {
             attempts++;
             return Task.FromResult(responses.Dequeue());
-        }, onRetry: notifications.Add);
+        }, context, instrumentation);
 
         Assert.Equal(2, attempts);
         Assert.Single(notifications);
-        Assert.Contains(((int)statusCode).ToString(), notifications[0].Reason);
+        Assert.Contains(((int)statusCode).ToString(), notifications[0].RetryReason ?? string.Empty);
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
     }
 
@@ -99,11 +114,13 @@ public sealed class HttpRetryPolicyTests
         responses.Enqueue(new HttpResponseMessage(HttpStatusCode.BadRequest));
         responses.Enqueue(new HttpResponseMessage(HttpStatusCode.OK));
 
+        var context = new ScraperOperationContext("HttpRetryPolicyTests.CustomStatus", "https://example.com/custom");
+
         using var response = await policy.SendAsync(() =>
         {
             attempts++;
             return Task.FromResult(responses.Dequeue());
-        });
+        }, context, NullScraperInstrumentation.Instance);
 
         Assert.Equal(2, attempts);
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
@@ -115,11 +132,13 @@ public sealed class HttpRetryPolicyTests
         var policy = new HttpRetryPolicy(maxRetries: 2, baseDelay: TimeSpan.FromMilliseconds(1), maxDelay: TimeSpan.FromMilliseconds(2));
         var attempts = 0;
 
+        var context = new ScraperOperationContext("HttpRetryPolicyTests.NonRetryable", "https://example.com/non-retry");
+
         using var response = await policy.SendAsync(() =>
         {
             attempts++;
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound));
-        });
+        }, context, NullScraperInstrumentation.Instance);
 
         Assert.Equal(1, attempts);
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
@@ -133,19 +152,23 @@ public sealed class HttpRetryPolicyTests
         var attempts = 0;
         var notifications = 0;
 
+        var context = new ScraperOperationContext("HttpRetryPolicyTests.Cancellation", "https://example.com/cancel");
+        var instrumentation = new DelegatingScraperInstrumentation(
+            NullScraperInstrumentation.Instance,
+            retry: _ =>
+            {
+                notifications++;
+                cancellationSource.Cancel();
+            });
+
         async Task<HttpResponseMessage> SendOperation()
         {
             attempts++;
             throw new HttpRequestException("temporary failure");
         }
 
-        void OnRetry(HttpRetryAttempt attempt)
-        {
-            notifications++;
-            cancellationSource.Cancel();
-        }
-
-        await Assert.ThrowsAsync<OperationCanceledException>(() => policy.SendAsync(SendOperation, cancellationSource.Token, OnRetry));
+        await Assert.ThrowsAsync<OperationCanceledException>(() =>
+            policy.SendAsync(SendOperation, context, instrumentation, cancellationSource.Token));
 
         Assert.Equal(1, attempts);
         Assert.Equal(1, notifications);

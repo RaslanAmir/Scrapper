@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Net;
 using System.Net.Http;
@@ -64,23 +65,41 @@ public sealed class HttpRetryPolicy
 
     public Task<HttpResponseMessage> SendAsync(
         Func<Task<HttpResponseMessage>> sendOperation,
+        ScraperOperationContext context,
+        IScraperInstrumentation? instrumentation = null,
         CancellationToken cancellationToken = default,
-        Action<HttpRetryAttempt>? onRetry = null)
+        Action<HttpRetryResult>? onSuccess = null,
+        Action<HttpRetryResult>? onFailure = null)
     {
         if (sendOperation is null)
         {
             throw new ArgumentNullException(nameof(sendOperation));
         }
 
-        return ExecuteAsync(sendOperation, cancellationToken, onRetry);
+        instrumentation ??= NullScraperInstrumentation.Instance;
+
+        return ExecuteAsync(
+            sendOperation,
+            context,
+            instrumentation,
+            cancellationToken,
+            onSuccess,
+            onFailure);
     }
 
     private async Task<HttpResponseMessage> ExecuteAsync(
         Func<Task<HttpResponseMessage>> sendOperation,
+        ScraperOperationContext context,
+        IScraperInstrumentation instrumentation,
         CancellationToken cancellationToken,
-        Action<HttpRetryAttempt>? onRetry)
+        Action<HttpRetryResult>? onSuccess,
+        Action<HttpRetryResult>? onFailure)
     {
-        var attempt = 0;
+        using var scope = instrumentation.BeginScope(context);
+        instrumentation.RecordRequestStart(context);
+
+        var stopwatch = Stopwatch.StartNew();
+        var retryCount = 0;
 
         while (true)
         {
@@ -91,29 +110,62 @@ public sealed class HttpRetryPolicy
             {
                 response = await sendOperation().ConfigureAwait(false);
 
-                if (!ShouldRetryResponse(response, attempt, out var delay, out var reason))
+                if (!ShouldRetryResponse(response, retryCount, out var delay, out var reason))
                 {
+                    stopwatch.Stop();
+                    instrumentation.RecordRequestSuccess(context, stopwatch.Elapsed, response.StatusCode, retryCount);
+                    onSuccess?.Invoke(new HttpRetryResult(stopwatch.Elapsed, response.StatusCode, retryCount, null));
                     return response;
                 }
 
-                attempt++;
+                retryCount++;
+                var retryContext = context with
+                {
+                    RetryAttempt = retryCount,
+                    RetryDelay = delay,
+                    RetryReason = reason
+                };
+
+                instrumentation.RecordRetry(retryContext);
+                _logger.LogRetryScheduled(delay, retryCount, reason);
+
                 response.Dispose();
-                NotifyRetry(onRetry, attempt, delay, reason);
                 await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
             }
             catch (Exception ex) when (IsTransientException(ex, cancellationToken))
             {
                 response?.Dispose();
-                if (attempt >= _maxRetries)
+                if (retryCount >= _maxRetries)
                 {
+                    stopwatch.Stop();
+                    var statusCode = response?.StatusCode ?? (ex as HttpRequestException)?.StatusCode;
+                    instrumentation.RecordRequestFailure(context, stopwatch.Elapsed, ex, statusCode, retryCount);
+                    onFailure?.Invoke(new HttpRetryResult(stopwatch.Elapsed, statusCode, retryCount, ex));
                     throw;
                 }
 
-                attempt++;
-                var delay = CalculateBackoffDelay(attempt);
+                retryCount++;
+                var delay = CalculateBackoffDelay(retryCount);
                 var reason = ex.Message;
-                NotifyRetry(onRetry, attempt, delay, reason);
+                var retryContext = context with
+                {
+                    RetryAttempt = retryCount,
+                    RetryDelay = delay,
+                    RetryReason = reason
+                };
+
+                instrumentation.RecordRetry(retryContext);
+                _logger.LogRetryScheduled(delay, retryCount, reason);
                 await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                response?.Dispose();
+                stopwatch.Stop();
+                var statusCode = response?.StatusCode ?? (ex as HttpRequestException)?.StatusCode;
+                instrumentation.RecordRequestFailure(context, stopwatch.Elapsed, ex, statusCode, retryCount);
+                onFailure?.Invoke(new HttpRetryResult(stopwatch.Elapsed, statusCode, retryCount, ex));
+                throw;
             }
         }
     }
@@ -190,12 +242,10 @@ public sealed class HttpRetryPolicy
         return exception is HttpRequestException or IOException or TaskCanceledException;
     }
 
-    private void NotifyRetry(Action<HttpRetryAttempt>? onRetry, int attempt, TimeSpan delay, string reason)
-    {
-        var retryAttempt = new HttpRetryAttempt(attempt, delay, reason);
-        onRetry?.Invoke(retryAttempt);
-        _logger.LogRetryScheduled(delay, attempt, reason);
-    }
 }
 
-public readonly record struct HttpRetryAttempt(int AttemptNumber, TimeSpan Delay, string Reason);
+public readonly record struct HttpRetryResult(
+    TimeSpan Elapsed,
+    HttpStatusCode? StatusCode,
+    int RetryCount,
+    Exception? Exception);
