@@ -145,13 +145,12 @@ public static class FrontEndDesignSnapshot
                     "FrontEndDesignSnapshot.FetchFont",
                     request.ResolvedUrl,
                     entityType: "font");
-                var fontRetryReporter = CreateRetryReporter(log, request.ResolvedUrl);
+                var fontInstrumentation = CreateProgressInstrumentation(instrumentation, log, request.ResolvedUrl);
                 using var fontResponse = await retryPolicy.SendAsync(
                     () => httpClient.GetAsync(request.ResolvedUrl, cancellationToken),
                     fontContext,
-                    instrumentation,
-                    cancellationToken,
-                    onRetry: fontRetryReporter);
+                    fontInstrumentation,
+                    cancellationToken);
                 if (!fontResponse.IsSuccessStatusCode)
                 {
                     log?.Report($"Font request failed for {request.ResolvedUrl}: {(int)fontResponse.StatusCode} {fontResponse.ReasonPhrase}");
@@ -194,13 +193,12 @@ public static class FrontEndDesignSnapshot
                     "FrontEndDesignSnapshot.FetchIcon",
                     request.ResolvedUrl,
                     entityType: "icon");
-                var iconRetryReporter = CreateRetryReporter(log, request.ResolvedUrl);
+                var iconInstrumentation = CreateProgressInstrumentation(instrumentation, log, request.ResolvedUrl);
                 using var iconResponse = await retryPolicy.SendAsync(
                     () => httpClient.GetAsync(request.ResolvedUrl, cancellationToken),
                     iconContext,
-                    instrumentation,
-                    cancellationToken,
-                    onRetry: iconRetryReporter);
+                    iconInstrumentation,
+                    cancellationToken);
                 if (!iconResponse.IsSuccessStatusCode)
                 {
                     log?.Report($"Icon request failed for {request.ResolvedUrl}: {(int)iconResponse.StatusCode} {iconResponse.ReasonPhrase}");
@@ -245,13 +243,12 @@ public static class FrontEndDesignSnapshot
                     "FrontEndDesignSnapshot.FetchImage",
                     request.ResolvedUrl,
                     entityType: "image");
-                var imageRetryReporter = CreateRetryReporter(log, request.ResolvedUrl);
+                var imageInstrumentation = CreateProgressInstrumentation(instrumentation, log, request.ResolvedUrl);
                 using var imageResponse = await retryPolicy.SendAsync(
                     () => httpClient.GetAsync(request.ResolvedUrl, cancellationToken),
                     imageContext,
-                    instrumentation,
-                    cancellationToken,
-                    onRetry: imageRetryReporter);
+                    imageInstrumentation,
+                    cancellationToken);
                 if (!imageResponse.IsSuccessStatusCode)
                 {
                     log?.Report($"Image request failed for {request.ResolvedUrl}: {(int)imageResponse.StatusCode} {imageResponse.ReasonPhrase}");
@@ -383,13 +380,12 @@ public static class FrontEndDesignSnapshot
             "FrontEndDesignSnapshot.FetchPage",
             pageUrl,
             entityType: "page");
-        var pageRetryReporter = CreateRetryReporter(log, pageUrl);
+        var pageInstrumentation = CreateProgressInstrumentation(instrumentation, log, pageUrl);
         using var response = await retryPolicy.SendAsync(
             () => httpClient.GetAsync(pageUrl, cancellationToken),
             pageContext,
-            instrumentation,
-            cancellationToken,
-            onRetry: pageRetryReporter);
+            pageInstrumentation,
+            cancellationToken);
         response.EnsureSuccessStatusCode();
 
         var html = await response.Content.ReadAsStringAsync(cancellationToken) ?? string.Empty;
@@ -531,13 +527,12 @@ public static class FrontEndDesignSnapshot
                     "FrontEndDesignSnapshot.FetchStylesheet",
                     request.ResolvedUrl,
                     entityType: "stylesheet");
-                var stylesheetRetryReporter = CreateRetryReporter(log, request.ResolvedUrl);
+                var stylesheetInstrumentation = CreateProgressInstrumentation(instrumentation, log, request.ResolvedUrl);
                 using var cssResponse = await retryPolicy.SendAsync(
                     () => httpClient.GetAsync(request.ResolvedUrl, cancellationToken),
                     stylesheetContext,
-                    instrumentation,
-                    cancellationToken,
-                    onRetry: stylesheetRetryReporter);
+                    stylesheetInstrumentation,
+                    cancellationToken);
                 if (!cssResponse.IsSuccessStatusCode)
                 {
                     log?.Report($"Stylesheet request failed for {request.ResolvedUrl}: {(int)cssResponse.StatusCode} {cssResponse.ReasonPhrase}");
@@ -1116,34 +1111,101 @@ public static class FrontEndDesignSnapshot
         return null;
     }
 
-    private static Action<ScraperOperationContext>? CreateRetryReporter(IProgress<string>? log, string target)
+    private static IScraperInstrumentation CreateProgressInstrumentation(
+        IScraperInstrumentation inner,
+        IProgress<string>? log,
+        string target)
         => log is null
-            ? null
-            : context => ReportRetry(log, target, context);
+            ? inner
+            : new ProgressReportingInstrumentation(inner, log, target);
 
-    private static void ReportRetry(IProgress<string>? log, string url, ScraperOperationContext retryContext)
+    private static string FormatRetryDelay(TimeSpan delay)
     {
-        if (log is null || retryContext.RetryAttempt is not { } attempt)
+        if (delay.TotalSeconds >= 1)
         {
-            return;
+            return $"{delay.TotalSeconds:F1}s";
         }
 
-        var delayValue = retryContext.RetryDelay ?? TimeSpan.Zero;
-        string delay;
-        if (delayValue.TotalSeconds >= 1)
+        return $"{Math.Max(1, delay.TotalMilliseconds):F0}ms";
+    }
+
+    private static string FormatElapsed(TimeSpan elapsed)
+    {
+        if (elapsed.TotalSeconds >= 1)
         {
-            delay = $"{delayValue.TotalSeconds:F1}s";
-        }
-        else
-        {
-            delay = $"{Math.Max(1, delayValue.TotalMilliseconds):F0}ms";
+            return $"{elapsed.TotalSeconds:F1}s";
         }
 
-        var reason = string.IsNullOrWhiteSpace(retryContext.RetryReason)
-            ? "Retry scheduled."
-            : retryContext.RetryReason;
+        return $"{Math.Max(1, elapsed.TotalMilliseconds):F0}ms";
+    }
 
-        log.Report($"Retrying {url} in {delay} (attempt {attempt}): {reason}");
+    private sealed class ProgressReportingInstrumentation : IScraperInstrumentation
+    {
+        private readonly IScraperInstrumentation _inner;
+        private readonly IProgress<string> _log;
+        private readonly string _target;
+
+        public ProgressReportingInstrumentation(IScraperInstrumentation inner, IProgress<string> log, string target)
+        {
+            _inner = inner ?? throw new ArgumentNullException(nameof(inner));
+            _log = log ?? throw new ArgumentNullException(nameof(log));
+            _target = target;
+        }
+
+        private string Target => string.IsNullOrWhiteSpace(_target) ? "request" : _target;
+
+        public IDisposable BeginScope(ScraperOperationContext context) => _inner.BeginScope(context);
+
+        public void RecordRequestStart(ScraperOperationContext context)
+        {
+            _inner.RecordRequestStart(context);
+        }
+
+        public void RecordRequestSuccess(
+            ScraperOperationContext context,
+            TimeSpan duration,
+            HttpStatusCode? statusCode = null,
+            int retryCount = 0)
+        {
+            _inner.RecordRequestSuccess(context, duration, statusCode, retryCount);
+
+            if (retryCount > 0)
+            {
+                _log.Report($"{Target} retried {retryCount} times before success ({FormatElapsed(duration)} elapsed).");
+            }
+        }
+
+        public void RecordRequestFailure(
+            ScraperOperationContext context,
+            TimeSpan duration,
+            Exception exception,
+            HttpStatusCode? statusCode = null,
+            int retryCount = 0)
+        {
+            _inner.RecordRequestFailure(context, duration, exception, statusCode, retryCount);
+
+            if (retryCount > 0)
+            {
+                _log.Report($"{Target} retried {retryCount} times before failure ({FormatElapsed(duration)} elapsed).");
+            }
+        }
+
+        public void RecordRetry(ScraperOperationContext context)
+        {
+            _inner.RecordRetry(context);
+
+            if (context.RetryAttempt is not { } attempt)
+            {
+                return;
+            }
+
+            var delay = FormatRetryDelay(context.RetryDelay ?? TimeSpan.Zero);
+            var reason = string.IsNullOrWhiteSpace(context.RetryReason)
+                ? "Retry scheduled."
+                : context.RetryReason!;
+
+            _log.Report($"Retrying {Target} in {delay} (attempt {attempt}): {reason}");
+        }
     }
 
     private static Uri? TryCreateUri(string value)
