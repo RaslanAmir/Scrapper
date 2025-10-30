@@ -145,7 +145,7 @@ public static class FrontEndDesignSnapshot
                     "FrontEndDesignSnapshot.FetchFont",
                     request.ResolvedUrl,
                     entityType: "font");
-                var fontInstrumentation = CreateProgressInstrumentation(instrumentation, log, request.ResolvedUrl);
+                var fontInstrumentation = CreateProgressInstrumentation(instrumentation, log);
                 using var fontResponse = await retryPolicy.SendAsync(
                     () => httpClient.GetAsync(request.ResolvedUrl, cancellationToken),
                     fontContext,
@@ -193,7 +193,7 @@ public static class FrontEndDesignSnapshot
                     "FrontEndDesignSnapshot.FetchIcon",
                     request.ResolvedUrl,
                     entityType: "icon");
-                var iconInstrumentation = CreateProgressInstrumentation(instrumentation, log, request.ResolvedUrl);
+                var iconInstrumentation = CreateProgressInstrumentation(instrumentation, log);
                 using var iconResponse = await retryPolicy.SendAsync(
                     () => httpClient.GetAsync(request.ResolvedUrl, cancellationToken),
                     iconContext,
@@ -243,7 +243,7 @@ public static class FrontEndDesignSnapshot
                     "FrontEndDesignSnapshot.FetchImage",
                     request.ResolvedUrl,
                     entityType: "image");
-                var imageInstrumentation = CreateProgressInstrumentation(instrumentation, log, request.ResolvedUrl);
+                var imageInstrumentation = CreateProgressInstrumentation(instrumentation, log);
                 using var imageResponse = await retryPolicy.SendAsync(
                     () => httpClient.GetAsync(request.ResolvedUrl, cancellationToken),
                     imageContext,
@@ -380,7 +380,7 @@ public static class FrontEndDesignSnapshot
             "FrontEndDesignSnapshot.FetchPage",
             pageUrl,
             entityType: "page");
-        var pageInstrumentation = CreateProgressInstrumentation(instrumentation, log, pageUrl);
+        var pageInstrumentation = CreateProgressInstrumentation(instrumentation, log);
         using var response = await retryPolicy.SendAsync(
             () => httpClient.GetAsync(pageUrl, cancellationToken),
             pageContext,
@@ -527,7 +527,7 @@ public static class FrontEndDesignSnapshot
                     "FrontEndDesignSnapshot.FetchStylesheet",
                     request.ResolvedUrl,
                     entityType: "stylesheet");
-                var stylesheetInstrumentation = CreateProgressInstrumentation(instrumentation, log, request.ResolvedUrl);
+                var stylesheetInstrumentation = CreateProgressInstrumentation(instrumentation, log);
                 using var cssResponse = await retryPolicy.SendAsync(
                     () => httpClient.GetAsync(request.ResolvedUrl, cancellationToken),
                     stylesheetContext,
@@ -1113,11 +1113,10 @@ public static class FrontEndDesignSnapshot
 
     private static IScraperInstrumentation CreateProgressInstrumentation(
         IScraperInstrumentation inner,
-        IProgress<string>? log,
-        string target)
+        IProgress<string>? log)
         => log is null
             ? inner
-            : new ProgressReportingInstrumentation(inner, log, target);
+            : new ProgressReportingInstrumentation(inner, log);
 
     private static string FormatRetryDelay(TimeSpan delay)
     {
@@ -1143,16 +1142,12 @@ public static class FrontEndDesignSnapshot
     {
         private readonly IScraperInstrumentation _inner;
         private readonly IProgress<string> _log;
-        private readonly string _target;
 
-        public ProgressReportingInstrumentation(IScraperInstrumentation inner, IProgress<string> log, string target)
+        public ProgressReportingInstrumentation(IScraperInstrumentation inner, IProgress<string> log)
         {
             _inner = inner ?? throw new ArgumentNullException(nameof(inner));
             _log = log ?? throw new ArgumentNullException(nameof(log));
-            _target = target;
         }
-
-        private string Target => string.IsNullOrWhiteSpace(_target) ? "request" : _target;
 
         public IDisposable BeginScope(ScraperOperationContext context) => _inner.BeginScope(context);
 
@@ -1171,7 +1166,8 @@ public static class FrontEndDesignSnapshot
 
             if (retryCount > 0)
             {
-                _log.Report($"{Target} retried {retryCount} times before success ({FormatElapsed(duration)} elapsed).");
+                var target = DescribeTarget(context);
+                _log.Report($"{target} retried {retryCount} times before success ({FormatElapsed(duration)} elapsed).");
             }
         }
 
@@ -1186,7 +1182,8 @@ public static class FrontEndDesignSnapshot
 
             if (retryCount > 0)
             {
-                _log.Report($"{Target} retried {retryCount} times before failure ({FormatElapsed(duration)} elapsed).");
+                var target = DescribeTarget(context);
+                _log.Report($"{target} retried {retryCount} times before failure ({FormatElapsed(duration)} elapsed).");
             }
         }
 
@@ -1204,7 +1201,30 @@ public static class FrontEndDesignSnapshot
                 ? "Retry scheduled."
                 : context.RetryReason!;
 
-            _log.Report($"Retrying {Target} in {delay} (attempt {attempt}): {reason}");
+            var target = DescribeTarget(context);
+            _log.Report($"Retrying {target} in {delay} (attempt {attempt}): {reason}");
+        }
+
+        private static string DescribeTarget(ScraperOperationContext context)
+        {
+            if (!string.IsNullOrWhiteSpace(context.EntityType) && !string.IsNullOrWhiteSpace(context.Url))
+            {
+                return $"{context.EntityType} request ({context.Url})";
+            }
+
+            if (!string.IsNullOrWhiteSpace(context.Url))
+            {
+                return context.Url!;
+            }
+
+            if (!string.IsNullOrWhiteSpace(context.EntityType))
+            {
+                return $"{context.EntityType} request";
+            }
+
+            return string.IsNullOrWhiteSpace(context.OperationName)
+                ? "request"
+                : context.OperationName;
         }
     }
 
