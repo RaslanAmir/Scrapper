@@ -265,27 +265,29 @@ public sealed class PublicExtensionDetector : IDisposable
         IProgress<string>? log,
         CancellationToken cancellationToken)
     {
-        HttpRetryResult? retryResult = null;
-
         try
         {
             log?.Report($"GET {url}");
+
             var context = new ScraperOperationContext(
                 "PublicExtensionDetector.Download",
                 url);
+
+            var instrumentation = log is null
+                ? _instrumentation
+                : new ProgressReportingInstrumentation(_instrumentation, log);
+
             using var response = await _httpPolicy.SendAsync(
                 () => _httpClient.GetAsync(url, cancellationToken),
                 context,
-                _instrumentation,
-                cancellationToken,
-                onSuccess: result => retryResult = result,
-                onFailure: result => retryResult = result).ConfigureAwait(false);
+                instrumentation,
+                cancellationToken).ConfigureAwait(false);
+
             if (!response.IsSuccessStatusCode)
             {
                 if (response.StatusCode == HttpStatusCode.NotFound)
                 {
-                    log?.Report(AppendRetrySummary($"Public extension detection received 404 for {url}", retryResult));
-                    ReportRetryOutcome(log, url, retryResult, "returning 404");
+                    log?.Report($"Public extension detection received 404 for {url}");
                     return (null, 0);
                 }
 
@@ -295,58 +297,103 @@ public sealed class PublicExtensionDetector : IDisposable
             var content = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
             var byteCount = response.Content.Headers.ContentLength
                 ?? Encoding.UTF8.GetByteCount(content);
-            ReportRetryOutcome(log, url, retryResult, "succeeding");
+
             return (content, byteCount);
         }
         catch (TaskCanceledException ex)
         {
-            log?.Report(AppendRetrySummary($"Public extension detection request timed out: {ex.Message}", retryResult));
-            ReportRetryOutcome(log, url, retryResult, "timing out");
+            log?.Report($"Public extension detection request timed out: {ex.Message}");
         }
         catch (AuthenticationException ex)
         {
-            log?.Report(AppendRetrySummary($"Public extension detection TLS handshake failed: {ex.Message}", retryResult));
-            ReportRetryOutcome(log, url, retryResult, "failing");
+            log?.Report($"Public extension detection TLS handshake failed: {ex.Message}");
         }
         catch (IOException ex)
         {
-            log?.Report(AppendRetrySummary($"Public extension detection I/O failure: {ex.Message}", retryResult));
-            ReportRetryOutcome(log, url, retryResult, "failing");
+            log?.Report($"Public extension detection I/O failure: {ex.Message}");
         }
         catch (HttpRequestException ex)
         {
-            log?.Report(AppendRetrySummary($"Public extension detection request failed: {ex.Message}", retryResult));
-            ReportRetryOutcome(log, url, retryResult, "failing");
+            log?.Report($"Public extension detection request failed: {ex.Message}");
         }
 
         return (null, 0);
     }
 
-    private static void ReportRetryOutcome(
-        IProgress<string>? log,
-        string url,
-        HttpRetryResult? retryResult,
-        string outcome)
+    private sealed class ProgressReportingInstrumentation : IScraperInstrumentation
     {
-        if (log is null || retryResult is not { RetryCount: > 0 } result)
+        private readonly IScraperInstrumentation _inner;
+        private readonly IProgress<string> _log;
+
+        public ProgressReportingInstrumentation(IScraperInstrumentation inner, IProgress<string> log)
         {
-            return;
+            _inner = inner ?? throw new ArgumentNullException(nameof(inner));
+            _log = log ?? throw new ArgumentNullException(nameof(log));
         }
 
-        var elapsed = FormatElapsed(result.Elapsed);
-        log.Report($"Public extension detection request for {url} retried {result.RetryCount} times before {outcome} ({elapsed} elapsed).");
-    }
+        public IDisposable BeginScope(ScraperOperationContext context) => _inner.BeginScope(context);
 
-    private static string AppendRetrySummary(string message, HttpRetryResult? retryResult)
-    {
-        if (retryResult is not { } result)
+        public void RecordRequestStart(ScraperOperationContext context)
         {
-            return message;
+            _inner.RecordRequestStart(context);
         }
 
-        var trimmed = message.TrimEnd('.');
-        var elapsed = FormatElapsed(result.Elapsed);
-        return $"{trimmed} (retries: {result.RetryCount}, elapsed: {elapsed}).";
+        public void RecordRequestSuccess(
+            ScraperOperationContext context,
+            TimeSpan duration,
+            HttpStatusCode? statusCode = null,
+            int retryCount = 0)
+        {
+            _inner.RecordRequestSuccess(context, duration, statusCode, retryCount);
+
+            if (retryCount > 0)
+            {
+                var elapsed = FormatElapsed(duration);
+                _log.Report($"Public extension detection request for {DescribeTarget(context)} retried {retryCount} times before succeeding ({elapsed}).");
+            }
+        }
+
+        public void RecordRequestFailure(
+            ScraperOperationContext context,
+            TimeSpan duration,
+            Exception exception,
+            HttpStatusCode? statusCode = null,
+            int retryCount = 0)
+        {
+            _inner.RecordRequestFailure(context, duration, exception, statusCode, retryCount);
+
+            if (retryCount > 0)
+            {
+                var elapsed = FormatElapsed(duration);
+                var outcome = exception is TaskCanceledException ? "timing out" : "failing";
+                _log.Report($"Public extension detection request for {DescribeTarget(context)} retried {retryCount} times before {outcome} ({elapsed}).");
+            }
+        }
+
+        public void RecordRetry(ScraperOperationContext context)
+        {
+            _inner.RecordRetry(context);
+
+            if (context.RetryAttempt is not { } attempt)
+            {
+                return;
+            }
+
+            var delay = context.RetryDelay is { } retryDelay
+                ? FormatElapsed(retryDelay)
+                : "unknown delay";
+            var reason = string.IsNullOrWhiteSpace(context.RetryReason)
+                ? string.Empty
+                : $", reason: {context.RetryReason}";
+            _log.Report($"Retrying public extension detection request for {DescribeTarget(context)} in {delay} (attempt {attempt}{reason}).");
+        }
+
+        private static string DescribeTarget(ScraperOperationContext context)
+        {
+            return string.IsNullOrWhiteSpace(context.Url)
+                ? context.OperationName
+                : context.Url!;
+        }
     }
 
     private static string FormatElapsed(TimeSpan elapsed)
