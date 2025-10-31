@@ -353,25 +353,25 @@ public class MainViewModelTests
         viewModel.OnChatUsageReported(new ChatUsageSnapshot(12, 8, 20));
         viewModel.OnChatUsageReported(new ChatUsageSnapshot(3, 5, 8));
 
-        Assert.Equal(15, viewModel.ChatPromptTokenTotal);
-        Assert.Equal(13, viewModel.ChatCompletionTokenTotal);
-        Assert.Equal(28, viewModel.ChatTotalTokenTotal);
-        Assert.Equal(15, viewModel.TotalPromptTokens);
-        Assert.Equal(13, viewModel.TotalCompletionTokens);
-        Assert.Equal(28, viewModel.TotalTokens);
-        Assert.Equal(0m, viewModel.TotalCostUsd);
+        Assert.Equal(15, viewModel.ChatAssistant.ChatPromptTokenTotal);
+        Assert.Equal(13, viewModel.ChatAssistant.ChatCompletionTokenTotal);
+        Assert.Equal(28, viewModel.ChatAssistant.ChatTotalTokenTotal);
+        Assert.Equal(15, viewModel.ChatAssistant.TotalPromptTokens);
+        Assert.Equal(13, viewModel.ChatAssistant.TotalCompletionTokens);
+        Assert.Equal(28, viewModel.ChatAssistant.ChatTotalTokenTotal);
+        Assert.Equal(0m, viewModel.ChatAssistant.TotalCostUsd);
 
-        viewModel.ChatMessages.Add(new ChatMessage(ChatMessageRole.User, "hello"));
-        Assert.True(viewModel.ClearChatHistoryCommand.CanExecute(null));
-        viewModel.ClearChatHistoryCommand.Execute(null);
+        viewModel.ChatAssistant.ChatMessages.Add(new ChatMessage(ChatMessageRole.User, "hello"));
+        Assert.True(viewModel.ChatAssistant.ClearChatHistoryCommand.CanExecute(null));
+        viewModel.ChatAssistant.ClearChatHistoryCommand.Execute(null);
 
-        Assert.Equal(0, viewModel.ChatPromptTokenTotal);
-        Assert.Equal(0, viewModel.ChatCompletionTokenTotal);
-        Assert.Equal(0, viewModel.ChatTotalTokenTotal);
-        Assert.Equal(0, viewModel.TotalPromptTokens);
-        Assert.Equal(0, viewModel.TotalCompletionTokens);
-        Assert.Equal(0, viewModel.TotalTokens);
-        Assert.Equal(0m, viewModel.TotalCostUsd);
+        Assert.Equal(0, viewModel.ChatAssistant.ChatPromptTokenTotal);
+        Assert.Equal(0, viewModel.ChatAssistant.ChatCompletionTokenTotal);
+        Assert.Equal(0, viewModel.ChatAssistant.ChatTotalTokenTotal);
+        Assert.Equal(0, viewModel.ChatAssistant.TotalPromptTokens);
+        Assert.Equal(0, viewModel.ChatAssistant.TotalCompletionTokens);
+        Assert.Equal(0, viewModel.ChatAssistant.ChatTotalTokenTotal);
+        Assert.Equal(0m, viewModel.ChatAssistant.TotalCostUsd);
     }
 
     [Fact]

@@ -1328,124 +1328,6 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
     public ChatAssistantViewModel ChatAssistant { get; }
 
-    public ObservableCollection<ChatMessage> ChatMessages => ChatAssistant.ChatMessages;
-
-    public bool HasChatMessages => ChatAssistant.HasChatMessages;
-
-    public int ChatPromptTokenTotal => ChatAssistant.ChatPromptTokenTotal;
-
-    public int ChatCompletionTokenTotal => ChatAssistant.ChatCompletionTokenTotal;
-
-    public int ChatTotalTokenTotal => ChatAssistant.ChatTotalTokenTotal;
-
-    public long TotalPromptTokens => ChatAssistant.TotalPromptTokens;
-
-    public long TotalCompletionTokens => ChatAssistant.TotalCompletionTokens;
-
-    public long TotalTokens => ChatAssistant.TotalPromptTokens + ChatAssistant.TotalCompletionTokens;
-
-    public decimal TotalCostUsd => ChatAssistant.TotalCostUsd;
-
-    public RelayCommand SendChatCommand => ChatAssistant.SendChatCommand;
-
-    public RelayCommand CancelChatCommand => ChatAssistant.CancelChatCommand;
-
-    public RelayCommand SaveChatTranscriptCommand => ChatAssistant.SaveChatTranscriptCommand;
-
-    public RelayCommand ClearChatHistoryCommand => ChatAssistant.ClearChatHistoryCommand;
-
-    public RelayCommand<string?> UseAiRecommendationCommand => ChatAssistant.UseAiRecommendationCommand;
-
-    public ObservableCollection<AiRecommendation> LatestRunAiRecommendations => ChatAssistant.LatestRunAiRecommendations;
-
-    public bool HasAiRecommendations => ChatAssistant.HasAiRecommendations;
-
-    public DateTimeOffset? LatestRunAiAnnotationTimestamp => ChatAssistant.LatestRunAiAnnotationTimestamp;
-
-    public string LatestRunAiRecommendationSummary => ChatAssistant.LatestRunAiRecommendationSummary;
-
-    public string ChatApiEndpoint
-    {
-        get => ChatAssistant.ChatApiEndpoint;
-        set => ChatAssistant.ChatApiEndpoint = value;
-    }
-
-    public string ChatModel
-    {
-        get => ChatAssistant.ChatModel;
-        set => ChatAssistant.ChatModel = value;
-    }
-
-    public string ChatSystemPrompt
-    {
-        get => ChatAssistant.ChatSystemPrompt;
-        set => ChatAssistant.ChatSystemPrompt = value;
-    }
-
-    public string ChatApiKey
-    {
-        get => ChatAssistant.ChatApiKey;
-        set => ChatAssistant.ChatApiKey = value;
-    }
-
-    public bool HasChatApiKey => ChatAssistant.HasChatApiKey;
-
-    public bool HasChatConfiguration => ChatAssistant.HasChatConfiguration;
-
-    public IReadOnlyList<ChatModeOption> ChatModeOptions => ChatAssistant.ChatModeOptions;
-
-    public ChatInteractionMode SelectedChatMode
-    {
-        get => ChatAssistant.SelectedChatMode;
-        set => ChatAssistant.SelectedChatMode = value;
-    }
-
-    public bool IsChatBusy => ChatAssistant.IsChatBusy;
-
-    public bool IsAssistantPanelExpanded
-    {
-        get => ChatAssistant.IsAssistantPanelExpanded;
-        set => ChatAssistant.IsAssistantPanelExpanded = value;
-    }
-
-    public string ChatInput
-    {
-        get => ChatAssistant.ChatInput;
-        set => ChatAssistant.ChatInput = value;
-    }
-
-    public string ChatStatusMessage => ChatAssistant.ChatStatusMessage;
-
-    public int? ChatMaxPromptTokens
-    {
-        get => ChatAssistant.ChatMaxPromptTokens;
-        set => ChatAssistant.ChatMaxPromptTokens = value;
-    }
-
-    public int? ChatMaxTotalTokens
-    {
-        get => ChatAssistant.ChatMaxTotalTokens;
-        set => ChatAssistant.ChatMaxTotalTokens = value;
-    }
-
-    public decimal? ChatMaxCostUsd
-    {
-        get => ChatAssistant.ChatMaxCostUsd;
-        set => ChatAssistant.ChatMaxCostUsd = value;
-    }
-
-    public decimal? ChatPromptTokenUsdPerThousand
-    {
-        get => ChatAssistant.ChatPromptTokenUsdPerThousand;
-        set => ChatAssistant.ChatPromptTokenUsdPerThousand = value;
-    }
-
-    public decimal? ChatCompletionTokenUsdPerThousand
-    {
-        get => ChatAssistant.ChatCompletionTokenUsdPerThousand;
-        set => ChatAssistant.ChatCompletionTokenUsdPerThousand = value;
-    }
-
     internal void OnChatUsageReported(ChatUsageSnapshot usage)
         => ChatAssistant.OnChatUsageReported(usage);
 
@@ -1486,14 +1368,6 @@ public sealed class MainViewModel : INotifyPropertyChanged
             return;
         }
 
-        OnPropertyChanged(e.PropertyName);
-
-        if (e.PropertyName == nameof(ChatAssistant.TotalPromptTokens)
-            || e.PropertyName == nameof(ChatAssistant.TotalCompletionTokens))
-        {
-            OnPropertyChanged(nameof(TotalTokens));
-        }
-
         if (e.PropertyName == nameof(ChatAssistant.ChatApiEndpoint)
             || e.PropertyName == nameof(ChatAssistant.ChatModel)
             || e.PropertyName == nameof(ChatAssistant.ChatSystemPrompt)
@@ -1512,11 +1386,16 @@ public sealed class MainViewModel : INotifyPropertyChanged
         {
             LaunchWizardCommand?.RaiseCanExecuteChanged();
         }
+
+        if (e.PropertyName == nameof(ChatAssistant.HasChatConfiguration))
+        {
+            ExplainLogsCommand?.RaiseCanExecuteChanged();
+        }
     }
 
     private bool CanExplainLogs()
         => !IsLogSummaryBusy
-            && HasChatConfiguration
+            && ChatAssistant.HasChatConfiguration
             && Logs.Count > 0;
 
     private static Dictionary<string, object?> BuildCollectionExportRow(SelectableTerm choice)
@@ -3107,18 +2986,18 @@ public sealed class MainViewModel : INotifyPropertyChanged
             });
 
             ChatSessionSettings? chatSession = null;
-            if (HasChatConfiguration)
+            if (ChatAssistant.HasChatConfiguration)
             {
                 chatSession = new ChatSessionSettings(
-                    ChatApiEndpoint,
-                    ChatApiKey,
-                    ChatModel,
-                    ChatSystemPrompt,
-                    MaxPromptTokens: ChatMaxPromptTokens,
-                    MaxTotalTokens: ChatMaxTotalTokens,
-                    MaxCostUsd: ChatMaxCostUsd,
-                    PromptTokenCostPerThousandUsd: ChatPromptTokenUsdPerThousand,
-                    CompletionTokenCostPerThousandUsd: ChatCompletionTokenUsdPerThousand,
+                    ChatAssistant.ChatApiEndpoint,
+                    ChatAssistant.ChatApiKey,
+                    ChatAssistant.ChatModel,
+                    ChatAssistant.ChatSystemPrompt,
+                    MaxPromptTokens: ChatAssistant.ChatMaxPromptTokens,
+                    MaxTotalTokens: ChatAssistant.ChatMaxTotalTokens,
+                    MaxCostUsd: ChatAssistant.ChatMaxCostUsd,
+                    PromptTokenCostPerThousandUsd: ChatAssistant.ChatPromptTokenUsdPerThousand,
+                    CompletionTokenCostPerThousandUsd: ChatAssistant.ChatCompletionTokenUsdPerThousand,
                     DiagnosticLogger: Append,
                     UsageReported: OnChatUsageReported);
             }
@@ -6527,7 +6406,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     {
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
 
-        if (name == nameof(HasChatConfiguration) || name == nameof(IsLogSummaryBusy))
+        if (name == nameof(IsLogSummaryBusy))
         {
             ExplainLogsCommand?.RaiseCanExecuteChanged();
         }
