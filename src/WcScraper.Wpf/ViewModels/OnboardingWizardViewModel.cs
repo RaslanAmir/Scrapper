@@ -65,6 +65,7 @@ public sealed class OnboardingWizardViewModel : INotifyPropertyChanged, IDisposa
     }
 
     private readonly MainViewModel _mainViewModel;
+    private readonly ChatAssistantViewModel _chatAssistantViewModel;
     private readonly ChatAssistantService _chatAssistantService;
     private readonly CancellationTokenSource _cts = new();
     private readonly List<ChatMessage> _history = new();
@@ -83,9 +84,13 @@ public sealed class OnboardingWizardViewModel : INotifyPropertyChanged, IDisposa
     private string? _latestAssistantPrompt;
     private bool _initializeRequested;
 
-    public OnboardingWizardViewModel(MainViewModel mainViewModel, ChatAssistantService chatAssistantService)
+    public OnboardingWizardViewModel(
+        MainViewModel mainViewModel,
+        ChatAssistantViewModel chatAssistantViewModel,
+        ChatAssistantService chatAssistantService)
     {
         _mainViewModel = mainViewModel ?? throw new ArgumentNullException(nameof(mainViewModel));
+        _chatAssistantViewModel = chatAssistantViewModel ?? throw new ArgumentNullException(nameof(chatAssistantViewModel));
         _chatAssistantService = chatAssistantService ?? throw new ArgumentNullException(nameof(chatAssistantService));
 
         Conversation = new ObservableCollection<ChatMessage>();
@@ -173,7 +178,7 @@ public sealed class OnboardingWizardViewModel : INotifyPropertyChanged, IDisposa
         _hasActiveQuestion = false;
         _latestAssistantPrompt = null;
 
-        if (!_mainViewModel.HasChatConfiguration)
+        if (!_chatAssistantViewModel.HasChatConfiguration)
         {
             StatusMessage = "Enter an AI endpoint, model, and API key before starting the wizard.";
             return;
@@ -233,7 +238,7 @@ public sealed class OnboardingWizardViewModel : INotifyPropertyChanged, IDisposa
 
     private async Task RequestNextQuestionAsync()
     {
-        if (!_mainViewModel.HasChatConfiguration)
+        if (!_chatAssistantViewModel.HasChatConfiguration)
         {
             StatusMessage = "Assistant configuration missing.";
             return;
@@ -387,9 +392,9 @@ public sealed class OnboardingWizardViewModel : INotifyPropertyChanged, IDisposa
 
     private ChatSessionSettings? CreateSession()
     {
-        var endpoint = _mainViewModel.ChatApiEndpoint;
-        var apiKey = _mainViewModel.ChatApiKey;
-        var model = _mainViewModel.ChatModel;
+        var endpoint = _chatAssistantViewModel.ChatApiEndpoint;
+        var apiKey = _chatAssistantViewModel.ChatApiKey;
+        var model = _chatAssistantViewModel.ChatModel;
         if (string.IsNullOrWhiteSpace(endpoint) || string.IsNullOrWhiteSpace(apiKey) || string.IsNullOrWhiteSpace(model))
         {
             return null;
@@ -399,13 +404,13 @@ public sealed class OnboardingWizardViewModel : INotifyPropertyChanged, IDisposa
             endpoint,
             apiKey,
             model,
-            _mainViewModel.ChatSystemPrompt,
-            MaxPromptTokens: _mainViewModel.ChatMaxPromptTokens,
-            MaxTotalTokens: _mainViewModel.ChatMaxTotalTokens,
-            MaxCostUsd: _mainViewModel.ChatMaxCostUsd,
-            PromptTokenCostPerThousandUsd: _mainViewModel.ChatPromptTokenUsdPerThousand,
-            CompletionTokenCostPerThousandUsd: _mainViewModel.ChatCompletionTokenUsdPerThousand,
-            UsageReported: _mainViewModel.OnChatUsageReported);
+            _chatAssistantViewModel.ChatSystemPrompt,
+            MaxPromptTokens: _chatAssistantViewModel.ChatMaxPromptTokens,
+            MaxTotalTokens: _chatAssistantViewModel.ChatMaxTotalTokens,
+            MaxCostUsd: _chatAssistantViewModel.ChatMaxCostUsd,
+            PromptTokenCostPerThousandUsd: _chatAssistantViewModel.ChatPromptTokenUsdPerThousand,
+            CompletionTokenCostPerThousandUsd: _chatAssistantViewModel.ChatCompletionTokenUsdPerThousand,
+            UsageReported: _chatAssistantViewModel.OnChatUsageReported);
     }
 
     private string BuildSystemPrompt()

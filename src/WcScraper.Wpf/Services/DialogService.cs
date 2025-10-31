@@ -75,7 +75,7 @@ public sealed class DialogService : IDialogService
         ArgumentNullException.ThrowIfNull(viewModel);
         ArgumentNullException.ThrowIfNull(chatAssistantService);
 
-        var wizardViewModel = new OnboardingWizardViewModel(viewModel, chatAssistantService);
+        var wizardViewModel = new OnboardingWizardViewModel(viewModel, viewModel.ChatAssistant, chatAssistantService);
         var window = new OnboardingWizardWindow
         {
             DataContext = wizardViewModel
