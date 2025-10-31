@@ -54,7 +54,7 @@ public sealed class CsvExporterTests
     }
 
     [Fact]
-    public void Write_FlushesAtConfiguredCadence()
+    public void Write_FlushesWhenBufferThresholdReached()
     {
         var rows = new List<IDictionary<string, object?>>
         {
@@ -69,7 +69,7 @@ public sealed class CsvExporterTests
 
         try
         {
-            CsvExporter.Write(writer, rows, new CsvWriteOptions { FlushEvery = 2 });
+            CsvExporter.Write(writer, rows, bufferThreshold: 2);
 
             Assert.Equal(2, writer.FlushCount);
 
@@ -99,7 +99,7 @@ public sealed class CsvExporterTests
         var encoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: true);
         using var writer = new FlushCountingStreamWriter(stream, encoding);
 
-        CsvExporter.Write(writer, rows, new CsvWriteOptions { FlushEvery = 1, RowBufferSize = 1 });
+        CsvExporter.Write(writer, rows, new CsvWriteOptions { RowBufferSize = 1 }, bufferThreshold: 1);
 
         writer.Flush();
         stream.Position = 0;

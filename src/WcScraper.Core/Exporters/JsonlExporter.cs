@@ -1,3 +1,6 @@
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 
@@ -7,22 +10,23 @@ public static class JsonlExporter
 {
     /// <summary>
     /// Writes the provided rows to disk as newline-delimited JSON without materializing the source sequence.
-    /// When <paramref name="flushEvery" /> is specified, the underlying writer is flushed after each multiple of the provided
-    /// value to ensure downstream consumers can observe progress as rows are streamed.
+    /// When <paramref name="bufferThreshold" /> is specified, the exporter flushes the underlying writer whenever the buffered
+    /// row count meets the threshold so downstream consumers can observe progress as rows are streamed. Any remaining buffered
+    /// rows are flushed once enumeration completes.
     /// </summary>
     /// <param name="path">The file path to write to.</param>
     /// <param name="rows">The sequence of rows to write. The sequence is streamed and enumerated only once.</param>
-    /// <param name="flushEvery">Optional cadence at which to flush the writer while streaming rows.</param>
-    public static void Write(string path, IEnumerable<IDictionary<string, object?>> rows, int? flushEvery = null)
+    /// <param name="bufferThreshold">Optional row count that triggers a writer flush while streaming rows.</param>
+    public static void Write(string path, IEnumerable<IDictionary<string, object?>> rows, int? bufferThreshold = null)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         using var fs = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.None);
         using var sw = new StreamWriter(fs, System.Text.Encoding.UTF8);
 
-        Write(sw, rows, flushEvery);
+        Write(sw, rows, bufferThreshold);
     }
 
-    public static void WritePlugins(string path, IEnumerable<InstalledPlugin> plugins, int? flushEvery = null)
+    public static void WritePlugins(string path, IEnumerable<InstalledPlugin> plugins, int? bufferThreshold = null)
     {
         var rows = plugins
             .Select(p => new Dictionary<string, object?>
@@ -42,10 +46,10 @@ public static class JsonlExporter
                 ["asset_paths"] = p.AssetPaths
             });
 
-        Write(path, rows, flushEvery);
+        Write(path, rows, bufferThreshold);
     }
 
-    public static void WriteThemes(string path, IEnumerable<InstalledTheme> themes, int? flushEvery = null)
+    public static void WriteThemes(string path, IEnumerable<InstalledTheme> themes, int? bufferThreshold = null)
     {
         var rows = themes
             .Select(t => new Dictionary<string, object?>
@@ -66,15 +70,15 @@ public static class JsonlExporter
                 ["asset_paths"] = t.AssetPaths
             });
 
-        Write(path, rows, flushEvery);
+        Write(path, rows, bufferThreshold);
     }
 
-    internal static void Write(TextWriter writer, IEnumerable<IDictionary<string, object?>> rows, int? flushEvery = null)
+    internal static void Write(TextWriter writer, IEnumerable<IDictionary<string, object?>> rows, int? bufferThreshold = null)
     {
         var opts = new JsonSerializerOptions { WriteIndented = false };
-        var shouldFlush = flushEvery.HasValue && flushEvery.Value > 0;
-        var flushCadence = flushEvery.GetValueOrDefault();
-        var written = 0;
+        var shouldFlush = bufferThreshold.HasValue && bufferThreshold.Value > 0;
+        var flushCadence = bufferThreshold.GetValueOrDefault();
+        var buffered = 0;
 
         foreach (var row in rows)
         {
@@ -82,12 +86,18 @@ public static class JsonlExporter
 
             if (shouldFlush)
             {
-                written++;
-                if (written % flushCadence == 0)
+                buffered++;
+                if (buffered >= flushCadence)
                 {
                     writer.Flush();
+                    buffered = 0;
                 }
             }
+        }
+
+        if (shouldFlush && buffered > 0)
+        {
+            writer.Flush();
         }
     }
 

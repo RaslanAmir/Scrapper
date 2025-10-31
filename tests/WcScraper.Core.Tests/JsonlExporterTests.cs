@@ -8,18 +8,18 @@ namespace WcScraper.Core.Tests;
 public class JsonlExporterTests
 {
     [Fact]
-    public void Write_FlushesAtSpecifiedCadence()
+    public void Write_FlushesWhenThresholdReached()
     {
         var rows = CreateRows(5);
         using var writer = new FlushTrackingTextWriter();
 
-        JsonlExporter.Write(writer, rows, flushEvery: 2);
+        JsonlExporter.Write(writer, rows, bufferThreshold: 2);
 
-        Assert.Equal(2, writer.FlushCount);
+        Assert.Equal(3, writer.FlushCount);
     }
 
     [Fact]
-    public void Write_DoesNotFlush_WhenCadenceNotProvided()
+    public void Write_DoesNotFlushWhenThresholdOmitted()
     {
         var rows = CreateRows(3);
         using var writer = new FlushTrackingTextWriter();

@@ -4727,14 +4727,13 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 return genericDictBuffer;
             }
 
-            int? DetermineFlushCadence(int count)
+            int? DetermineBufferThreshold(int count)
                 => count > 1000 ? 250 : (int?)null;
 
             if (ExportCsv)
             {
                 var path = Path.Combine(storeOutputFolder, $"{storeId}_{timestamp}_products.csv");
-                var csvOptions = new CsvWriteOptions { FlushEvery = DetermineFlushCadence(genericRows.Count) };
-                CsvExporter.Write(path, genericDicts, csvOptions);
+                CsvExporter.Write(path, genericDicts, bufferThreshold: DetermineBufferThreshold(genericRows.Count));
                 Append($"Wrote {path}");
                 await IndexArtifactIfSupportedAsync(path, cancellationToken);
             }
@@ -4750,7 +4749,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
             if (ExportJsonl)
             {
                 var path = Path.Combine(storeOutputFolder, $"{storeId}_{timestamp}_products.jsonl");
-                JsonlExporter.Write(path, genericDicts, DetermineFlushCadence(genericRows.Count));
+                JsonlExporter.Write(path, genericDicts, DetermineBufferThreshold(genericRows.Count));
                 Append($"Wrote {path}");
                 await IndexArtifactIfSupportedAsync(path, cancellationToken);
             }
@@ -4760,8 +4759,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 if (plugins.Count > 0)
                 {
                     var path = Path.Combine(storeOutputFolder, $"{storeId}_{timestamp}_plugins.csv");
-                    var pluginCsvOptions = new CsvWriteOptions { FlushEvery = DetermineFlushCadence(plugins.Count) };
-                    CsvExporter.WritePlugins(path, plugins, pluginCsvOptions);
+                    CsvExporter.WritePlugins(path, plugins, bufferThreshold: DetermineBufferThreshold(plugins.Count));
                     Append($"Wrote {path}");
                     await IndexArtifactIfSupportedAsync(path, cancellationToken);
                 }
@@ -4776,7 +4774,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 if (plugins.Count > 0)
                 {
                     var path = Path.Combine(storeOutputFolder, $"{storeId}_{timestamp}_plugins.jsonl");
-                    JsonlExporter.WritePlugins(path, plugins, DetermineFlushCadence(plugins.Count));
+                    JsonlExporter.WritePlugins(path, plugins, DetermineBufferThreshold(plugins.Count));
                     Append($"Wrote {path}");
                     await IndexArtifactIfSupportedAsync(path, cancellationToken);
                 }
@@ -4791,8 +4789,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 if (themes.Count > 0)
                 {
                     var path = Path.Combine(storeOutputFolder, $"{storeId}_{timestamp}_themes.csv");
-                    var themeCsvOptions = new CsvWriteOptions { FlushEvery = DetermineFlushCadence(themes.Count) };
-                    CsvExporter.WriteThemes(path, themes, themeCsvOptions);
+                    CsvExporter.WriteThemes(path, themes, bufferThreshold: DetermineBufferThreshold(themes.Count));
                     Append($"Wrote {path}");
                     await IndexArtifactIfSupportedAsync(path, cancellationToken);
                 }
@@ -4807,7 +4804,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 if (themes.Count > 0)
                 {
                     var path = Path.Combine(storeOutputFolder, $"{storeId}_{timestamp}_themes.jsonl");
-                    JsonlExporter.WriteThemes(path, themes, DetermineFlushCadence(themes.Count));
+                    JsonlExporter.WriteThemes(path, themes, DetermineBufferThreshold(themes.Count));
                     Append($"Wrote {path}");
                     await IndexArtifactIfSupportedAsync(path, cancellationToken);
                 }
