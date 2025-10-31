@@ -69,7 +69,7 @@ public sealed class CsvExporterTests
 
         try
         {
-            CsvExporter.Write(writer, rows, flushEvery: 2);
+            CsvExporter.Write(writer, rows, new CsvWriteOptions { FlushEvery = 2 });
 
             Assert.Equal(2, writer.FlushCount);
 
@@ -83,6 +83,32 @@ public sealed class CsvExporterTests
         {
             writer.Dispose();
         }
+    }
+
+    [Fact]
+    public void Write_WithLateHeaderExpansion_RewritesAndPadsPriorRows()
+    {
+        var rows = new List<IDictionary<string, object?>>
+        {
+            new Dictionary<string, object?> { ["alpha"] = 1 },
+            new Dictionary<string, object?> { ["beta"] = 2 },
+            new Dictionary<string, object?> { ["alpha"] = 3, ["beta"] = 4 }
+        };
+
+        using var stream = new MemoryStream();
+        var encoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: true);
+        using var writer = new FlushCountingStreamWriter(stream, encoding);
+
+        CsvExporter.Write(writer, rows, new CsvWriteOptions { FlushEvery = 1, RowBufferSize = 1 });
+
+        writer.Flush();
+        stream.Position = 0;
+
+        using var reader = new StreamReader(stream, encoding, detectEncodingFromByteOrderMarks: true, leaveOpen: true);
+        var lines = reader.ReadToEnd()
+            .Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
+
+        Assert.Equal(new[] { "alpha,beta", "1,", ",2", "3,4" }, lines);
     }
 
     [Fact]
