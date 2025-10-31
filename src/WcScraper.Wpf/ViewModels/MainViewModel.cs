@@ -142,7 +142,9 @@ public sealed class MainViewModel : INotifyPropertyChanged
         ILoggerFactory loggerFactory,
         IArtifactIndexingService artifactIndexingService,
         ChatAssistantService chatAssistantService,
-        ChatAssistantViewModel chatAssistant)
+        ChatAssistantViewModel chatAssistant,
+        ExportPlanningViewModel? exportPlanning = null,
+        ProvisioningViewModel? provisioning = null)
         : this(
             dialogs,
             CreateDefaultWooScraper(loggerFactory),
@@ -152,7 +154,9 @@ public sealed class MainViewModel : INotifyPropertyChanged
             artifactIndexingService,
             chatAssistantService,
             chatAssistant,
-            loggerFactory)
+            loggerFactory,
+            exportPlanning,
+            provisioning)
     {
     }
 
@@ -198,6 +202,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
         ChatAssistantService chatAssistantService,
         ChatAssistantViewModel chatAssistant,
         ILoggerFactory loggerFactory,
+        ExportPlanningViewModel? exportPlanning = null,
+        ProvisioningViewModel? provisioning = null,
         ILogger<MainViewModel>? logger = null)
     {
         _loggerFactory = loggerFactory ?? NullLoggerFactory.Instance;
@@ -224,7 +230,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         var dispatcher = System.Windows.Application.Current?.Dispatcher ?? System.Windows.Threading.Dispatcher.CurrentDispatcher;
         _assistantToggleBindings = CreateChatAssistantToggleBindings();
 
-        ExportPlanning = new ExportPlanningViewModel(
+        ExportPlanning = exportPlanning ?? new ExportPlanningViewModel(
             dispatcher,
             _assistantToggleBindings,
             () => HttpRetryAttempts,
@@ -237,7 +243,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
             PrepareRunCancellationToken,
             async cancellationToken => await OnRunAsync(cancellationToken).ConfigureAwait(false),
             Append);
-        Provisioning = new ProvisioningViewModel();
+        Provisioning = provisioning ?? new ProvisioningViewModel();
         Provisioning.ReplicateRequested += OnProvisioningRequested;
         BrowseCommand = new RelayCommand(OnBrowse);
         RunCommand = new RelayCommand(
@@ -1139,25 +1145,34 @@ public sealed class MainViewModel : INotifyPropertyChanged
     }
 
     private Dictionary<string, (Func<bool> Getter, Action<bool> Setter)> CreateChatAssistantToggleBindings()
+        => CreateChatAssistantToggleBindings(() => this);
+
+    internal static Dictionary<string, (Func<bool> Getter, Action<bool> Setter)> CreateChatAssistantToggleBindings(
+        Func<MainViewModel> hostProvider)
     {
+        if (hostProvider is null)
+        {
+            throw new ArgumentNullException(nameof(hostProvider));
+        }
+
         return new Dictionary<string, (Func<bool> Getter, Action<bool> Setter)>(StringComparer.OrdinalIgnoreCase)
         {
-            [nameof(ExportCsv)] = (() => ExportCsv, value => ExportCsv = value),
-            [nameof(ExportShopify)] = (() => ExportShopify, value => ExportShopify = value),
-            [nameof(ExportWoo)] = (() => ExportWoo, value => ExportWoo = value),
-            [nameof(ExportReviews)] = (() => ExportReviews, value => ExportReviews = value),
-            [nameof(ExportXlsx)] = (() => ExportXlsx, value => ExportXlsx = value),
-            [nameof(ExportJsonl)] = (() => ExportJsonl, value => ExportJsonl = value),
-            [nameof(ExportPluginsCsv)] = (() => ExportPluginsCsv, value => ExportPluginsCsv = value),
-            [nameof(ExportPluginsJsonl)] = (() => ExportPluginsJsonl, value => ExportPluginsJsonl = value),
-            [nameof(ExportThemesCsv)] = (() => ExportThemesCsv, value => ExportThemesCsv = value),
-            [nameof(ExportThemesJsonl)] = (() => ExportThemesJsonl, value => ExportThemesJsonl = value),
-            [nameof(ExportPublicExtensionFootprints)] = (() => ExportPublicExtensionFootprints, value => ExportPublicExtensionFootprints = value),
-            [nameof(ExportPublicDesignSnapshot)] = (() => ExportPublicDesignSnapshot, value => ExportPublicDesignSnapshot = value),
-            [nameof(ExportPublicDesignScreenshots)] = (() => ExportPublicDesignScreenshots, value => ExportPublicDesignScreenshots = value),
-            [nameof(ExportStoreConfiguration)] = (() => ExportStoreConfiguration, value => ExportStoreConfiguration = value),
-            [nameof(ImportStoreConfiguration)] = (() => ImportStoreConfiguration, value => ImportStoreConfiguration = value),
-            [nameof(EnableHttpRetries)] = (() => EnableHttpRetries, value => EnableHttpRetries = value),
+            [nameof(ExportCsv)] = (() => hostProvider().ExportCsv, value => hostProvider().ExportCsv = value),
+            [nameof(ExportShopify)] = (() => hostProvider().ExportShopify, value => hostProvider().ExportShopify = value),
+            [nameof(ExportWoo)] = (() => hostProvider().ExportWoo, value => hostProvider().ExportWoo = value),
+            [nameof(ExportReviews)] = (() => hostProvider().ExportReviews, value => hostProvider().ExportReviews = value),
+            [nameof(ExportXlsx)] = (() => hostProvider().ExportXlsx, value => hostProvider().ExportXlsx = value),
+            [nameof(ExportJsonl)] = (() => hostProvider().ExportJsonl, value => hostProvider().ExportJsonl = value),
+            [nameof(ExportPluginsCsv)] = (() => hostProvider().ExportPluginsCsv, value => hostProvider().ExportPluginsCsv = value),
+            [nameof(ExportPluginsJsonl)] = (() => hostProvider().ExportPluginsJsonl, value => hostProvider().ExportPluginsJsonl = value),
+            [nameof(ExportThemesCsv)] = (() => hostProvider().ExportThemesCsv, value => hostProvider().ExportThemesCsv = value),
+            [nameof(ExportThemesJsonl)] = (() => hostProvider().ExportThemesJsonl, value => hostProvider().ExportThemesJsonl = value),
+            [nameof(ExportPublicExtensionFootprints)] = (() => hostProvider().ExportPublicExtensionFootprints, value => hostProvider().ExportPublicExtensionFootprints = value),
+            [nameof(ExportPublicDesignSnapshot)] = (() => hostProvider().ExportPublicDesignSnapshot, value => hostProvider().ExportPublicDesignSnapshot = value),
+            [nameof(ExportPublicDesignScreenshots)] = (() => hostProvider().ExportPublicDesignScreenshots, value => hostProvider().ExportPublicDesignScreenshots = value),
+            [nameof(ExportStoreConfiguration)] = (() => hostProvider().ExportStoreConfiguration, value => hostProvider().ExportStoreConfiguration = value),
+            [nameof(ImportStoreConfiguration)] = (() => hostProvider().ImportStoreConfiguration, value => hostProvider().ImportStoreConfiguration = value),
+            [nameof(EnableHttpRetries)] = (() => hostProvider().EnableHttpRetries, value => hostProvider().EnableHttpRetries = value),
         };
     }
 
@@ -1403,7 +1418,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         }
     }
 
-    private CancellationToken PrepareRunCancellationToken()
+    internal CancellationToken PrepareRunCancellationToken()
     {
         var previousCts = _runCts;
         if (previousCts is not null)
@@ -1418,7 +1433,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         return runCts.Token;
     }
 
-    private async Task OnRunAsync(CancellationToken cancellationToken)
+    internal async Task OnRunAsync(CancellationToken cancellationToken)
     {
         var targetUrl = SelectedPlatform == PlatformMode.WooCommerce ? StoreUrl : ShopifyStoreUrl;
         if (string.IsNullOrWhiteSpace(targetUrl))
@@ -4274,7 +4289,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         }
     }
 
-    private void Append(string message)
+    internal void Append(string message)
     {
         System.Windows.Application.Current?.Dispatcher.Invoke(() => Logs.Add(message));
     }
