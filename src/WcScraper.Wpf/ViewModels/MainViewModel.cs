@@ -128,6 +128,202 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private string _latestAutomationScriptSummary = string.Empty;
     private string _latestAutomationScriptError = string.Empty;
 
+    internal sealed class ChatAssistantDelegateBundle
+    {
+        private MainViewModel? _host;
+
+        public ChatAssistantDelegateBundle()
+        {
+            AssistantToggleBindings = new Dictionary<string, (Func<bool>, Action<bool>)>(StringComparer.OrdinalIgnoreCase)
+            {
+                [nameof(MainViewModel.ExportCsv)] = (() => _host?.ExportCsv ?? false, value => { if (_host != null) { _host.ExportCsv = value; } }),
+                [nameof(MainViewModel.ExportShopify)] = (() => _host?.ExportShopify ?? false, value => { if (_host != null) { _host.ExportShopify = value; } }),
+                [nameof(MainViewModel.ExportWoo)] = (() => _host?.ExportWoo ?? false, value => { if (_host != null) { _host.ExportWoo = value; } }),
+                [nameof(MainViewModel.ExportReviews)] = (() => _host?.ExportReviews ?? false, value => { if (_host != null) { _host.ExportReviews = value; } }),
+                [nameof(MainViewModel.ExportXlsx)] = (() => _host?.ExportXlsx ?? false, value => { if (_host != null) { _host.ExportXlsx = value; } }),
+                [nameof(MainViewModel.ExportJsonl)] = (() => _host?.ExportJsonl ?? false, value => { if (_host != null) { _host.ExportJsonl = value; } }),
+                [nameof(MainViewModel.ExportPluginsCsv)] = (() => _host?.ExportPluginsCsv ?? false, value => { if (_host != null) { _host.ExportPluginsCsv = value; } }),
+                [nameof(MainViewModel.ExportPluginsJsonl)] = (() => _host?.ExportPluginsJsonl ?? false, value => { if (_host != null) { _host.ExportPluginsJsonl = value; } }),
+                [nameof(MainViewModel.ExportThemesCsv)] = (() => _host?.ExportThemesCsv ?? false, value => { if (_host != null) { _host.ExportThemesCsv = value; } }),
+                [nameof(MainViewModel.ExportThemesJsonl)] = (() => _host?.ExportThemesJsonl ?? false, value => { if (_host != null) { _host.ExportThemesJsonl = value; } }),
+                [nameof(MainViewModel.ExportPublicExtensionFootprints)] = (() => _host?.ExportPublicExtensionFootprints ?? false, value => { if (_host != null) { _host.ExportPublicExtensionFootprints = value; } }),
+                [nameof(MainViewModel.ExportPublicDesignSnapshot)] = (() => _host?.ExportPublicDesignSnapshot ?? false, value => { if (_host != null) { _host.ExportPublicDesignSnapshot = value; } }),
+                [nameof(MainViewModel.ExportPublicDesignScreenshots)] = (() => _host?.ExportPublicDesignScreenshots ?? false, value => { if (_host != null) { _host.ExportPublicDesignScreenshots = value; } }),
+                [nameof(MainViewModel.ExportStoreConfiguration)] = (() => _host?.ExportStoreConfiguration ?? false, value => { if (_host != null) { _host.ExportStoreConfiguration = value; } }),
+                [nameof(MainViewModel.ImportStoreConfiguration)] = (() => _host?.ImportStoreConfiguration ?? false, value => { if (_host != null) { _host.ImportStoreConfiguration = value; } }),
+                [nameof(MainViewModel.EnableHttpRetries)] = (() => _host?.EnableHttpRetries ?? false, value => { if (_host != null) { _host.EnableHttpRetries = value; } }),
+            };
+
+            Log = message =>
+            {
+                if (_host != null)
+                {
+                    _host.Append(message);
+                }
+            };
+
+            HostSnapshotProvider = () =>
+            {
+                if (_host is null)
+                {
+                    return new ChatAssistantViewModel.HostSnapshot(
+                        PlatformMode.WooCommerce,
+                        false,
+                        false,
+                        false,
+                        false,
+                        false,
+                        false,
+                        false,
+                        false,
+                        false,
+                        false,
+                        false,
+                        false,
+                        false,
+                        false,
+                        false,
+                        false,
+                        false,
+                        false,
+                        false,
+                        0,
+                        string.Empty,
+                        string.Empty);
+                }
+
+                return _host.CaptureChatAssistantHostSnapshot();
+            };
+
+            ResolveBaseOutputFolder = () => _host?.ResolveBaseOutputFolder() ?? string.Empty;
+            GetOutputFolder = () => _host?.OutputFolder ?? string.Empty;
+            GetLogsSnapshot = () => _host is null ? Array.Empty<string>() : _host.Logs.ToList();
+            CanExecuteRunCommand = () => _host?.RunCommand?.CanExecute(null) ?? false;
+            ExecuteRunCommand = () =>
+            {
+                if (_host?.RunCommand is { } runCommand)
+                {
+                    runCommand.Execute(null);
+                }
+            };
+            IsRunInProgress = () => _host?.IsRunning ?? false;
+            EnqueueRunPlan = plan =>
+            {
+                if (_host?.ExportPlanning is { } exportPlanning)
+                {
+                    exportPlanning.EnqueuePlan(plan);
+                }
+            };
+            GetLatestStoreOutputFolder = () => _host?._latestStoreOutputFolder;
+            GetLatestManualBundlePath = () => _host?._latestManualBundlePath;
+            GetLatestManualReportPath = () => _host?._latestManualReportPath;
+            GetLatestRunDeltaPath = () => _host?._latestRunDeltaPath;
+            GetLatestRunAiBriefPath = () => _host?.LatestRunAiBriefPath;
+            GetLatestRunSnapshotJson = () => _host?.LatestRunSnapshotJson;
+            InvokeOnUiThread = action =>
+            {
+                if (_host is null)
+                {
+                    action();
+                    return;
+                }
+
+                _host.ExecuteOnUiThread(action);
+            };
+            GetEnableHttpRetries = () => _host?.EnableHttpRetries ?? false;
+            SetEnableHttpRetries = value =>
+            {
+                if (_host != null)
+                {
+                    _host.EnableHttpRetries = value;
+                }
+            };
+            GetHttpRetryAttempts = () => _host?.HttpRetryAttempts ?? 0;
+            SetHttpRetryAttempts = value =>
+            {
+                if (_host != null)
+                {
+                    _host.HttpRetryAttempts = value;
+                }
+            };
+            GetHttpRetryBaseDelaySeconds = () => _host?.HttpRetryBaseDelaySeconds ?? 0;
+            SetHttpRetryBaseDelaySeconds = value =>
+            {
+                if (_host != null)
+                {
+                    _host.HttpRetryBaseDelaySeconds = value;
+                }
+            };
+            GetHttpRetryMaxDelaySeconds = () => _host?.HttpRetryMaxDelaySeconds ?? 0;
+            SetHttpRetryMaxDelaySeconds = value =>
+            {
+                if (_host != null)
+                {
+                    _host.HttpRetryMaxDelaySeconds = value;
+                }
+            };
+        }
+
+        public Dictionary<string, (Func<bool> Getter, Action<bool> Setter)> AssistantToggleBindings { get; }
+
+        public Action<string> Log { get; }
+
+        public Func<ChatAssistantViewModel.HostSnapshot> HostSnapshotProvider { get; }
+
+        public Func<string> ResolveBaseOutputFolder { get; }
+
+        public Func<string> GetOutputFolder { get; }
+
+        public Func<IReadOnlyList<string>> GetLogsSnapshot { get; }
+
+        public Func<bool> CanExecuteRunCommand { get; }
+
+        public Action ExecuteRunCommand { get; }
+
+        public Func<bool> IsRunInProgress { get; }
+
+        public Action<RunPlan> EnqueueRunPlan { get; }
+
+        public Func<string?> GetLatestStoreOutputFolder { get; }
+
+        public Func<string?> GetLatestManualBundlePath { get; }
+
+        public Func<string?> GetLatestManualReportPath { get; }
+
+        public Func<string?> GetLatestRunDeltaPath { get; }
+
+        public Func<string?> GetLatestRunAiBriefPath { get; }
+
+        public Func<string?> GetLatestRunSnapshotJson { get; }
+
+        public Action<Action> InvokeOnUiThread { get; }
+
+        public Func<bool> GetEnableHttpRetries { get; }
+
+        public Action<bool> SetEnableHttpRetries { get; }
+
+        public Func<int> GetHttpRetryAttempts { get; }
+
+        public Action<int> SetHttpRetryAttempts { get; }
+
+        public Func<double> GetHttpRetryBaseDelaySeconds { get; }
+
+        public Action<double> SetHttpRetryBaseDelaySeconds { get; }
+
+        public Func<double> GetHttpRetryMaxDelaySeconds { get; }
+
+        public Action<double> SetHttpRetryMaxDelaySeconds { get; }
+
+        public void Attach(MainViewModel host)
+        {
+            _host = host ?? throw new ArgumentNullException(nameof(host));
+        }
+    }
+
+    internal readonly record struct ChatAssistantInitialization(
+        ChatAssistantViewModel Assistant,
+        ChatAssistantDelegateBundle DelegateBundle);
+
     public MainViewModel(IDialogService dialogs, ILoggerFactory loggerFactory)
         : this(
             dialogs,
@@ -161,7 +357,13 @@ public sealed class MainViewModel : INotifyPropertyChanged
             httpClient,
             new HeadlessBrowserScreenshotService(),
             CreateDefaultArtifactIndexingService(out var artifactIndexingService),
-            new ChatAssistantService(artifactIndexingService),
+            CreateDefaultChatAssistantService(
+                dialogs,
+                artifactIndexingService,
+                out var chatAssistant,
+                out var chatAssistantDelegates),
+            chatAssistant,
+            chatAssistantDelegates,
             loggerFactory)
     {
     }
@@ -174,6 +376,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
         HeadlessBrowserScreenshotService designScreenshotService,
         IArtifactIndexingService artifactIndexingService,
         ChatAssistantService chatAssistantService,
+        ChatAssistantViewModel chatAssistant,
+        ChatAssistantDelegateBundle chatAssistantDelegates,
         ILoggerFactory loggerFactory,
         ILogger<MainViewModel>? logger = null)
     {
@@ -193,30 +397,19 @@ public sealed class MainViewModel : INotifyPropertyChanged
         _designScreenshotService = designScreenshotService ?? throw new ArgumentNullException(nameof(designScreenshotService));
         _artifactIndexingService = artifactIndexingService ?? throw new ArgumentNullException(nameof(artifactIndexingService));
         _chatAssistantService = chatAssistantService ?? throw new ArgumentNullException(nameof(chatAssistantService));
+        ChatAssistant = chatAssistant ?? throw new ArgumentNullException(nameof(chatAssistant));
+        if (chatAssistantDelegates is null)
+        {
+            throw new ArgumentNullException(nameof(chatAssistantDelegates));
+        }
+
         _artifactIndexingService.DiagnosticLogger = Append;
-        _settingsDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "WcScraper");
+        _settingsDirectory = GetDefaultSettingsDirectory();
         _preferencesPath = Path.Combine(_settingsDirectory, "preferences.json");
         _chatKeyPath = Path.Combine(_settingsDirectory, "chat.key");
         var dispatcher = System.Windows.Application.Current?.Dispatcher ?? System.Windows.Threading.Dispatcher.CurrentDispatcher;
-        _assistantToggleBindings = new Dictionary<string, (Func<bool>, Action<bool>)>(StringComparer.OrdinalIgnoreCase)
-        {
-            [nameof(ExportCsv)] = (() => ExportCsv, value => ExportCsv = value),
-            [nameof(ExportShopify)] = (() => ExportShopify, value => ExportShopify = value),
-            [nameof(ExportWoo)] = (() => ExportWoo, value => ExportWoo = value),
-            [nameof(ExportReviews)] = (() => ExportReviews, value => ExportReviews = value),
-            [nameof(ExportXlsx)] = (() => ExportXlsx, value => ExportXlsx = value),
-            [nameof(ExportJsonl)] = (() => ExportJsonl, value => ExportJsonl = value),
-            [nameof(ExportPluginsCsv)] = (() => ExportPluginsCsv, value => ExportPluginsCsv = value),
-            [nameof(ExportPluginsJsonl)] = (() => ExportPluginsJsonl, value => ExportPluginsJsonl = value),
-            [nameof(ExportThemesCsv)] = (() => ExportThemesCsv, value => ExportThemesCsv = value),
-            [nameof(ExportThemesJsonl)] = (() => ExportThemesJsonl, value => ExportThemesJsonl = value),
-            [nameof(ExportPublicExtensionFootprints)] = (() => ExportPublicExtensionFootprints, value => ExportPublicExtensionFootprints = value),
-            [nameof(ExportPublicDesignSnapshot)] = (() => ExportPublicDesignSnapshot, value => ExportPublicDesignSnapshot = value),
-            [nameof(ExportPublicDesignScreenshots)] = (() => ExportPublicDesignScreenshots, value => ExportPublicDesignScreenshots = value),
-            [nameof(ExportStoreConfiguration)] = (() => ExportStoreConfiguration, value => ExportStoreConfiguration = value),
-            [nameof(ImportStoreConfiguration)] = (() => ImportStoreConfiguration, value => ImportStoreConfiguration = value),
-            [nameof(EnableHttpRetries)] = (() => EnableHttpRetries, value => EnableHttpRetries = value),
-        };
+        chatAssistantDelegates.Attach(this);
+        _assistantToggleBindings = chatAssistantDelegates.AssistantToggleBindings;
 
         ExportPlanning = new ExportPlanningViewModel(
             dispatcher,
@@ -261,39 +454,6 @@ public sealed class MainViewModel : INotifyPropertyChanged
         Logs.CollectionChanged += OnLogsCollectionChanged;
         LoadPreferences();
         _artifactIndexingService.IndexChanged += OnArtifactIndexChanged;
-
-        var chatTranscriptStore = new ChatTranscriptStore(_settingsDirectory);
-        ChatAssistant = new ChatAssistantViewModel(
-            _chatAssistantService,
-            chatTranscriptStore,
-            _artifactIndexingService,
-            _dialogs,
-            Append,
-            _assistantToggleBindings,
-            CaptureChatAssistantHostSnapshot,
-            ResolveBaseOutputFolder,
-            () => OutputFolder,
-            () => Logs.ToList(),
-            () => RunCommand.CanExecute(null),
-            () => RunCommand.Execute(null),
-            () => IsRunning,
-            plan => ExportPlanning.EnqueuePlan(plan),
-            () => _latestStoreOutputFolder,
-            () => _latestManualBundlePath,
-            () => _latestManualReportPath,
-            () => _latestRunDeltaPath,
-            () => LatestRunAiBriefPath,
-            () => LatestRunSnapshotJson,
-            ExecuteOnUiThread,
-            () => EnableHttpRetries,
-            value => EnableHttpRetries = value,
-            () => HttpRetryAttempts,
-            value => HttpRetryAttempts = value,
-            () => HttpRetryBaseDelaySeconds,
-            value => HttpRetryBaseDelaySeconds = value,
-            () => HttpRetryMaxDelaySeconds,
-            value => HttpRetryMaxDelaySeconds = value,
-            _chatKeyPath);
         ChatAssistant.PropertyChanged += OnChatAssistantPropertyChanged;
         _ = ChatAssistant.EnsureChatTranscriptLoadedAsync();
 
@@ -321,8 +481,80 @@ public sealed class MainViewModel : INotifyPropertyChanged
         return service;
     }
 
-    // XAML-friendly default constructor + Dialogs setter
-    public MainViewModel() : this(new WcScraper.Wpf.Services.DialogService()) { }
+    private static string GetDefaultSettingsDirectory()
+        => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "WcScraper");
+
+    internal static ChatAssistantInitialization CreateDefaultChatAssistant(
+        IDialogService dialogs,
+        IArtifactIndexingService artifactIndexingService,
+        ChatAssistantService chatAssistantService)
+    {
+        if (dialogs is null)
+        {
+            throw new ArgumentNullException(nameof(dialogs));
+        }
+
+        if (artifactIndexingService is null)
+        {
+            throw new ArgumentNullException(nameof(artifactIndexingService));
+        }
+
+        if (chatAssistantService is null)
+        {
+            throw new ArgumentNullException(nameof(chatAssistantService));
+        }
+
+        var delegateBundle = new ChatAssistantDelegateBundle();
+        var settingsDirectory = GetDefaultSettingsDirectory();
+        var chatTranscriptStore = new ChatTranscriptStore(settingsDirectory);
+        var chatAssistant = new ChatAssistantViewModel(
+            chatAssistantService,
+            chatTranscriptStore,
+            artifactIndexingService,
+            dialogs,
+            delegateBundle.Log,
+            delegateBundle.AssistantToggleBindings,
+            delegateBundle.HostSnapshotProvider,
+            delegateBundle.ResolveBaseOutputFolder,
+            delegateBundle.GetOutputFolder,
+            delegateBundle.GetLogsSnapshot,
+            delegateBundle.CanExecuteRunCommand,
+            delegateBundle.ExecuteRunCommand,
+            delegateBundle.IsRunInProgress,
+            delegateBundle.EnqueueRunPlan,
+            delegateBundle.GetLatestStoreOutputFolder,
+            delegateBundle.GetLatestManualBundlePath,
+            delegateBundle.GetLatestManualReportPath,
+            delegateBundle.GetLatestRunDeltaPath,
+            delegateBundle.GetLatestRunAiBriefPath,
+            delegateBundle.GetLatestRunSnapshotJson,
+            delegateBundle.InvokeOnUiThread,
+            delegateBundle.GetEnableHttpRetries,
+            delegateBundle.SetEnableHttpRetries,
+            delegateBundle.GetHttpRetryAttempts,
+            delegateBundle.SetHttpRetryAttempts,
+            delegateBundle.GetHttpRetryBaseDelaySeconds,
+            delegateBundle.SetHttpRetryBaseDelaySeconds,
+            delegateBundle.GetHttpRetryMaxDelaySeconds,
+            delegateBundle.SetHttpRetryMaxDelaySeconds,
+            Path.Combine(settingsDirectory, "chat.key"));
+
+        return new ChatAssistantInitialization(chatAssistant, delegateBundle);
+    }
+
+    private static ChatAssistantService CreateDefaultChatAssistantService(
+        IDialogService dialogs,
+        IArtifactIndexingService artifactIndexingService,
+        out ChatAssistantViewModel chatAssistant,
+        out ChatAssistantDelegateBundle chatAssistantDelegates)
+    {
+        var chatAssistantService = new ChatAssistantService(artifactIndexingService);
+        var initialization = CreateDefaultChatAssistant(dialogs, artifactIndexingService, chatAssistantService);
+        chatAssistant = initialization.Assistant;
+        chatAssistantDelegates = initialization.DelegateBundle;
+        return chatAssistantService;
+    }
+
     public IDialogService Dialogs { set { /* for XAML object element */ } }
 
     public string StoreUrl { get => _storeUrl; set { _storeUrl = value; OnPropertyChanged(); } }
