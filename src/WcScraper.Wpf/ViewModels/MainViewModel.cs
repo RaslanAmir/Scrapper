@@ -122,8 +122,6 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private string? _latestManualReportPath;
     private string? _latestManualBundlePath;
     private string? _latestRunDeltaPath;
-    private string _latestRunAiRecommendationSummary = string.Empty;
-    private AiArtifactAnnotation? _latestRunAiAnnotation;
     private CancellationTokenSource? _runCts;
     private readonly ObservableCollection<AutomationScriptDisplay> _latestAutomationScripts = new();
     private readonly ObservableCollection<string> _latestAutomationScriptWarnings = new();
@@ -258,7 +256,6 @@ public sealed class MainViewModel : INotifyPropertyChanged
         ExplainLogsCommand = new RelayCommand(async () => await OnExplainLatestLogsAsync(), CanExplainLogs);
         LaunchWizardCommand = new RelayCommand(OnLaunchWizard, CanLaunchWizard);
         CopyAutomationScriptCommand = new RelayCommand<AutomationScriptDisplay>(OnCopyAutomationScript);
-        LatestRunAiRecommendations.CollectionChanged += (_, __) => OnPropertyChanged(nameof(HasAiRecommendations));
         _latestAutomationScripts.CollectionChanged += (_, __) => OnPropertyChanged(nameof(HasAutomationScripts));
         _latestAutomationScriptWarnings.CollectionChanged += (_, __) => OnPropertyChanged(nameof(HasAutomationScriptWarnings));
         Logs.CollectionChanged += OnLogsCollectionChanged;
@@ -1127,6 +1124,14 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
     public RelayCommand<string?> UseAiRecommendationCommand => ChatAssistant.UseAiRecommendationCommand;
 
+    public ObservableCollection<AiRecommendation> LatestRunAiRecommendations => ChatAssistant.LatestRunAiRecommendations;
+
+    public bool HasAiRecommendations => ChatAssistant.HasAiRecommendations;
+
+    public DateTimeOffset? LatestRunAiAnnotationTimestamp => ChatAssistant.LatestRunAiAnnotationTimestamp;
+
+    public string LatestRunAiRecommendationSummary => ChatAssistant.LatestRunAiRecommendationSummary;
+
     public string ChatApiEndpoint
     {
         get => ChatAssistant.ChatApiEndpoint;
@@ -1463,7 +1468,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 LatestAutomationScriptWarnings.Clear();
                 LatestAutomationScripts.Clear();
             });
-            UpdateAiRecommendations(null);
+            ChatAssistant.UpdateAiRecommendations(null);
             var baseOutputFolder = ResolveBaseOutputFolder();
             Directory.CreateDirectory(baseOutputFolder);
 
@@ -3127,7 +3132,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
             Append($"Manual migration report: {reportPath}");
             _latestManualReportPath = reportPath;
 
-            UpdateAiRecommendations(reportResult.Annotation);
+            ChatAssistant.UpdateAiRecommendations(reportResult.Annotation);
             if (!string.IsNullOrWhiteSpace(reportResult.AnnotationError))
             {
                 Append($"AI recommendations unavailable: {reportResult.AnnotationError}");
@@ -4238,11 +4243,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         var narrative = LatestRunAiNarrative;
         if (string.IsNullOrWhiteSpace(snapshot) && string.IsNullOrWhiteSpace(narrative))
         {
-            ExecuteOnUiThread(() =>
-            {
-                ChatAssistant.IsAssistantPanelExpanded = true;
-                ChatAssistant.SetStatusMessage("No run summary is available yet. Complete a run to ask follow-up questions.");
-            });
+            ChatAssistant.NotifyRunSummaryUnavailable();
             return;
         }
 

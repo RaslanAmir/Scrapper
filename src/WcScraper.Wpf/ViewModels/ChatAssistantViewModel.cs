@@ -80,6 +80,8 @@ public sealed class ChatAssistantViewModel : INotifyPropertyChanged
     private bool _isChatBusy;
     private string _chatInput = string.Empty;
     private string _chatStatusMessage = "Enter API endpoint, model, and API key to enable the assistant.";
+    private string _latestRunAiRecommendationSummary = string.Empty;
+    private DateTimeOffset? _latestRunAiAnnotationTimestamp;
     private int _chatPromptTokenTotal;
     private int _chatCompletionTokenTotal;
     private int _chatTotalTokenTotal;
@@ -161,6 +163,9 @@ public sealed class ChatAssistantViewModel : INotifyPropertyChanged
         ChatMessages = new ObservableCollection<ChatMessage>();
         ChatMessages.CollectionChanged += OnChatMessagesCollectionChanged;
 
+        LatestRunAiRecommendations = new ObservableCollection<AiRecommendation>();
+        LatestRunAiRecommendations.CollectionChanged += (_, __) => OnPropertyChanged(nameof(HasAiRecommendations));
+
         SendChatCommand = new RelayCommand(async () => await OnSendChatAsync(), CanSendChat);
         CancelChatCommand = new RelayCommand(OnCancelChat, CanCancelChat);
         SaveChatTranscriptCommand = new RelayCommand(async () => await OnSaveChatTranscriptAsync(), CanSaveChatTranscript);
@@ -177,6 +182,41 @@ public sealed class ChatAssistantViewModel : INotifyPropertyChanged
     public ObservableCollection<ChatMessage> ChatMessages { get; }
 
     public bool HasChatMessages => ChatMessages.Count > 0;
+
+    public ObservableCollection<AiRecommendation> LatestRunAiRecommendations { get; }
+
+    public bool HasAiRecommendations => LatestRunAiRecommendations.Count > 0;
+
+    public string LatestRunAiRecommendationSummary
+    {
+        get => _latestRunAiRecommendationSummary;
+        private set
+        {
+            var newValue = value ?? string.Empty;
+            if (_latestRunAiRecommendationSummary == newValue)
+            {
+                return;
+            }
+
+            _latestRunAiRecommendationSummary = newValue;
+            OnPropertyChanged();
+        }
+    }
+
+    public DateTimeOffset? LatestRunAiAnnotationTimestamp
+    {
+        get => _latestRunAiAnnotationTimestamp;
+        private set
+        {
+            if (_latestRunAiAnnotationTimestamp == value)
+            {
+                return;
+            }
+
+            _latestRunAiAnnotationTimestamp = value;
+            OnPropertyChanged();
+        }
+    }
 
     public int ChatPromptTokenTotal
     {
@@ -621,6 +661,44 @@ public sealed class ChatAssistantViewModel : INotifyPropertyChanged
             {
                 _log($"Unable to load chat transcript: {ex.Message}");
             }
+        });
+    }
+
+    public void UpdateAiRecommendations(AiArtifactAnnotation? annotation)
+    {
+        _invokeOnUiThread(() =>
+        {
+            LatestRunAiRecommendations.Clear();
+
+            if (annotation is null)
+            {
+                LatestRunAiRecommendationSummary = string.Empty;
+                LatestRunAiAnnotationTimestamp = null;
+                OnPropertyChanged(nameof(HasAiRecommendations));
+                return;
+            }
+
+            LatestRunAiAnnotationTimestamp = annotation.GeneratedAt;
+            LatestRunAiRecommendationSummary = annotation.MarkdownSummary?.Trim() ?? string.Empty;
+
+            if (annotation.HasRecommendations && annotation.Recommendations is { Count: > 0 })
+            {
+                foreach (var recommendation in annotation.Recommendations)
+                {
+                    LatestRunAiRecommendations.Add(recommendation);
+                }
+            }
+
+            OnPropertyChanged(nameof(HasAiRecommendations));
+        });
+    }
+
+    public void NotifyRunSummaryUnavailable()
+    {
+        _invokeOnUiThread(() =>
+        {
+            IsAssistantPanelExpanded = true;
+            SetStatusMessage("No run summary is available yet. Complete a run to ask follow-up questions.");
         });
     }
 
