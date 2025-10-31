@@ -240,6 +240,9 @@ public sealed class ChatAssistantViewModelTests : IDisposable
                 TranscriptStore,
                 ArtifactIndexing,
                 Dialogs,
+                Path.Combine(SettingsDirectory, "chat.key"));
+
+            ViewModel.ConfigureHost(new ChatAssistantViewModel.HostConfiguration(
                 Logs.Add,
                 toggleBindings,
                 BuildHostSnapshot,
@@ -264,8 +267,7 @@ public sealed class ChatAssistantViewModelTests : IDisposable
                 () => _httpRetryBaseDelaySeconds,
                 value => _httpRetryBaseDelaySeconds = value,
                 () => _httpRetryMaxDelaySeconds,
-                value => _httpRetryMaxDelaySeconds = value,
-                Path.Combine(SettingsDirectory, "chat.key"));
+                value => _httpRetryMaxDelaySeconds = value));
         }
 
         public ChatAssistantViewModel ViewModel { get; }

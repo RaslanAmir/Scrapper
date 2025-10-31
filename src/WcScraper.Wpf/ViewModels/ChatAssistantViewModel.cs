@@ -36,31 +36,31 @@ public sealed class ChatAssistantViewModel : INotifyPropertyChanged
     private readonly ChatTranscriptStore _chatTranscriptStore;
     private readonly IArtifactIndexingService _artifactIndexingService;
     private readonly IDialogService _dialogs;
-    private readonly Action<string> _log;
-    private readonly IReadOnlyDictionary<string, (Func<bool> Getter, Action<bool> Setter)> _assistantToggleBindings;
-    private readonly Func<HostSnapshot> _hostSnapshotProvider;
-    private readonly Func<string> _resolveBaseOutputFolder;
-    private readonly Func<string> _getOutputFolder;
-    private readonly Func<IReadOnlyList<string>> _getLogsSnapshot;
-    private readonly Func<bool> _canExecuteRunCommand;
-    private readonly Action _executeRunCommand;
-    private readonly Func<bool> _isRunInProgress;
-    private readonly Action<RunPlan> _enqueueRunPlan;
-    private readonly Func<string?> _getLatestStoreOutputFolder;
-    private readonly Func<string?> _getLatestManualBundlePath;
-    private readonly Func<string?> _getLatestManualReportPath;
-    private readonly Func<string?> _getLatestRunDeltaPath;
-    private readonly Func<string?> _getLatestRunAiBriefPath;
-    private readonly Func<string?> _getLatestRunSnapshotJson;
-    private readonly Action<Action> _invokeOnUiThread;
-    private readonly Func<bool> _getEnableHttpRetries;
-    private readonly Action<bool> _setEnableHttpRetries;
-    private readonly Func<int> _getHttpRetryAttempts;
-    private readonly Action<int> _setHttpRetryAttempts;
-    private readonly Func<double> _getHttpRetryBaseDelaySeconds;
-    private readonly Action<double> _setHttpRetryBaseDelaySeconds;
-    private readonly Func<double> _getHttpRetryMaxDelaySeconds;
-    private readonly Action<double> _setHttpRetryMaxDelaySeconds;
+    private Action<string> _log;
+    private IReadOnlyDictionary<string, (Func<bool> Getter, Action<bool> Setter)> _assistantToggleBindings;
+    private Func<HostSnapshot> _hostSnapshotProvider;
+    private Func<string> _resolveBaseOutputFolder;
+    private Func<string> _getOutputFolder;
+    private Func<IReadOnlyList<string>> _getLogsSnapshot;
+    private Func<bool> _canExecuteRunCommand;
+    private Action _executeRunCommand;
+    private Func<bool> _isRunInProgress;
+    private Action<RunPlan> _enqueueRunPlan;
+    private Func<string?> _getLatestStoreOutputFolder;
+    private Func<string?> _getLatestManualBundlePath;
+    private Func<string?> _getLatestManualReportPath;
+    private Func<string?> _getLatestRunDeltaPath;
+    private Func<string?> _getLatestRunAiBriefPath;
+    private Func<string?> _getLatestRunSnapshotJson;
+    private Action<Action> _invokeOnUiThread;
+    private Func<bool> _getEnableHttpRetries;
+    private Action<bool> _setEnableHttpRetries;
+    private Func<int> _getHttpRetryAttempts;
+    private Action<int> _setHttpRetryAttempts;
+    private Func<double> _getHttpRetryBaseDelaySeconds;
+    private Action<double> _setHttpRetryBaseDelaySeconds;
+    private Func<double> _getHttpRetryMaxDelaySeconds;
+    private Action<double> _setHttpRetryMaxDelaySeconds;
     private readonly string _chatKeyPath;
 
     private readonly IReadOnlyList<ChatModeOption> _chatModeOptions = new[]
@@ -68,6 +68,9 @@ public sealed class ChatAssistantViewModel : INotifyPropertyChanged
         new ChatModeOption(ChatInteractionMode.GeneralAssistant, "General assistant"),
         new ChatModeOption(ChatInteractionMode.DatasetQuestion, "Ask about exported data"),
     };
+
+    private static readonly IReadOnlyDictionary<string, (Func<bool> Getter, Action<bool> Setter)> EmptyAssistantToggleBindings
+        = new Dictionary<string, (Func<bool> Getter, Action<bool> Setter)>(StringComparer.OrdinalIgnoreCase);
 
     private ChatInteractionMode _selectedChatMode = ChatInteractionMode.GeneralAssistant;
     private int _chatTranscriptLoadState;
@@ -102,63 +105,39 @@ public sealed class ChatAssistantViewModel : INotifyPropertyChanged
         ChatTranscriptStore chatTranscriptStore,
         IArtifactIndexingService artifactIndexingService,
         IDialogService dialogs,
-        Action<string> log,
-        IReadOnlyDictionary<string, (Func<bool> Getter, Action<bool> Setter)> assistantToggleBindings,
-        Func<HostSnapshot> hostSnapshotProvider,
-        Func<string> resolveBaseOutputFolder,
-        Func<string> getOutputFolder,
-        Func<IReadOnlyList<string>> getLogsSnapshot,
-        Func<bool> canExecuteRunCommand,
-        Action executeRunCommand,
-        Func<bool> isRunInProgress,
-        Action<RunPlan> enqueueRunPlan,
-        Func<string?> getLatestStoreOutputFolder,
-        Func<string?> getLatestManualBundlePath,
-        Func<string?> getLatestManualReportPath,
-        Func<string?> getLatestRunDeltaPath,
-        Func<string?> getLatestRunAiBriefPath,
-        Func<string?> getLatestRunSnapshotJson,
-        Action<Action> invokeOnUiThread,
-        Func<bool> getEnableHttpRetries,
-        Action<bool> setEnableHttpRetries,
-        Func<int> getHttpRetryAttempts,
-        Action<int> setHttpRetryAttempts,
-        Func<double> getHttpRetryBaseDelaySeconds,
-        Action<double> setHttpRetryBaseDelaySeconds,
-        Func<double> getHttpRetryMaxDelaySeconds,
-        Action<double> setHttpRetryMaxDelaySeconds,
         string chatKeyPath)
     {
         _chatAssistantService = chatAssistantService ?? throw new ArgumentNullException(nameof(chatAssistantService));
         _chatTranscriptStore = chatTranscriptStore ?? throw new ArgumentNullException(nameof(chatTranscriptStore));
         _artifactIndexingService = artifactIndexingService ?? throw new ArgumentNullException(nameof(artifactIndexingService));
         _dialogs = dialogs ?? throw new ArgumentNullException(nameof(dialogs));
-        _log = log ?? throw new ArgumentNullException(nameof(log));
-        _assistantToggleBindings = assistantToggleBindings ?? throw new ArgumentNullException(nameof(assistantToggleBindings));
-        _hostSnapshotProvider = hostSnapshotProvider ?? throw new ArgumentNullException(nameof(hostSnapshotProvider));
-        _resolveBaseOutputFolder = resolveBaseOutputFolder ?? throw new ArgumentNullException(nameof(resolveBaseOutputFolder));
-        _getOutputFolder = getOutputFolder ?? throw new ArgumentNullException(nameof(getOutputFolder));
-        _getLogsSnapshot = getLogsSnapshot ?? throw new ArgumentNullException(nameof(getLogsSnapshot));
-        _canExecuteRunCommand = canExecuteRunCommand ?? throw new ArgumentNullException(nameof(canExecuteRunCommand));
-        _executeRunCommand = executeRunCommand ?? throw new ArgumentNullException(nameof(executeRunCommand));
-        _isRunInProgress = isRunInProgress ?? throw new ArgumentNullException(nameof(isRunInProgress));
-        _enqueueRunPlan = enqueueRunPlan ?? throw new ArgumentNullException(nameof(enqueueRunPlan));
-        _getLatestStoreOutputFolder = getLatestStoreOutputFolder ?? throw new ArgumentNullException(nameof(getLatestStoreOutputFolder));
-        _getLatestManualBundlePath = getLatestManualBundlePath ?? throw new ArgumentNullException(nameof(getLatestManualBundlePath));
-        _getLatestManualReportPath = getLatestManualReportPath ?? throw new ArgumentNullException(nameof(getLatestManualReportPath));
-        _getLatestRunDeltaPath = getLatestRunDeltaPath ?? throw new ArgumentNullException(nameof(getLatestRunDeltaPath));
-        _getLatestRunAiBriefPath = getLatestRunAiBriefPath ?? throw new ArgumentNullException(nameof(getLatestRunAiBriefPath));
-        _getLatestRunSnapshotJson = getLatestRunSnapshotJson ?? throw new ArgumentNullException(nameof(getLatestRunSnapshotJson));
-        _invokeOnUiThread = invokeOnUiThread ?? throw new ArgumentNullException(nameof(invokeOnUiThread));
-        _getEnableHttpRetries = getEnableHttpRetries ?? throw new ArgumentNullException(nameof(getEnableHttpRetries));
-        _setEnableHttpRetries = setEnableHttpRetries ?? throw new ArgumentNullException(nameof(setEnableHttpRetries));
-        _getHttpRetryAttempts = getHttpRetryAttempts ?? throw new ArgumentNullException(nameof(getHttpRetryAttempts));
-        _setHttpRetryAttempts = setHttpRetryAttempts ?? throw new ArgumentNullException(nameof(setHttpRetryAttempts));
-        _getHttpRetryBaseDelaySeconds = getHttpRetryBaseDelaySeconds ?? throw new ArgumentNullException(nameof(getHttpRetryBaseDelaySeconds));
-        _setHttpRetryBaseDelaySeconds = setHttpRetryBaseDelaySeconds ?? throw new ArgumentNullException(nameof(setHttpRetryBaseDelaySeconds));
-        _getHttpRetryMaxDelaySeconds = getHttpRetryMaxDelaySeconds ?? throw new ArgumentNullException(nameof(getHttpRetryMaxDelaySeconds));
-        _setHttpRetryMaxDelaySeconds = setHttpRetryMaxDelaySeconds ?? throw new ArgumentNullException(nameof(setHttpRetryMaxDelaySeconds));
         _chatKeyPath = chatKeyPath ?? throw new ArgumentNullException(nameof(chatKeyPath));
+
+        _log = _ => { };
+        _assistantToggleBindings = EmptyAssistantToggleBindings;
+        _hostSnapshotProvider = CreateDefaultHostSnapshot;
+        _resolveBaseOutputFolder = () => string.Empty;
+        _getOutputFolder = () => string.Empty;
+        _getLogsSnapshot = () => Array.Empty<string>();
+        _canExecuteRunCommand = () => false;
+        _executeRunCommand = () => { };
+        _isRunInProgress = () => false;
+        _enqueueRunPlan = _ => { };
+        _getLatestStoreOutputFolder = () => null;
+        _getLatestManualBundlePath = () => null;
+        _getLatestManualReportPath = () => null;
+        _getLatestRunDeltaPath = () => null;
+        _getLatestRunAiBriefPath = () => null;
+        _getLatestRunSnapshotJson = () => null;
+        _invokeOnUiThread = action => action();
+        _getEnableHttpRetries = () => false;
+        _setEnableHttpRetries = _ => { };
+        _getHttpRetryAttempts = () => 0;
+        _setHttpRetryAttempts = _ => { };
+        _getHttpRetryBaseDelaySeconds = () => 0;
+        _setHttpRetryBaseDelaySeconds = _ => { };
+        _getHttpRetryMaxDelaySeconds = () => 0;
+        _setHttpRetryMaxDelaySeconds = _ => { };
 
         ChatMessages = new ObservableCollection<ChatMessage>();
         ChatMessages.CollectionChanged += OnChatMessagesCollectionChanged;
@@ -600,6 +579,64 @@ public sealed class ChatAssistantViewModel : INotifyPropertyChanged
 
     public bool CanClearChatHistory()
         => HasChatMessages;
+
+    public void ConfigureHost(HostConfiguration configuration)
+    {
+        if (configuration is null)
+        {
+            throw new ArgumentNullException(nameof(configuration));
+        }
+
+        _log = configuration.Log ?? throw new ArgumentNullException(nameof(configuration.Log));
+        _assistantToggleBindings = configuration.AssistantToggleBindings
+            ?? throw new ArgumentNullException(nameof(configuration.AssistantToggleBindings));
+        _hostSnapshotProvider = configuration.HostSnapshotProvider
+            ?? throw new ArgumentNullException(nameof(configuration.HostSnapshotProvider));
+        _resolveBaseOutputFolder = configuration.ResolveBaseOutputFolder
+            ?? throw new ArgumentNullException(nameof(configuration.ResolveBaseOutputFolder));
+        _getOutputFolder = configuration.GetOutputFolder
+            ?? throw new ArgumentNullException(nameof(configuration.GetOutputFolder));
+        _getLogsSnapshot = configuration.GetLogsSnapshot
+            ?? throw new ArgumentNullException(nameof(configuration.GetLogsSnapshot));
+        _canExecuteRunCommand = configuration.CanExecuteRunCommand
+            ?? throw new ArgumentNullException(nameof(configuration.CanExecuteRunCommand));
+        _executeRunCommand = configuration.ExecuteRunCommand
+            ?? throw new ArgumentNullException(nameof(configuration.ExecuteRunCommand));
+        _isRunInProgress = configuration.IsRunInProgress
+            ?? throw new ArgumentNullException(nameof(configuration.IsRunInProgress));
+        _enqueueRunPlan = configuration.EnqueueRunPlan
+            ?? throw new ArgumentNullException(nameof(configuration.EnqueueRunPlan));
+        _getLatestStoreOutputFolder = configuration.GetLatestStoreOutputFolder
+            ?? throw new ArgumentNullException(nameof(configuration.GetLatestStoreOutputFolder));
+        _getLatestManualBundlePath = configuration.GetLatestManualBundlePath
+            ?? throw new ArgumentNullException(nameof(configuration.GetLatestManualBundlePath));
+        _getLatestManualReportPath = configuration.GetLatestManualReportPath
+            ?? throw new ArgumentNullException(nameof(configuration.GetLatestManualReportPath));
+        _getLatestRunDeltaPath = configuration.GetLatestRunDeltaPath
+            ?? throw new ArgumentNullException(nameof(configuration.GetLatestRunDeltaPath));
+        _getLatestRunAiBriefPath = configuration.GetLatestRunAiBriefPath
+            ?? throw new ArgumentNullException(nameof(configuration.GetLatestRunAiBriefPath));
+        _getLatestRunSnapshotJson = configuration.GetLatestRunSnapshotJson
+            ?? throw new ArgumentNullException(nameof(configuration.GetLatestRunSnapshotJson));
+        _invokeOnUiThread = configuration.InvokeOnUiThread
+            ?? throw new ArgumentNullException(nameof(configuration.InvokeOnUiThread));
+        _getEnableHttpRetries = configuration.GetEnableHttpRetries
+            ?? throw new ArgumentNullException(nameof(configuration.GetEnableHttpRetries));
+        _setEnableHttpRetries = configuration.SetEnableHttpRetries
+            ?? throw new ArgumentNullException(nameof(configuration.SetEnableHttpRetries));
+        _getHttpRetryAttempts = configuration.GetHttpRetryAttempts
+            ?? throw new ArgumentNullException(nameof(configuration.GetHttpRetryAttempts));
+        _setHttpRetryAttempts = configuration.SetHttpRetryAttempts
+            ?? throw new ArgumentNullException(nameof(configuration.SetHttpRetryAttempts));
+        _getHttpRetryBaseDelaySeconds = configuration.GetHttpRetryBaseDelaySeconds
+            ?? throw new ArgumentNullException(nameof(configuration.GetHttpRetryBaseDelaySeconds));
+        _setHttpRetryBaseDelaySeconds = configuration.SetHttpRetryBaseDelaySeconds
+            ?? throw new ArgumentNullException(nameof(configuration.SetHttpRetryBaseDelaySeconds));
+        _getHttpRetryMaxDelaySeconds = configuration.GetHttpRetryMaxDelaySeconds
+            ?? throw new ArgumentNullException(nameof(configuration.GetHttpRetryMaxDelaySeconds));
+        _setHttpRetryMaxDelaySeconds = configuration.SetHttpRetryMaxDelaySeconds
+            ?? throw new ArgumentNullException(nameof(configuration.SetHttpRetryMaxDelaySeconds));
+    }
 
     public void OnChatUsageReported(ChatUsageSnapshot usage)
     {
@@ -1948,8 +1985,61 @@ public sealed class ChatAssistantViewModel : INotifyPropertyChanged
         }
     }
 
+    private static HostSnapshot CreateDefaultHostSnapshot()
+        => new(
+            PlatformMode.WooCommerce,
+            ExportCsv: false,
+            ExportShopify: false,
+            ExportWoo: false,
+            ExportReviews: false,
+            ExportXlsx: false,
+            ExportJsonl: false,
+            ExportPluginsCsv: false,
+            ExportPluginsJsonl: false,
+            ExportThemesCsv: false,
+            ExportThemesJsonl: false,
+            ExportPublicExtensionFootprints: false,
+            ExportPublicDesignSnapshot: false,
+            ExportPublicDesignScreenshots: false,
+            ExportStoreConfiguration: false,
+            ImportStoreConfiguration: false,
+            HasWordPressCredentials: false,
+            HasShopifyCredentials: false,
+            HasTargetCredentials: false,
+            EnableHttpRetries: false,
+            HttpRetryAttempts: 0,
+            AdditionalPublicExtensionPages: string.Empty,
+            AdditionalDesignSnapshotPages: string.Empty);
+
     private void OnPropertyChanged(string? propertyName = null)
         => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
+
+    public sealed record HostConfiguration(
+        Action<string> Log,
+        IReadOnlyDictionary<string, (Func<bool> Getter, Action<bool> Setter)> AssistantToggleBindings,
+        Func<HostSnapshot> HostSnapshotProvider,
+        Func<string> ResolveBaseOutputFolder,
+        Func<string> GetOutputFolder,
+        Func<IReadOnlyList<string>> GetLogsSnapshot,
+        Func<bool> CanExecuteRunCommand,
+        Action ExecuteRunCommand,
+        Func<bool> IsRunInProgress,
+        Action<RunPlan> EnqueueRunPlan,
+        Func<string?> GetLatestStoreOutputFolder,
+        Func<string?> GetLatestManualBundlePath,
+        Func<string?> GetLatestManualReportPath,
+        Func<string?> GetLatestRunDeltaPath,
+        Func<string?> GetLatestRunAiBriefPath,
+        Func<string?> GetLatestRunSnapshotJson,
+        Action<Action> InvokeOnUiThread,
+        Func<bool> GetEnableHttpRetries,
+        Action<bool> SetEnableHttpRetries,
+        Func<int> GetHttpRetryAttempts,
+        Action<int> SetHttpRetryAttempts,
+        Func<double> GetHttpRetryBaseDelaySeconds,
+        Action<double> SetHttpRetryBaseDelaySeconds,
+        Func<double> GetHttpRetryMaxDelaySeconds,
+        Action<double> SetHttpRetryMaxDelaySeconds);
 
     public sealed record HostSnapshot(
         PlatformMode SelectedPlatform,
