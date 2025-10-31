@@ -1,4 +1,5 @@
 using System.Windows;
+using System.Windows.Threading;
 using Microsoft.Extensions.Logging;
 using WcScraper.Wpf.Services;
 using WcScraper.Wpf.ViewModels;
@@ -28,14 +29,36 @@ namespace WcScraper.Wpf
                 artifactIndexingService,
                 chatAssistantService);
 
+            MainViewModel? mainViewModel = null;
+            var dispatcher = Current?.Dispatcher ?? Dispatcher.CurrentDispatcher;
+            var assistantToggleBindings = MainViewModel.CreateChatAssistantToggleBindings(() => mainViewModel!);
+            var exportPlanning = new ExportPlanningViewModel(
+                dispatcher,
+                assistantToggleBindings,
+                () => mainViewModel!.HttpRetryAttempts,
+                value => mainViewModel!.HttpRetryAttempts = value,
+                () => mainViewModel!.HttpRetryBaseDelaySeconds,
+                value => mainViewModel!.HttpRetryBaseDelaySeconds = value,
+                () => mainViewModel!.HttpRetryMaxDelaySeconds,
+                value => mainViewModel!.HttpRetryMaxDelaySeconds = value,
+                value => mainViewModel!.ManualRunGoals = value,
+                () => mainViewModel!.PrepareRunCancellationToken(),
+                cancellationToken => mainViewModel!.OnRunAsync(cancellationToken),
+                message => mainViewModel!.Append(message));
+            var provisioning = new ProvisioningViewModel();
+
+            mainViewModel = new MainViewModel(
+                dialogs,
+                _loggerFactory,
+                artifactIndexingService,
+                chatAssistantService,
+                chatAssistant,
+                exportPlanning,
+                provisioning);
+
             var mainWindow = new MainWindow
             {
-                DataContext = new MainViewModel(
-                    dialogs,
-                    _loggerFactory,
-                    artifactIndexingService,
-                    chatAssistantService,
-                    chatAssistant)
+                DataContext = mainViewModel
             };
 
             MainWindow = mainWindow;
