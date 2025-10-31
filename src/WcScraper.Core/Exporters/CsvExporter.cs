@@ -1,4 +1,8 @@
+using System;
+using System.Collections.Generic;
 using System.Globalization;
+using System.IO;
+using System.Linq;
 using System.Text;
 using System.Text.Json;
 
@@ -8,21 +12,17 @@ public sealed class CsvWriteOptions
 {
     public static CsvWriteOptions Default { get; } = new();
 
-    public int? FlushEvery { get; init; }
-
     public int RowBufferSize { get; init; } = 128;
 
     public int StreamWriterBufferSize { get; init; } = 4096;
 
     internal CsvWriteOptions Normalize()
     {
-        var flush = FlushEvery.HasValue && FlushEvery.Value > 0 ? FlushEvery : null;
         var rowBuffer = RowBufferSize > 0 ? RowBufferSize : Default.RowBufferSize;
         var writerBuffer = StreamWriterBufferSize > 0 ? StreamWriterBufferSize : Default.StreamWriterBufferSize;
 
         return new CsvWriteOptions
         {
-            FlushEvery = flush,
             RowBufferSize = rowBuffer,
             StreamWriterBufferSize = writerBuffer
         };
@@ -37,16 +37,35 @@ public static class CsvExporter
     /// header and buffered rows are streamed to the writer using the provided <see cref="CsvWriteOptions"/>.
     /// The output is written with a BOM-aware UTF-8 encoding.
     /// </summary>
-    public static void Write(string path, IEnumerable<IDictionary<string, object?>> rows, CsvWriteOptions? options = null)
+    /// <param name="path">The file path to write to.</param>
+    /// <param name="rows">The rows to export. The rows are enumerated a single time.</param>
+    /// <param name="options">Optional configuration for buffering rows while the header stabilizes.</param>
+    /// <param name="bufferThreshold">
+    /// Optional limit for how many formatted rows are buffered before they are emitted and the underlying writer is flushed.
+    /// When omitted or non-positive, the exporter falls back to <see cref="CsvWriteOptions.RowBufferSize"/> to determine when
+    /// buffered rows should be streamed.
+    /// </param>
+    public static void Write(string path, IEnumerable<IDictionary<string, object?>> rows, CsvWriteOptions? options = null, int? bufferThreshold = null)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         var effectiveOptions = (options ?? CsvWriteOptions.Default).Normalize();
         using var fs = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.None);
         using var sw = new StreamWriter(fs, new UTF8Encoding(encoderShouldEmitUTF8Identifier: true), effectiveOptions.StreamWriterBufferSize);
-        Write(sw, rows, effectiveOptions);
+        Write(sw, rows, effectiveOptions, bufferThreshold);
     }
 
-    public static void Write(StreamWriter writer, IEnumerable<IDictionary<string, object?>> rows, CsvWriteOptions? options = null)
+    /// <summary>
+    /// Streams rows to the provided <paramref name="writer"/> as CSV content.
+    /// </summary>
+    /// <param name="writer">The destination writer. Must be seekable when late header expansion occurs.</param>
+    /// <param name="rows">The sequence of rows to stream.</param>
+    /// <param name="options">Optional configuration for buffering rows while the header stabilizes.</param>
+    /// <param name="bufferThreshold">
+    /// Optional limit for how many formatted rows are buffered before they are emitted and the underlying writer is flushed.
+    /// When omitted or non-positive, the exporter falls back to <see cref="CsvWriteOptions.RowBufferSize"/> to determine when
+    /// buffered rows should be streamed.
+    /// </param>
+    public static void Write(StreamWriter writer, IEnumerable<IDictionary<string, object?>> rows, CsvWriteOptions? options = null, int? bufferThreshold = null)
     {
         if (writer is null)
         {
@@ -54,12 +73,14 @@ public static class CsvExporter
         }
 
         var effectiveOptions = (options ?? CsvWriteOptions.Default).Normalize();
+        var normalizedThreshold = bufferThreshold.HasValue && bufferThreshold.Value > 0 ? bufferThreshold.Value : (int?)null;
         var headers = new List<string>();
         var headerSet = new HashSet<string>(StringComparer.Ordinal);
-        var pendingRows = new List<Dictionary<string, string>>(effectiveOptions.RowBufferSize);
+        var bufferLimit = normalizedThreshold.HasValue
+            ? Math.Max(effectiveOptions.RowBufferSize, normalizedThreshold.Value)
+            : effectiveOptions.RowBufferSize;
+        var pendingRows = new List<Dictionary<string, string>>(bufferLimit);
         var emittedRows = new List<string[]>();
-        var flushBatch = effectiveOptions.FlushEvery;
-        var flushCounter = 0;
         var headerWritten = false;
         var anyRows = false;
 
@@ -83,16 +104,6 @@ public static class CsvExporter
         {
             var line = string.Join(",", values.Select(Quote));
             writer.WriteLine(line);
-
-            if (flushBatch.HasValue)
-            {
-                flushCounter++;
-                if (flushCounter >= flushBatch.Value)
-                {
-                    writer.Flush();
-                    flushCounter = 0;
-                }
-            }
         }
 
         void FlushPendingRows()
@@ -129,7 +140,6 @@ public static class CsvExporter
             writer.BaseStream.Seek(0, SeekOrigin.Begin);
             writer.BaseStream.SetLength(0);
             headerWritten = false;
-            flushCounter = 0;
 
             if (headers.Count == 0)
             {
@@ -177,6 +187,23 @@ public static class CsvExporter
             }
         }
 
+        void EmitBufferedRowsIfThresholdReached()
+        {
+            if (!normalizedThreshold.HasValue)
+            {
+                return;
+            }
+
+            if (pendingRows.Count < normalizedThreshold.Value)
+            {
+                return;
+            }
+
+            WriteHeaderIfNeeded();
+            FlushPendingRows();
+            writer.Flush();
+        }
+
         foreach (var row in rows)
         {
             if (row is null)
@@ -211,12 +238,14 @@ public static class CsvExporter
 
             pendingRows.Add(formattedRow);
 
-            if (!headerWritten && pendingRows.Count >= effectiveOptions.RowBufferSize)
+            EmitBufferedRowsIfThresholdReached();
+
+            if (!headerWritten && pendingRows.Count >= bufferLimit)
             {
                 WriteHeaderIfNeeded();
             }
 
-            if (headerWritten && pendingRows.Count >= effectiveOptions.RowBufferSize)
+            if (headerWritten && pendingRows.Count >= bufferLimit)
             {
                 FlushPendingRows();
             }
@@ -230,14 +259,13 @@ public static class CsvExporter
 
         WriteHeaderIfNeeded();
         FlushPendingRows();
-
-        if (flushBatch.HasValue && flushCounter > 0)
+        if (normalizedThreshold.HasValue)
         {
             writer.Flush();
         }
     }
 
-    public static void WritePlugins(string path, IEnumerable<InstalledPlugin> plugins, CsvWriteOptions? options = null)
+    public static void WritePlugins(string path, IEnumerable<InstalledPlugin> plugins, CsvWriteOptions? options = null, int? bufferThreshold = null)
     {
         Write(path, plugins
             .Select(p => new Dictionary<string, object?>
@@ -256,10 +284,11 @@ public static class CsvExporter
                 ["asset_manifest"] = p.AssetManifest is not null ? p.AssetManifest.ToJsonString() : null,
                 ["asset_paths"] = p.AssetPaths.Count > 0 ? string.Join(";", p.AssetPaths) : null
             }),
-            options);
+            options,
+            bufferThreshold);
     }
 
-    public static void WriteThemes(string path, IEnumerable<InstalledTheme> themes, CsvWriteOptions? options = null)
+    public static void WriteThemes(string path, IEnumerable<InstalledTheme> themes, CsvWriteOptions? options = null, int? bufferThreshold = null)
     {
         Write(path, themes
             .Select(t => new Dictionary<string, object?>
@@ -279,7 +308,8 @@ public static class CsvExporter
                 ["asset_manifest"] = t.AssetManifest is not null ? t.AssetManifest.ToJsonString() : null,
                 ["asset_paths"] = t.AssetPaths.Count > 0 ? string.Join(";", t.AssetPaths) : null
             }),
-            options);
+            options,
+            bufferThreshold);
     }
 
     private static string Format(object? v)
