@@ -52,7 +52,6 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private readonly string _chatKeyPath;
     private readonly Dictionary<string, (Func<bool> Getter, Action<bool> Setter)> _assistantToggleBindings;
     public ExportPlanningViewModel ExportPlanning { get; }
-    public ProvisioningViewModel Provisioning { get; }
     private static readonly TimeSpan DirectoryLookupDelay = TimeSpan.FromMilliseconds(400);
     private const int RunSnapshotHistoryLimit = 6;
     private const string RunSnapshotHistoryFolderName = ".run-history";
@@ -81,7 +80,6 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private bool _expPublicDesignSnapshot = false;
     private bool _expPublicDesignScreenshots = false;
     private bool _expStoreConfiguration = false;
-    private bool _importStoreConfiguration = false;
     private bool _enableHttpRetries = true;
     private int _httpRetryAttempts = 3;
     private double _httpRetryBaseDelaySeconds = 1;
@@ -94,9 +92,6 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private string _shopifyApiSecret = "";
     private string _wordPressUsername = "";
     private string _wordPressApplicationPassword = "";
-    private string _targetStoreUrl = "";
-    private string _targetConsumerKey = "";
-    private string _targetConsumerSecret = "";
     private readonly JsonSerializerOptions _configurationWriteOptions = new() { WriteIndented = true };
     private readonly JsonSerializerOptions _artifactWriteOptions = new() { WriteIndented = true };
     private readonly JsonSerializerOptions _preferencesWriteOptions = new() { WriteIndented = true };
@@ -245,6 +240,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
             Append);
         Provisioning = provisioning ?? new ProvisioningViewModel();
         Provisioning.ReplicateRequested += OnProvisioningRequested;
+        Provisioning.PropertyChanged += OnProvisioningPropertyChanged;
         BrowseCommand = new RelayCommand(OnBrowse);
         RunCommand = new RelayCommand(
             async () =>
@@ -1091,24 +1087,32 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
     public bool CanExportPublicDesignScreenshots => !HasWordPressCredentials;
     public bool CanExportStoreConfiguration => HasWordPressCredentials;
-    public string TargetStoreUrl { get => _targetStoreUrl; set { _targetStoreUrl = value; OnPropertyChanged(); } }
-    public string TargetConsumerKey { get => _targetConsumerKey; set { _targetConsumerKey = value; OnPropertyChanged(); } }
-    public string TargetConsumerSecret { get => _targetConsumerSecret; set { _targetConsumerSecret = value; OnPropertyChanged(); } }
+
+    public string TargetStoreUrl
+    {
+        get => Provisioning.TargetStoreUrl;
+        set => Provisioning.TargetStoreUrl = value;
+    }
+
+    public string TargetConsumerKey
+    {
+        get => Provisioning.TargetConsumerKey;
+        set => Provisioning.TargetConsumerKey = value;
+    }
+
+    public string TargetConsumerSecret
+    {
+        get => Provisioning.TargetConsumerSecret;
+        set => Provisioning.TargetConsumerSecret = value;
+    }
+
     public bool ImportStoreConfiguration
     {
-        get => _importStoreConfiguration;
-        set
-        {
-            if (_importStoreConfiguration == value)
-            {
-                return;
-            }
-
-            _importStoreConfiguration = value;
-            OnPropertyChanged();
-            SavePreferences();
-        }
+        get => Provisioning.ImportStoreConfiguration;
+        set => Provisioning.ImportStoreConfiguration = value;
     }
+
+    public ProvisioningViewModel Provisioning { get; }
     public ChatAssistantViewModel ChatAssistant { get; }
 
     internal void OnChatUsageReported(ChatUsageSnapshot usage)
@@ -1134,7 +1138,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
             ExportPublicDesignSnapshot,
             ExportPublicDesignScreenshots,
             ExportStoreConfiguration,
-            ImportStoreConfiguration,
+            Provisioning.ImportStoreConfiguration,
             HasWordPressCredentials,
             HasShopifyCredentials(),
             HasTargetCredentials(),
@@ -1171,10 +1175,13 @@ public sealed class MainViewModel : INotifyPropertyChanged
             [nameof(ExportPublicDesignSnapshot)] = (() => hostProvider().ExportPublicDesignSnapshot, value => hostProvider().ExportPublicDesignSnapshot = value),
             [nameof(ExportPublicDesignScreenshots)] = (() => hostProvider().ExportPublicDesignScreenshots, value => hostProvider().ExportPublicDesignScreenshots = value),
             [nameof(ExportStoreConfiguration)] = (() => hostProvider().ExportStoreConfiguration, value => hostProvider().ExportStoreConfiguration = value),
-            [nameof(ImportStoreConfiguration)] = (() => hostProvider().ImportStoreConfiguration, value => hostProvider().ImportStoreConfiguration = value),
+            [nameof(ProvisioningViewModel.ImportStoreConfiguration)] = (() => hostProvider().Provisioning.ImportStoreConfiguration, value => hostProvider().Provisioning.ImportStoreConfiguration = value),
             [nameof(EnableHttpRetries)] = (() => hostProvider().EnableHttpRetries, value => hostProvider().EnableHttpRetries = value),
         };
     }
+
+    private bool HasTargetCredentials()
+        => Provisioning.HasTargetCredentials;
 
     private void ConfigureChatAssistant(
         ChatAssistantViewModel chatAssistant,
@@ -1249,6 +1256,35 @@ public sealed class MainViewModel : INotifyPropertyChanged
         if (e.PropertyName == nameof(ChatAssistant.HasChatConfiguration))
         {
             ExplainLogsCommand?.RaiseCanExecuteChanged();
+        }
+    }
+
+    private void OnProvisioningPropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e?.PropertyName is null)
+        {
+            return;
+        }
+
+        if (e.PropertyName == nameof(ProvisioningViewModel.TargetStoreUrl))
+        {
+            OnPropertyChanged(nameof(TargetStoreUrl));
+        }
+
+        if (e.PropertyName == nameof(ProvisioningViewModel.TargetConsumerKey))
+        {
+            OnPropertyChanged(nameof(TargetConsumerKey));
+        }
+
+        if (e.PropertyName == nameof(ProvisioningViewModel.TargetConsumerSecret))
+        {
+            OnPropertyChanged(nameof(TargetConsumerSecret));
+        }
+
+        if (e.PropertyName == nameof(ProvisioningViewModel.ImportStoreConfiguration))
+        {
+            OnPropertyChanged(nameof(ImportStoreConfiguration));
+            SavePreferences();
         }
     }
 
@@ -1381,7 +1417,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
             return;
         }
 
-        if (string.IsNullOrWhiteSpace(TargetStoreUrl) || string.IsNullOrWhiteSpace(TargetConsumerKey) || string.IsNullOrWhiteSpace(TargetConsumerSecret))
+        if (!Provisioning.HasTargetCredentials)
         {
             Append("Enter the target store URL, consumer key, and consumer secret before provisioning.");
             return;
@@ -1393,12 +1429,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
         {
             IsRunning = true;
             await Provisioning.ExecuteProvisioningAsync(
-                TargetStoreUrl,
-                TargetConsumerKey,
-                TargetConsumerSecret,
                 string.IsNullOrWhiteSpace(WordPressUsername) ? null : WordPressUsername,
                 string.IsNullOrWhiteSpace(WordPressApplicationPassword) ? null : WordPressApplicationPassword,
-                ImportStoreConfiguration,
                 CreateOperationLogger,
                 RequireProgressLogger,
                 Append,

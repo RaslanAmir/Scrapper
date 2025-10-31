@@ -29,7 +29,7 @@ public sealed class ChatAssistantViewModel : INotifyPropertyChanged
         nameof(MainViewModel.ExportPublicDesignSnapshot),
         nameof(MainViewModel.ExportPublicDesignScreenshots),
         nameof(MainViewModel.ExportStoreConfiguration),
-        nameof(MainViewModel.ImportStoreConfiguration),
+        nameof(ProvisioningViewModel.ImportStoreConfiguration),
     };
 
     private readonly ChatAssistantService _chatAssistantService;

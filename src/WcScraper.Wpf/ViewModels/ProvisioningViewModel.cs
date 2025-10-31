@@ -17,6 +17,10 @@ public sealed class ProvisioningViewModel : INotifyPropertyChanged
     private readonly WooProvisioningService _wooProvisioningService;
     private ProvisioningContext? _lastProvisioningContext;
     private bool _isBusy;
+    private string _targetStoreUrl = string.Empty;
+    private string _targetConsumerKey = string.Empty;
+    private string _targetConsumerSecret = string.Empty;
+    private bool _importStoreConfiguration;
 
     public ProvisioningViewModel()
         : this(new WooProvisioningService())
@@ -32,6 +36,80 @@ public sealed class ProvisioningViewModel : INotifyPropertyChanged
     public RelayCommand ReplicateCommand { get; }
 
     public bool CanReplicate => _lastProvisioningContext is { Products.Count: > 0 };
+
+    public string TargetStoreUrl
+    {
+        get => _targetStoreUrl;
+        set
+        {
+            var newValue = value?.Trim() ?? string.Empty;
+            if (string.Equals(_targetStoreUrl, newValue, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            _targetStoreUrl = newValue;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(HasTargetCredentials));
+            ReplicateCommand.RaiseCanExecuteChanged();
+        }
+    }
+
+    public string TargetConsumerKey
+    {
+        get => _targetConsumerKey;
+        set
+        {
+            var newValue = value?.Trim() ?? string.Empty;
+            if (string.Equals(_targetConsumerKey, newValue, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            _targetConsumerKey = newValue;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(HasTargetCredentials));
+            ReplicateCommand.RaiseCanExecuteChanged();
+        }
+    }
+
+    public string TargetConsumerSecret
+    {
+        get => _targetConsumerSecret;
+        set
+        {
+            var newValue = value?.Trim() ?? string.Empty;
+            if (string.Equals(_targetConsumerSecret, newValue, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            _targetConsumerSecret = newValue;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(HasTargetCredentials));
+            ReplicateCommand.RaiseCanExecuteChanged();
+        }
+    }
+
+    public bool ImportStoreConfiguration
+    {
+        get => _importStoreConfiguration;
+        set
+        {
+            if (_importStoreConfiguration == value)
+            {
+                return;
+            }
+
+            _importStoreConfiguration = value;
+            OnPropertyChanged();
+        }
+    }
+
+    public bool HasTargetCredentials
+        => !string.IsNullOrWhiteSpace(TargetStoreUrl)
+            && !string.IsNullOrWhiteSpace(TargetConsumerKey)
+            && !string.IsNullOrWhiteSpace(TargetConsumerSecret);
 
     public bool IsBusy
     {
@@ -54,12 +132,8 @@ public sealed class ProvisioningViewModel : INotifyPropertyChanged
     public event EventHandler? ReplicateRequested;
 
     public async Task ExecuteProvisioningAsync(
-        string targetStoreUrl,
-        string targetConsumerKey,
-        string targetConsumerSecret,
         string? wordPressUsername,
         string? wordPressApplicationPassword,
-        bool importStoreConfiguration,
         Func<string, string?, string?, IReadOnlyDictionary<string, object?>?, LogLevel, LoggerProgressAdapter> createOperationLogger,
         Func<ILogger, IProgress<string>> requireProgressLogger,
         Action<string> append,
@@ -86,7 +160,7 @@ public sealed class ProvisioningViewModel : INotifyPropertyChanged
             return;
         }
 
-        if (string.IsNullOrWhiteSpace(targetStoreUrl) || string.IsNullOrWhiteSpace(targetConsumerKey) || string.IsNullOrWhiteSpace(targetConsumerSecret))
+        if (!HasTargetCredentials)
         {
             append("Enter the target store URL, consumer key, and consumer secret before provisioning.");
             return;
@@ -94,6 +168,9 @@ public sealed class ProvisioningViewModel : INotifyPropertyChanged
 
         try
         {
+            var targetStoreUrl = TargetStoreUrl;
+            var targetConsumerKey = TargetConsumerKey;
+            var targetConsumerSecret = TargetConsumerSecret;
             var provisioningContext = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
             {
                 ["ProductCount"] = _lastProvisioningContext.Products.Count,
@@ -117,7 +194,7 @@ public sealed class ProvisioningViewModel : INotifyPropertyChanged
             append($"Provisioning {_lastProvisioningContext.Products.Count} products to {settings.BaseUrl}…");
 
             StoreConfiguration? configuration = null;
-            if (importStoreConfiguration)
+            if (ImportStoreConfiguration)
             {
                 configuration = _lastProvisioningContext.Configuration;
                 if (configuration is null || !HasConfigurationData(configuration))
@@ -232,7 +309,7 @@ public sealed class ProvisioningViewModel : INotifyPropertyChanged
             || configuration.PaymentGateways.Count > 0;
     }
 
-    private bool CanExecuteReplicate() => !IsBusy && CanReplicate;
+    private bool CanExecuteReplicate() => !IsBusy && CanReplicate && HasTargetCredentials;
 
     private void OnReplicateRequested()
     {
