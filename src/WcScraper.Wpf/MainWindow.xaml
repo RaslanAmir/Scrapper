@@ -635,19 +635,19 @@
                                                 <Style TargetType="TextBlock">
                                                     <Setter Property="Visibility" Value="Collapsed"/>
                                                     <Style.Triggers>
-                                                        <DataTrigger Binding="{Binding HasRunPlans}" Value="False">
+                                                        <DataTrigger Binding="{Binding ExportPlanning.HasRunPlans}" Value="False">
                                                             <Setter Property="Visibility" Value="Visible"/>
                                                         </DataTrigger>
                                                     </Style.Triggers>
                                                 </Style>
                                             </TextBlock.Style>
                                         </TextBlock>
-                                        <ItemsControl ItemsSource="{Binding RunPlans}" Margin="0,4,0,0">
+                                        <ItemsControl ItemsSource="{Binding ExportPlanning.RunPlans}" Margin="0,4,0,0">
                                             <ItemsControl.Style>
                                                 <Style TargetType="ItemsControl">
                                                     <Setter Property="Visibility" Value="Collapsed"/>
                                                     <Style.Triggers>
-                                                        <DataTrigger Binding="{Binding HasRunPlans}" Value="True">
+                                                        <DataTrigger Binding="{Binding ExportPlanning.HasRunPlans}" Value="True">
                                                             <Setter Property="Visibility" Value="Visible"/>
                                                         </DataTrigger>
                                                     </Style.Triggers>
@@ -823,12 +823,12 @@
                                                             </ItemsControl>
                                                             <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
                                                                 <Button Content="Approve"
-                                                                        Command="{Binding DataContext.ApproveRunPlanCommand, RelativeSource={RelativeSource AncestorType=TabItem}}"
+                                                                        Command="{Binding DataContext.ExportPlanning.ApproveRunPlanCommand, RelativeSource={RelativeSource AncestorType=TabItem}}"
                                                                         CommandParameter="{Binding}"
                                                                         Padding="12,4"
                                                                         Margin="0,0,8,0"/>
                                                                 <Button Content="Dismiss"
-                                                                        Command="{Binding DataContext.DismissRunPlanCommand, RelativeSource={RelativeSource AncestorType=TabItem}}"
+                                                                        Command="{Binding DataContext.ExportPlanning.DismissRunPlanCommand, RelativeSource={RelativeSource AncestorType=TabItem}}"
                                                                         CommandParameter="{Binding}"
                                                                         Padding="12,4"/>
                                                             </StackPanel>

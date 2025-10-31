@@ -52,8 +52,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private readonly string _settingsDirectory;
     private readonly string _preferencesPath;
     private readonly string _chatKeyPath;
-    private readonly RunPlanner _runPlanner;
-    private readonly ReadOnlyObservableCollection<RunPlan> _runPlans;
+    private readonly Dictionary<string, (Func<bool> Getter, Action<bool> Setter)> _assistantToggleBindings;
+    public ExportPlanningViewModel ExportPlanning { get; }
     private static readonly TimeSpan DirectoryLookupDelay = TimeSpan.FromMilliseconds(400);
     private const string ApplyAssistantDirectivesCommand = "/apply-directives";
     private const string DiscardAssistantDirectivesCommand = "/discard-directives";
@@ -156,11 +156,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private string _latestRunAiRecommendationSummary = string.Empty;
     private AiArtifactAnnotation? _latestRunAiAnnotation;
     private AssistantDirectiveBatch? _pendingAssistantDirectives;
-    private RunPlan? _activeRunPlan;
-    private RunPlanExecutionOutcome? _activeRunPlanOutcome;
     private CancellationTokenSource? _runCts;
     private CancellationTokenSource? _chatCts;
-    private readonly Dictionary<string, (Func<bool> Getter, Action<bool> Setter)> _assistantToggleBindings;
     private readonly ObservableCollection<AutomationScriptDisplay> _latestAutomationScripts = new();
     private readonly ObservableCollection<string> _latestAutomationScriptWarnings = new();
     private string _latestAutomationScriptSummary = string.Empty;
@@ -244,11 +241,39 @@ public sealed class MainViewModel : INotifyPropertyChanged
         _chatKeyPath = Path.Combine(_settingsDirectory, "chat.key");
         _chatTranscriptStore = new ChatTranscriptStore(_settingsDirectory);
         var dispatcher = System.Windows.Application.Current?.Dispatcher ?? System.Windows.Threading.Dispatcher.CurrentDispatcher;
-        _runPlanner = new RunPlanner(ExecuteRunPlanAsync, dispatcher);
-        _runPlans = _runPlanner.Plans;
-        ((INotifyCollectionChanged)_runPlans).CollectionChanged += OnRunPlansChanged;
-        _runPlanner.PlanQueued += OnRunPlanQueued;
-        _runPlanner.PlanExecutionCompleted += OnRunPlanExecutionCompleted;
+        _assistantToggleBindings = new Dictionary<string, (Func<bool>, Action<bool>)>(StringComparer.OrdinalIgnoreCase)
+        {
+            [nameof(ExportCsv)] = (() => ExportCsv, value => ExportCsv = value),
+            [nameof(ExportShopify)] = (() => ExportShopify, value => ExportShopify = value),
+            [nameof(ExportWoo)] = (() => ExportWoo, value => ExportWoo = value),
+            [nameof(ExportReviews)] = (() => ExportReviews, value => ExportReviews = value),
+            [nameof(ExportXlsx)] = (() => ExportXlsx, value => ExportXlsx = value),
+            [nameof(ExportJsonl)] = (() => ExportJsonl, value => ExportJsonl = value),
+            [nameof(ExportPluginsCsv)] = (() => ExportPluginsCsv, value => ExportPluginsCsv = value),
+            [nameof(ExportPluginsJsonl)] = (() => ExportPluginsJsonl, value => ExportPluginsJsonl = value),
+            [nameof(ExportThemesCsv)] = (() => ExportThemesCsv, value => ExportThemesCsv = value),
+            [nameof(ExportThemesJsonl)] = (() => ExportThemesJsonl, value => ExportThemesJsonl = value),
+            [nameof(ExportPublicExtensionFootprints)] = (() => ExportPublicExtensionFootprints, value => ExportPublicExtensionFootprints = value),
+            [nameof(ExportPublicDesignSnapshot)] = (() => ExportPublicDesignSnapshot, value => ExportPublicDesignSnapshot = value),
+            [nameof(ExportPublicDesignScreenshots)] = (() => ExportPublicDesignScreenshots, value => ExportPublicDesignScreenshots = value),
+            [nameof(ExportStoreConfiguration)] = (() => ExportStoreConfiguration, value => ExportStoreConfiguration = value),
+            [nameof(ImportStoreConfiguration)] = (() => ImportStoreConfiguration, value => ImportStoreConfiguration = value),
+            [nameof(EnableHttpRetries)] = (() => EnableHttpRetries, value => EnableHttpRetries = value),
+        };
+
+        ExportPlanning = new ExportPlanningViewModel(
+            dispatcher,
+            _assistantToggleBindings,
+            () => HttpRetryAttempts,
+            value => HttpRetryAttempts = value,
+            () => HttpRetryBaseDelaySeconds,
+            value => HttpRetryBaseDelaySeconds = value,
+            () => HttpRetryMaxDelaySeconds,
+            value => HttpRetryMaxDelaySeconds = value,
+            value => ManualRunGoals = value,
+            PrepareRunCancellationToken,
+            async cancellationToken => await OnRunAsync(cancellationToken).ConfigureAwait(false),
+            Append);
         BrowseCommand = new RelayCommand(OnBrowse);
         RunCommand = new RelayCommand(
             async () =>
@@ -279,8 +304,6 @@ public sealed class MainViewModel : INotifyPropertyChanged
         ClearChatHistoryCommand = new RelayCommand(async () => await OnClearChatHistoryAsync(), CanClearChatHistory);
         UseAiRecommendationCommand = new RelayCommand<string?>(OnUseAiRecommendation);
         CopyAutomationScriptCommand = new RelayCommand<AutomationScriptDisplay>(OnCopyAutomationScript);
-        ApproveRunPlanCommand = new RelayCommand<RunPlan>(OnApproveRunPlan, CanApproveRunPlan);
-        DismissRunPlanCommand = new RelayCommand<RunPlan>(OnDismissRunPlan, CanDismissRunPlan);
         ChatMessages = new ObservableCollection<ChatMessage>();
         ChatMessages.CollectionChanged += OnChatMessagesCollectionChanged;
         LatestRunAiRecommendations.CollectionChanged += (_, __) => OnPropertyChanged(nameof(HasAiRecommendations));
@@ -293,25 +316,6 @@ public sealed class MainViewModel : INotifyPropertyChanged
         _artifactIndexingService.IndexChanged += OnArtifactIndexChanged;
         _ = EnsureChatTranscriptLoadedAsync();
 
-        _assistantToggleBindings = new Dictionary<string, (Func<bool>, Action<bool>)>(StringComparer.OrdinalIgnoreCase)
-        {
-            [nameof(ExportCsv)] = (() => ExportCsv, value => ExportCsv = value),
-            [nameof(ExportShopify)] = (() => ExportShopify, value => ExportShopify = value),
-            [nameof(ExportWoo)] = (() => ExportWoo, value => ExportWoo = value),
-            [nameof(ExportReviews)] = (() => ExportReviews, value => ExportReviews = value),
-            [nameof(ExportXlsx)] = (() => ExportXlsx, value => ExportXlsx = value),
-            [nameof(ExportJsonl)] = (() => ExportJsonl, value => ExportJsonl = value),
-            [nameof(ExportPluginsCsv)] = (() => ExportPluginsCsv, value => ExportPluginsCsv = value),
-            [nameof(ExportPluginsJsonl)] = (() => ExportPluginsJsonl, value => ExportPluginsJsonl = value),
-            [nameof(ExportThemesCsv)] = (() => ExportThemesCsv, value => ExportThemesCsv = value),
-            [nameof(ExportThemesJsonl)] = (() => ExportThemesJsonl, value => ExportThemesJsonl = value),
-            [nameof(ExportPublicExtensionFootprints)] = (() => ExportPublicExtensionFootprints, value => ExportPublicExtensionFootprints = value),
-            [nameof(ExportPublicDesignSnapshot)] = (() => ExportPublicDesignSnapshot, value => ExportPublicDesignSnapshot = value),
-            [nameof(ExportPublicDesignScreenshots)] = (() => ExportPublicDesignScreenshots, value => ExportPublicDesignScreenshots = value),
-            [nameof(ExportStoreConfiguration)] = (() => ExportStoreConfiguration, value => ExportStoreConfiguration = value),
-            [nameof(ImportStoreConfiguration)] = (() => ImportStoreConfiguration, value => ImportStoreConfiguration = value),
-            [nameof(EnableHttpRetries)] = (() => EnableHttpRetries, value => EnableHttpRetries = value),
-        };
     }
 
     private static WooScraper CreateDefaultWooScraper(ILoggerFactory loggerFactory)
@@ -1693,10 +1697,6 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public RelayCommand ClearCategoriesCommand { get; }
     public RelayCommand SelectAllTagsCommand { get; }
     public RelayCommand ClearTagsCommand { get; }
-    public ReadOnlyObservableCollection<RunPlan> RunPlans => _runPlans;
-    public RelayCommand<RunPlan> ApproveRunPlanCommand { get; }
-    public RelayCommand<RunPlan> DismissRunPlanCommand { get; }
-    public bool HasRunPlans => RunPlans.Count > 0;
     public RelayCommand ExportCollectionsCommand { get; }
     public RelayCommand ReplicateCommand { get; }
     public RelayCommand OpenLogCommand { get; }
@@ -2805,14 +2805,14 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 }
 
                 if (action.RequiresConfirmation && !ConfirmAssistantAction(
-                        BuildRunPlanConfirmationPrompt(plan),
+                        ExportPlanning.BuildRunPlanConfirmationPrompt(plan),
                         action.Justification))
                 {
                     Append("Assistant action schedule_run canceled by operator.");
                     return;
                 }
 
-                _runPlanner.Enqueue(plan);
+                ExportPlanning.EnqueuePlan(plan);
                 Append($"Assistant action schedule_run executed: plan \"{plan.Name}\" queued.");
                 return;
         }
@@ -2826,246 +2826,6 @@ public sealed class MainViewModel : INotifyPropertyChanged
         Append($"Assistant action {normalizedName} is not recognized. No changes applied.");
     }
 
-    private static string BuildRunPlanConfirmationPrompt(RunPlan plan)
-    {
-        if (plan.ExecutionMode == RunPlanExecutionMode.Scheduled && plan.ScheduledForUtc is { } scheduled)
-        {
-            return $"Queue remediation plan \"{plan.Name}\" for {scheduled:u}?";
-        }
-
-        return $"Queue remediation plan \"{plan.Name}\" for approval?";
-    }
-
-    private void ApplyRunPlanOverrides(RunPlan plan)
-    {
-        foreach (var setting in plan.Settings)
-        {
-            if (!string.IsNullOrWhiteSpace(setting.Description))
-            {
-                Append($"Run plan note for {setting.Name}: {setting.Description}");
-            }
-
-            switch (setting.ValueKind)
-            {
-                case RunPlanSettingValueKind.Boolean when setting.BooleanValue is bool booleanValue:
-                    if (_assistantToggleBindings.TryGetValue(setting.Name, out var binding))
-                    {
-                        var current = binding.Getter();
-                        if (current == booleanValue)
-                        {
-                            Append($"Run plan left {setting.Name} unchanged (already {(booleanValue ? "enabled" : "disabled")}).");
-                        }
-                        else
-                        {
-                            binding.Setter(booleanValue);
-                            Append($"Run plan set {setting.Name} to {(booleanValue ? "enabled" : "disabled") }.");
-                        }
-                    }
-                    else
-                    {
-                        Append($"Run plan override skipped: toggle {setting.Name} is not recognized.");
-                    }
-
-                    break;
-                case RunPlanSettingValueKind.Number when setting.NumberValue is double numericValue:
-                    ApplyRunPlanNumericOverride(setting.Name, numericValue);
-                    break;
-                case RunPlanSettingValueKind.Text when !string.IsNullOrWhiteSpace(setting.TextValue):
-                    ApplyRunPlanTextOverride(setting.Name, setting.TextValue!);
-                    break;
-                default:
-                    Append($"Run plan override skipped: {setting.Name} value could not be interpreted.");
-                    break;
-            }
-        }
-    }
-
-    private void ApplyRunPlanNumericOverride(string name, double value)
-    {
-        switch (name)
-        {
-            case nameof(HttpRetryAttempts):
-                var attempts = (int)Math.Round(value);
-                if (attempts < 0 || attempts > 10)
-                {
-                    Append($"Run plan override skipped: {name} value {attempts} is outside the expected range (0-10).");
-                    return;
-                }
-
-                if (HttpRetryAttempts == attempts)
-                {
-                    Append($"Run plan left {name} at {attempts} (already set).");
-                }
-                else
-                {
-                    HttpRetryAttempts = attempts;
-                    Append($"Run plan set {name} to {attempts}.");
-                }
-
-                break;
-            case nameof(HttpRetryBaseDelaySeconds):
-                if (value < 0 || value > 600)
-                {
-                    Append($"Run plan override skipped: {name} value {FormatSeconds(value)} is outside the expected range (0-600 seconds).");
-                    return;
-                }
-
-                if (Math.Abs(HttpRetryBaseDelaySeconds - value) < 0.0001)
-                {
-                    Append($"Run plan left {name} at {FormatSeconds(value)} (already set).");
-                }
-                else
-                {
-                    HttpRetryBaseDelaySeconds = value;
-                    Append($"Run plan set {name} to {FormatSeconds(value)}.");
-                }
-
-                break;
-            case nameof(HttpRetryMaxDelaySeconds):
-                if (value < 0 || value > 600)
-                {
-                    Append($"Run plan override skipped: {name} value {FormatSeconds(value)} is outside the expected range (0-600 seconds).");
-                    return;
-                }
-
-                if (Math.Abs(HttpRetryMaxDelaySeconds - value) < 0.0001)
-                {
-                    Append($"Run plan left {name} at {FormatSeconds(value)} (already set).");
-                }
-                else
-                {
-                    HttpRetryMaxDelaySeconds = value;
-                    Append($"Run plan set {name} to {FormatSeconds(value)}.");
-                }
-
-                break;
-            default:
-                Append($"Run plan override skipped: numeric setting {name} is not supported.");
-                break;
-        }
-    }
-
-    private void ApplyRunPlanTextOverride(string name, string value)
-    {
-        switch (name)
-        {
-            case nameof(ManualRunGoals):
-                ManualRunGoals = value;
-                Append("Run plan updated manual run goals.");
-                break;
-            default:
-                Append($"Run plan override skipped: text setting {name} is not supported.");
-                break;
-        }
-    }
-
-    private void OnRunPlansChanged(object? sender, NotifyCollectionChangedEventArgs e)
-        => OnPropertyChanged(nameof(HasRunPlans));
-
-    private void OnRunPlanQueued(object? sender, RunPlan plan)
-    {
-        if (plan is null)
-        {
-            return;
-        }
-
-        plan.PropertyChanged += OnRunPlanPropertyChanged;
-        var scheduleText = plan.ExecutionMode == RunPlanExecutionMode.Scheduled && plan.ScheduledForUtc is { } scheduled
-            ? $"scheduled for {scheduled:u}"
-            : "awaiting approval";
-        Append($"Assistant queued remediation plan \"{plan.Name}\" ({scheduleText}).");
-
-        if (!string.IsNullOrWhiteSpace(plan.DirectiveSummary))
-        {
-            Append($"Summary: {plan.DirectiveSummary}");
-        }
-
-        if (plan.Settings.Count > 0)
-        {
-            var overrideSummary = string.Join(", ", plan.Settings.Select(setting => $"{setting.Name}={setting.DisplayValue}"));
-            Append("Overrides: " + overrideSummary);
-        }
-
-        foreach (var note in plan.PrerequisiteNotes)
-        {
-            Append($"Prerequisite: {note}");
-        }
-
-        ApproveRunPlanCommand.RaiseCanExecuteChanged();
-        DismissRunPlanCommand.RaiseCanExecuteChanged();
-    }
-
-    private void OnRunPlanExecutionCompleted(object? sender, RunPlanExecutionEventArgs e)
-    {
-        if (e.Plan is null)
-        {
-            return;
-        }
-
-        var status = e.Outcome.Cancelled
-            ? "was cancelled"
-            : e.Outcome.Success
-                ? "completed"
-                : "finished with issues";
-        Append($"Run plan \"{e.Plan.Name}\" {status}.");
-        if (!string.IsNullOrWhiteSpace(e.Outcome.Message))
-        {
-            Append($"Plan result: {e.Outcome.Message}");
-        }
-
-        ApproveRunPlanCommand.RaiseCanExecuteChanged();
-        DismissRunPlanCommand.RaiseCanExecuteChanged();
-    }
-
-    private void OnRunPlanPropertyChanged(object? sender, PropertyChangedEventArgs e)
-    {
-        if (!string.Equals(e.PropertyName, nameof(RunPlan.Status), StringComparison.Ordinal))
-        {
-            return;
-        }
-
-        ApproveRunPlanCommand.RaiseCanExecuteChanged();
-        DismissRunPlanCommand.RaiseCanExecuteChanged();
-    }
-
-    private bool CanApproveRunPlan(RunPlan? plan)
-        => plan is not null && (plan.Status == RunPlanStatus.Pending || plan.Status == RunPlanStatus.Scheduled);
-
-    private void OnApproveRunPlan(RunPlan? plan)
-    {
-        if (plan is null)
-        {
-            return;
-        }
-
-        if (_runPlanner.TryApprove(plan))
-        {
-            Append($"Operator approved run plan \"{plan.Name}\".");
-            return;
-        }
-
-        Append($"Run plan \"{plan.Name}\" could not be approved (already in progress or completed).");
-    }
-
-    private bool CanDismissRunPlan(RunPlan? plan)
-        => plan is not null && (plan.Status == RunPlanStatus.Pending || plan.Status == RunPlanStatus.Scheduled);
-
-    private void OnDismissRunPlan(RunPlan? plan)
-    {
-        if (plan is null)
-        {
-            return;
-        }
-
-        if (_runPlanner.TryCancel(plan, "Dismissed by operator."))
-        {
-            Append($"Run plan \"{plan.Name}\" dismissed by operator.");
-        }
-        else
-        {
-            Append($"Run plan \"{plan.Name}\" could not be dismissed (already executing or finalized).");
-        }
-    }
 
     private void TryOpenAssistantPath(string actionName, string? path)
     {
@@ -3920,50 +3680,6 @@ public sealed class MainViewModel : INotifyPropertyChanged
         var baseSeconds = Math.Max(0.1, _httpRetryBaseDelaySeconds);
         var maxSeconds = Math.Max(baseSeconds, Math.Max(0.1, _httpRetryMaxDelaySeconds));
         return (attempts, TimeSpan.FromSeconds(baseSeconds), TimeSpan.FromSeconds(maxSeconds));
-    }
-
-    private async Task<RunPlanExecutionOutcome> ExecuteRunPlanAsync(RunPlan plan)
-    {
-        if (plan is null)
-        {
-            return new RunPlanExecutionOutcome(false, "Plan details were missing.");
-        }
-
-        _activeRunPlan = plan;
-        _activeRunPlanOutcome = null;
-
-        Append($"Run plan \"{plan.Name}\" initiated.");
-        if (plan.PrerequisiteNotes.Count > 0)
-        {
-            foreach (var note in plan.PrerequisiteNotes)
-            {
-                Append($"  Prerequisite: {note}");
-            }
-        }
-
-        ApplyRunPlanOverrides(plan);
-
-        var cancellationToken = PrepareRunCancellationToken();
-
-        RunPlanExecutionOutcome outcome;
-
-        try
-        {
-            await OnRunAsync(cancellationToken);
-            outcome = _activeRunPlanOutcome ?? new RunPlanExecutionOutcome(true, "Run invoked.");
-        }
-        catch (OperationCanceledException)
-        {
-            _activeRunPlanOutcome ??= RunPlanExecutionOutcome.CreateCancelled("Run cancelled.");
-            outcome = _activeRunPlanOutcome;
-        }
-        finally
-        {
-            _activeRunPlan = null;
-            _activeRunPlanOutcome = null;
-        }
-
-        return outcome;
     }
 
     private void OnCancelRun()
@@ -5419,10 +5135,10 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
             var artifactPayload = artifactPayloadCandidate.HasContent ? artifactPayloadCandidate : null;
 
-            var planPreviewOutcome = _activeRunPlan is null
-                ? null
-                : new RunPlanExecutionOutcome(true, "Assistant remediation run executed during this migration.");
-            var planSnapshots = _runPlanner.CreateSnapshot(_activeRunPlan, planPreviewOutcome);
+            var planPreviewOutcome = ExportPlanning.HasActiveRunPlan
+                ? new RunPlanExecutionOutcome(true, "Assistant remediation run executed during this migration.")
+                : null;
+            var planSnapshots = ExportPlanning.CreateSnapshot(planPreviewOutcome);
 
             var reportContext = new ManualMigrationReportContext(
                 targetUrl,
@@ -5881,7 +5597,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
             SetProvisioningContext(prods, variations, configuration, pluginBundles, themeBundles, customers, coupons, orders, subscriptions, siteContent, categoryTerms);
 
             Append("All done.");
-            _activeRunPlanOutcome ??= new RunPlanExecutionOutcome(true, "Run completed successfully.");
+            ExportPlanning.SetActiveRunPlanOutcome(new RunPlanExecutionOutcome(true, "Run completed successfully."));
 
             var completionInfo = new ManualRunCompletionInfo
             {
@@ -5902,16 +5618,16 @@ public sealed class MainViewModel : INotifyPropertyChanged
         }
         catch (OperationCanceledException)
         {
-            _activeRunPlanOutcome ??= RunPlanExecutionOutcome.CreateCancelled("Run cancelled.");
+            ExportPlanning.SetActiveRunPlanOutcome(RunPlanExecutionOutcome.CreateCancelled("Run cancelled."));
             Append("Run cancelled.");
-            if (_activeRunPlan is not null)
+            if (ExportPlanning.HasActiveRunPlan)
             {
                 throw;
             }
         }
         catch (Exception ex)
         {
-            _activeRunPlanOutcome ??= new RunPlanExecutionOutcome(false, ex.Message);
+            ExportPlanning.SetActiveRunPlanOutcome(new RunPlanExecutionOutcome(false, ex.Message));
             Append($"Error: {ex.Message}");
         }
         finally
