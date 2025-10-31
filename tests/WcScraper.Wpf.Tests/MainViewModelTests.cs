@@ -833,10 +833,10 @@ public class MainViewModelTests
 
             Assert.Single(timestamps);
 
-            var contextField = typeof(MainViewModel)
+            var contextField = typeof(ProvisioningViewModel)
                 .GetField("_lastProvisioningContext", BindingFlags.NonPublic | BindingFlags.Instance);
             Assert.NotNull(contextField);
-            var context = contextField!.GetValue(viewModel);
+            var context = contextField!.GetValue(viewModel.Provisioning);
             Assert.NotNull(context);
             var variationsProperty = context!.GetType().GetProperty("Variations", BindingFlags.Public | BindingFlags.Instance);
             Assert.NotNull(variationsProperty);

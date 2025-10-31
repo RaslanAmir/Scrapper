@@ -40,7 +40,6 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private readonly WooScraper _wooScraper;
     private readonly ShopifyScraper _shopifyScraper;
     private readonly HttpClient _httpClient;
-    private readonly WooProvisioningService _wooProvisioningService;
     private readonly HeadlessBrowserScreenshotService _designScreenshotService;
     private readonly WordPressDirectoryClient _wpDirectoryClient;
     private readonly IScraperInstrumentation _uiInstrumentation;
@@ -53,6 +52,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private readonly string _chatKeyPath;
     private readonly Dictionary<string, (Func<bool> Getter, Action<bool> Setter)> _assistantToggleBindings;
     public ExportPlanningViewModel ExportPlanning { get; }
+    public ProvisioningViewModel Provisioning { get; }
     private static readonly TimeSpan DirectoryLookupDelay = TimeSpan.FromMilliseconds(400);
     private const int RunSnapshotHistoryLimit = 6;
     private const string RunSnapshotHistoryFolderName = ".run-history";
@@ -97,7 +97,6 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private string _targetStoreUrl = "";
     private string _targetConsumerKey = "";
     private string _targetConsumerSecret = "";
-    private ProvisioningContext? _lastProvisioningContext;
     private readonly JsonSerializerOptions _configurationWriteOptions = new() { WriteIndented = true };
     private readonly JsonSerializerOptions _artifactWriteOptions = new() { WriteIndented = true };
     private readonly JsonSerializerOptions _preferencesWriteOptions = new() { WriteIndented = true };
@@ -207,7 +206,6 @@ public sealed class MainViewModel : INotifyPropertyChanged
         _wooScraper = wooScraper ?? throw new ArgumentNullException(nameof(wooScraper));
         _shopifyScraper = shopifyScraper ?? throw new ArgumentNullException(nameof(shopifyScraper));
         _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
-        _wooProvisioningService = new WooProvisioningService();
         _uiInstrumentation = new UiScraperInstrumentation(Append, _loggerFactory);
         _wpDirectoryClient = new WordPressDirectoryClient(
             _httpClient,
@@ -239,6 +237,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
             PrepareRunCancellationToken,
             async cancellationToken => await OnRunAsync(cancellationToken).ConfigureAwait(false),
             Append);
+        Provisioning = new ProvisioningViewModel();
+        Provisioning.ReplicateRequested += OnProvisioningRequested;
         BrowseCommand = new RelayCommand(OnBrowse);
         RunCommand = new RelayCommand(
             async () =>
@@ -253,13 +253,6 @@ public sealed class MainViewModel : INotifyPropertyChanged
         SelectAllTagsCommand = new RelayCommand(() => SetSelection(TagChoices, true));
         ClearTagsCommand = new RelayCommand(() => SetSelection(TagChoices, false));
         ExportCollectionsCommand = new RelayCommand(OnExportCollections);
-        ReplicateCommand = new RelayCommand(
-            async () =>
-            {
-                var cancellationToken = PrepareRunCancellationToken();
-                await OnReplicateStoreAsync(cancellationToken);
-            },
-            () => !IsRunning && CanReplicate);
         OpenLogCommand = new RelayCommand(OnOpenLog);
         ExplainLogsCommand = new RelayCommand(async () => await OnExplainLatestLogsAsync(), CanExplainLogs);
         LaunchWizardCommand = new RelayCommand(OnLaunchWizard, CanLaunchWizard);
@@ -656,6 +649,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
             _isRunning = value;
             OnPropertyChanged();
+            Provisioning.SetHostBusy(value);
             RaiseRunCommandStates();
         }
     }
@@ -1109,8 +1103,6 @@ public sealed class MainViewModel : INotifyPropertyChanged
             SavePreferences();
         }
     }
-    public bool CanReplicate => _lastProvisioningContext is { Products.Count: > 0 };
-
     public ChatAssistantViewModel ChatAssistant { get; }
 
     internal void OnChatUsageReported(ChatUsageSnapshot usage)
@@ -1362,8 +1354,53 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private void RaiseRunCommandStates()
     {
         RunCommand.RaiseCanExecuteChanged();
-        ReplicateCommand.RaiseCanExecuteChanged();
+        Provisioning.ReplicateCommand.RaiseCanExecuteChanged();
         CancelRunCommand.RaiseCanExecuteChanged();
+    }
+
+    private async void OnProvisioningRequested(object? sender, EventArgs e)
+    {
+        if (!Provisioning.CanReplicate)
+        {
+            Append("Run an export before provisioning.");
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(TargetStoreUrl) || string.IsNullOrWhiteSpace(TargetConsumerKey) || string.IsNullOrWhiteSpace(TargetConsumerSecret))
+        {
+            Append("Enter the target store URL, consumer key, and consumer secret before provisioning.");
+            return;
+        }
+
+        var cancellationToken = PrepareRunCancellationToken();
+
+        try
+        {
+            IsRunning = true;
+            await Provisioning.ExecuteProvisioningAsync(
+                TargetStoreUrl,
+                TargetConsumerKey,
+                TargetConsumerSecret,
+                string.IsNullOrWhiteSpace(WordPressUsername) ? null : WordPressUsername,
+                string.IsNullOrWhiteSpace(WordPressApplicationPassword) ? null : WordPressApplicationPassword,
+                ImportStoreConfiguration,
+                CreateOperationLogger,
+                RequireProgressLogger,
+                Append,
+                cancellationToken);
+        }
+        finally
+        {
+            var runCts = _runCts;
+            if (runCts is not null)
+            {
+                _runCts = null;
+                runCts.Dispose();
+            }
+
+            IsRunning = false;
+            RaiseRunCommandStates();
+        }
     }
 
     private CancellationToken PrepareRunCancellationToken()
@@ -1417,7 +1454,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
             _latestManualReportPath = null;
             _latestRunDeltaPath = null;
 
-            ResetProvisioningContext();
+            Provisioning.ResetProvisioningContext();
 
             IsRunning = true;
             ExecuteOnUiThread(() =>
@@ -2009,7 +2046,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 {
                     Append("Capturing store configuration…");
                     configuration = await FetchStoreConfigurationAsync(targetUrl, WordPressUsername, WordPressApplicationPassword, operationLogger, cancellationToken);
-                    if (configuration is not null && HasConfigurationData(configuration))
+                    if (configuration is not null && ProvisioningViewModel.HasConfigurationData(configuration))
                     {
                         var configPath = Path.Combine(storeOutputFolder, $"{storeId}_{timestamp}_configuration.json");
                         var json = JsonSerializer.Serialize(configuration, _configurationWriteOptions);
@@ -3247,7 +3284,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 }
             }
 
-            SetProvisioningContext(prods, variations, configuration, pluginBundles, themeBundles, customers, coupons, orders, subscriptions, siteContent, categoryTerms);
+            Provisioning.SetProvisioningContext(prods, variations, configuration, pluginBundles, themeBundles, customers, coupons, orders, subscriptions, siteContent, categoryTerms);
 
             Append("All done.");
             ExportPlanning.SetActiveRunPlanOutcome(new RunPlanExecutionOutcome(true, "Run completed successfully."));
@@ -3341,13 +3378,6 @@ public sealed class MainViewModel : INotifyPropertyChanged
         }
 
         return configuration;
-    }
-
-    private static bool HasConfigurationData(StoreConfiguration configuration)
-    {
-        return configuration.StoreSettings.Count > 0
-            || configuration.ShippingZones.Count > 0
-            || configuration.PaymentGateways.Count > 0;
     }
 
     private async Task<List<ExtensionArtifact>> CapturePluginBundlesAsync(
@@ -5833,142 +5863,6 @@ public sealed class MainViewModel : INotifyPropertyChanged
         string RelativePath,
         IReadOnlyList<string> Notes);
 
-    private void SetProvisioningContext(
-        List<StoreProduct> products,
-        List<StoreProduct> variations,
-        StoreConfiguration? configuration,
-        List<ExtensionArtifact> pluginBundles,
-        List<ExtensionArtifact> themeBundles,
-        List<WooCustomer> customers,
-        List<WooCoupon> coupons,
-        List<WooOrder> orders,
-        List<WooSubscription> subscriptions,
-        WordPressSiteContent? siteContent,
-        List<TermItem> categoryTerms)
-    {
-        var productSnapshots = CloneProductsWithMedia(products);
-        var variationSnapshots = CloneProductsWithMedia(variations);
-        var variableProducts = BuildVariableProducts(productSnapshots, variationSnapshots);
-        var customerSnapshots = CloneRecords(customers);
-        var couponSnapshots = CloneRecords(coupons);
-        var orderSnapshots = CloneRecords(orders);
-        var subscriptionSnapshots = CloneRecords(subscriptions);
-        var categorySnapshots = CloneRecords(categoryTerms);
-        _lastProvisioningContext = new ProvisioningContext(
-            productSnapshots,
-            variationSnapshots,
-            variableProducts,
-            configuration,
-            pluginBundles,
-            themeBundles,
-            customerSnapshots,
-            couponSnapshots,
-            orderSnapshots,
-            subscriptionSnapshots,
-            siteContent,
-            categorySnapshots);
-        OnPropertyChanged(nameof(CanReplicate));
-        ReplicateCommand.RaiseCanExecuteChanged();
-    }
-
-    private static List<StoreProduct> CloneProductsWithMedia(IEnumerable<StoreProduct> source)
-    {
-        var list = source?.Where(p => p is not null).Select(p => p!).ToList() ?? new List<StoreProduct>();
-        if (list.Count == 0)
-        {
-            return new List<StoreProduct>();
-        }
-
-        var json = JsonSerializer.Serialize(list);
-        var clones = JsonSerializer.Deserialize<List<StoreProduct>>(json) ?? new List<StoreProduct>();
-
-        if (clones.Count != list.Count)
-        {
-            // Fallback to manual cloning to preserve indexes if serialization yielded a different count.
-            clones = list.Select(p => CloneProduct(p)).ToList();
-            return clones;
-        }
-
-        for (var i = 0; i < list.Count; i++)
-        {
-            var original = list[i];
-            var clone = clones[i];
-            clone.LocalImageFilePaths.Clear();
-            clone.LocalImageFilePaths.AddRange(original.LocalImageFilePaths);
-        }
-
-        return clones;
-    }
-
-    private static StoreProduct CloneProduct(StoreProduct product)
-    {
-        var json = JsonSerializer.Serialize(product);
-        var clone = JsonSerializer.Deserialize<StoreProduct>(json) ?? new StoreProduct();
-        clone.LocalImageFilePaths.Clear();
-        clone.LocalImageFilePaths.AddRange(product.LocalImageFilePaths);
-        return clone;
-    }
-
-    private static List<T> CloneRecords<T>(IEnumerable<T> source) where T : class
-    {
-        var list = source?.Where(item => item is not null).Select(item => item!).ToList() ?? new List<T>();
-        if (list.Count == 0)
-        {
-            return new List<T>();
-        }
-
-        var json = JsonSerializer.Serialize(list);
-        var clones = JsonSerializer.Deserialize<List<T>>(json) ?? new List<T>();
-        return clones;
-    }
-
-    private static List<ProvisioningVariableProduct> BuildVariableProducts(
-        List<StoreProduct> products,
-        List<StoreProduct> variations)
-    {
-        var result = new List<ProvisioningVariableProduct>();
-        if (products.Count == 0 || variations.Count == 0)
-        {
-            return result;
-        }
-
-        var parentLookup = products
-            .Where(p => p is not null && p.Id > 0)
-            .ToDictionary(p => p.Id, p => p);
-
-        var grouped = variations
-            .Where(v => v is not null && v.ParentId is int id && id > 0)
-            .GroupBy(v => v.ParentId!.Value);
-
-        foreach (var group in grouped)
-        {
-            if (!parentLookup.TryGetValue(group.Key, out var parent))
-            {
-                continue;
-            }
-
-            var orderedVariations = group
-                .Where(v => v is not null)
-                .Select(v => v!)
-                .ToList();
-
-            if (orderedVariations.Count == 0)
-            {
-                continue;
-            }
-
-            result.Add(new ProvisioningVariableProduct(parent, orderedVariations));
-        }
-
-        return result;
-    }
-
-    private void ResetProvisioningContext()
-    {
-        _lastProvisioningContext = null;
-        OnPropertyChanged(nameof(CanReplicate));
-        ReplicateCommand.RaiseCanExecuteChanged();
-    }
 
     private void ClearFilters()
     {
@@ -5987,151 +5881,6 @@ public sealed class MainViewModel : INotifyPropertyChanged
         }
     }
 
-    private async Task OnReplicateStoreAsync(CancellationToken cancellationToken)
-    {
-        if (_lastProvisioningContext is null || _lastProvisioningContext.Products.Count == 0)
-        {
-            Append("Run an export before provisioning.");
-            return;
-        }
-
-        if (string.IsNullOrWhiteSpace(TargetStoreUrl) || string.IsNullOrWhiteSpace(TargetConsumerKey) || string.IsNullOrWhiteSpace(TargetConsumerSecret))
-        {
-            Append("Enter the target store URL, consumer key, and consumer secret before provisioning.");
-            return;
-        }
-
-        try
-        {
-            IsRunning = true;
-            var provisioningContext = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
-            {
-                ["ProductCount"] = _lastProvisioningContext.Products.Count,
-                ["TargetUrl"] = TargetStoreUrl
-            };
-
-            var operationLogger = CreateOperationLogger(
-                "WooProvisioning",
-                TargetStoreUrl,
-                entityType: "WooCommerce",
-                additionalContext: provisioningContext);
-            var progressLogger = RequireProgressLogger(operationLogger);
-            var settings = new WooProvisioningSettings(
-                TargetStoreUrl,
-                TargetConsumerKey,
-                TargetConsumerSecret,
-                string.IsNullOrWhiteSpace(WordPressUsername) ? null : WordPressUsername,
-                string.IsNullOrWhiteSpace(WordPressApplicationPassword) ? null : WordPressApplicationPassword);
-            Append($"Provisioning {_lastProvisioningContext.Products.Count} products to {settings.BaseUrl}…");
-            StoreConfiguration? configuration = null;
-            if (ImportStoreConfiguration)
-            {
-                configuration = _lastProvisioningContext.Configuration;
-                if (configuration is null || !HasConfigurationData(configuration))
-                {
-                    Append("No stored configuration available. Run an export with configuration enabled if you wish to replicate settings.");
-                    configuration = null;
-                }
-                else
-                {
-                    Append("Applying captured store configuration before provisioning products…");
-                }
-            }
-
-            cancellationToken.ThrowIfCancellationRequested();
-
-            if (_lastProvisioningContext.PluginBundles.Count > 0)
-            {
-                Append($"Uploading {_lastProvisioningContext.PluginBundles.Count} plugin bundles…");
-                await _wooProvisioningService.UploadPluginsAsync(settings, _lastProvisioningContext.PluginBundles, progressLogger, cancellationToken);
-            }
-
-            cancellationToken.ThrowIfCancellationRequested();
-
-            if (_lastProvisioningContext.ThemeBundles.Count > 0)
-            {
-                Append($"Uploading {_lastProvisioningContext.ThemeBundles.Count} theme bundles…");
-                await _wooProvisioningService.UploadThemesAsync(settings, _lastProvisioningContext.ThemeBundles, progressLogger, cancellationToken);
-            }
-
-            cancellationToken.ThrowIfCancellationRequested();
-
-            await _wooProvisioningService.ProvisionAsync(
-                settings,
-                _lastProvisioningContext.Products,
-                variableProducts: _lastProvisioningContext.VariableProducts,
-                variations: _lastProvisioningContext.Variations,
-                configuration: configuration,
-                _lastProvisioningContext.Customers,
-                _lastProvisioningContext.Coupons,
-                _lastProvisioningContext.Orders,
-                subscriptions: _lastProvisioningContext.Subscriptions,
-                siteContent: _lastProvisioningContext.SiteContent,
-                categoryMetadata: _lastProvisioningContext.ProductCategories,
-                progress: progressLogger,
-                cancellationToken: cancellationToken);
-        }
-        catch (Exception ex)
-        {
-            Append($"Provisioning failed: {ex.Message}");
-        }
-        finally
-        {
-            var runCts = _runCts;
-            if (runCts is not null)
-            {
-                _runCts = null;
-                runCts.Dispose();
-            }
-
-            IsRunning = false;
-            RaiseRunCommandStates();
-        }
-    }
-
-    private sealed class ProvisioningContext
-    {
-        public ProvisioningContext(
-            List<StoreProduct> products,
-            List<StoreProduct> variations,
-            List<ProvisioningVariableProduct> variableProducts,
-            StoreConfiguration? configuration,
-            List<ExtensionArtifact> pluginBundles,
-            List<ExtensionArtifact> themeBundles,
-            List<WooCustomer> customers,
-            List<WooCoupon> coupons,
-            List<WooOrder> orders,
-            List<WooSubscription> subscriptions,
-            WordPressSiteContent? siteContent,
-            List<TermItem> productCategories)
-        {
-            Products = products;
-            Variations = variations;
-            VariableProducts = variableProducts;
-            Configuration = configuration;
-            PluginBundles = pluginBundles;
-            ThemeBundles = themeBundles;
-            Customers = customers;
-            Coupons = coupons;
-            Orders = orders;
-            Subscriptions = subscriptions;
-            SiteContent = siteContent;
-            ProductCategories = productCategories;
-        }
-
-        public List<StoreProduct> Products { get; }
-        public List<StoreProduct> Variations { get; }
-        public List<ProvisioningVariableProduct> VariableProducts { get; }
-        public StoreConfiguration? Configuration { get; }
-        public List<ExtensionArtifact> PluginBundles { get; }
-        public List<ExtensionArtifact> ThemeBundles { get; }
-        public List<WooCustomer> Customers { get; }
-        public List<WooCoupon> Coupons { get; }
-        public List<WooOrder> Orders { get; }
-        public List<WooSubscription> Subscriptions { get; }
-        public WordPressSiteContent? SiteContent { get; }
-        public List<TermItem> ProductCategories { get; }
-    }
 
     private sealed record MediaReference(string RelativePath, string AbsolutePath);
 
