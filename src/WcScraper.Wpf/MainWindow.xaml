@@ -311,7 +311,7 @@
                   Grid.ColumnSpan="3"
                   Header="AI Assistant"
                   Margin="0,12,0,8"
-                  IsExpanded="{Binding IsAssistantPanelExpanded, Mode=TwoWay}">
+                  IsExpanded="{Binding ChatAssistant.IsAssistantPanelExpanded, Mode=TwoWay}">
             <Border Padding="8">
                 <Grid>
                     <Grid.ColumnDefinitions>
@@ -321,20 +321,20 @@
                     </Grid.ColumnDefinitions>
                     <StackPanel Grid.Column="0">
                         <TextBlock Text="API endpoint:" FontWeight="SemiBold"/>
-                        <TextBox Text="{Binding ChatApiEndpoint, UpdateSourceTrigger=PropertyChanged}" Margin="0,4,0,0"/>
+                        <TextBox Text="{Binding ChatAssistant.ChatApiEndpoint, UpdateSourceTrigger=PropertyChanged}" Margin="0,4,0,0"/>
                         <TextBlock Text="Model / deployment:" Margin="0,12,0,0" FontWeight="SemiBold"/>
-                        <TextBox Text="{Binding ChatModel, UpdateSourceTrigger=PropertyChanged}" Margin="0,4,0,0"/>
+                        <TextBox Text="{Binding ChatAssistant.ChatModel, UpdateSourceTrigger=PropertyChanged}" Margin="0,4,0,0"/>
                         <TextBlock Text="API key:" Margin="0,12,0,0" FontWeight="SemiBold"/>
                         <PasswordBox x:Name="ChatApiKeyBox"
                                      Margin="0,4,0,0"
                                      PasswordChanged="OnChatApiKeyChanged"/>
-                        <TextBlock Text="{Binding HasChatApiKey, StringFormat=Key stored: {0}}"
+                        <TextBlock Text="{Binding ChatAssistant.HasChatApiKey, StringFormat=Key stored: {0}}"
                                    Foreground="Gray"
                                    Margin="0,4,0,0"/>
                         <TextBlock Text="System prompt (optional):" Margin="0,12,0,0" FontWeight="SemiBold"/>
-                        <TextBox Text="{Binding ChatSystemPrompt, UpdateSourceTrigger=PropertyChanged}"
-                                 AcceptsReturn="True"
-                                 TextWrapping="Wrap"
+                        <TextBox Text="{Binding ChatAssistant.ChatSystemPrompt, UpdateSourceTrigger=PropertyChanged}"
+                                AcceptsReturn="True"
+                                TextWrapping="Wrap"
                                  Height="120"
                                  VerticalScrollBarVisibility="Auto"
                                  Margin="0,4,0,0"/>
@@ -363,56 +363,56 @@
                                 </Grid.RowDefinitions>
                                 <StackPanel Grid.Row="0" Orientation="Horizontal" VerticalAlignment="Center">
                                     <TextBlock Text="Mode:" FontWeight="SemiBold" VerticalAlignment="Center"/>
-                                    <ComboBox ItemsSource="{Binding ChatModeOptions}"
-                                              SelectedValue="{Binding SelectedChatMode, Mode=TwoWay}"
+                                    <ComboBox ItemsSource="{Binding ChatAssistant.ChatModeOptions}"
+                                              SelectedValue="{Binding ChatAssistant.SelectedChatMode, Mode=TwoWay}"
                                               SelectedValuePath="Mode"
                                               DisplayMemberPath="Label"
                                               Width="220"
                                               Margin="12,0,0,0"/>
                                 </StackPanel>
                                 <TextBlock Grid.Row="1"
-                                           Text="{Binding ChatStatusMessage}"
+                                           Text="{Binding ChatAssistant.ChatStatusMessage}"
                                            FontWeight="SemiBold"
                                            TextWrapping="Wrap"
                                            Margin="0,8,0,0"/>
                                 <StackPanel Grid.Row="2" Orientation="Horizontal" Margin="0,8,0,0" HorizontalAlignment="Left">
-                                    <TextBlock Text="{Binding TotalPromptTokens, StringFormat=Prompt tokens: {0:N0}}" />
-                                    <TextBlock Text="{Binding TotalCompletionTokens, StringFormat=Completion tokens: {0:N0}}" Margin="16,0,0,0" />
-                                    <TextBlock Text="{Binding TotalTokens, StringFormat=Total tokens: {0:N0}}" Margin="16,0,0,0" />
-                                    <TextBlock Text="{Binding TotalCostUsd, StringFormat=Cost: ${0:F2}}" Margin="16,0,0,0" />
+                                    <TextBlock Text="{Binding ChatAssistant.TotalPromptTokens, StringFormat=Prompt tokens: {0:N0}}" />
+                                    <TextBlock Text="{Binding ChatAssistant.TotalCompletionTokens, StringFormat=Completion tokens: {0:N0}}" Margin="16,0,0,0" />
+                                    <TextBlock Text="{Binding ChatAssistant.ChatTotalTokenTotal, StringFormat=Total tokens: {0:N0}}" Margin="16,0,0,0" />
+                                    <TextBlock Text="{Binding ChatAssistant.TotalCostUsd, StringFormat=Cost: ${0:F2}}" Margin="16,0,0,0" />
                                 </StackPanel>
                                 <StackPanel Grid.Row="3" Orientation="Horizontal" Margin="0,8,0,0" VerticalAlignment="Center">
                                     <TextBlock Text="Prompt budget:" FontWeight="SemiBold" VerticalAlignment="Center"/>
                                     <TextBox Width="100"
                                              Margin="8,0,0,0"
                                              HorizontalContentAlignment="Right"
-                                             Text="{Binding ChatMaxPromptTokens, UpdateSourceTrigger=PropertyChanged}"
+                                             Text="{Binding ChatAssistant.ChatMaxPromptTokens, UpdateSourceTrigger=PropertyChanged}"
                                              ToolTip="Stop sending new requests after this many prompt tokens are consumed. Leave blank to disable the prompt-token budget."/>
                                     <TextBlock Text="Total budget:" Margin="16,0,0,0" FontWeight="SemiBold" VerticalAlignment="Center"/>
                                     <TextBox Width="100"
                                              Margin="8,0,0,0"
                                              HorizontalContentAlignment="Right"
-                                             Text="{Binding ChatMaxTotalTokens, UpdateSourceTrigger=PropertyChanged}"
+                                             Text="{Binding ChatAssistant.ChatMaxTotalTokens, UpdateSourceTrigger=PropertyChanged}"
                                              ToolTip="Stop sending new requests after this many total tokens are consumed. Leave blank to disable the total-token budget."/>
                                     <TextBlock Text="Cost budget (USD):" Margin="16,0,0,0" FontWeight="SemiBold" VerticalAlignment="Center"/>
                                     <TextBox Width="90"
                                              Margin="8,0,0,0"
                                              HorizontalContentAlignment="Right"
-                                             Text="{Binding ChatMaxCostUsd, UpdateSourceTrigger=PropertyChanged}"
+                                             Text="{Binding ChatAssistant.ChatMaxCostUsd, UpdateSourceTrigger=PropertyChanged}"
                                              ToolTip="Stop sending new requests after this amount is spent. Leave blank to disable the cost budget."/>
                                 </StackPanel>
                                 <StackPanel Grid.Row="4" Orientation="Horizontal" Margin="0,8,0,0" HorizontalAlignment="Right">
                                     <Button Content="Save transcript"
-                                            Command="{Binding SaveChatTranscriptCommand}"
+                                            Command="{Binding ChatAssistant.SaveChatTranscriptCommand}"
                                             Padding="12,4"/>
                                     <Button Content="Clear history"
-                                            Command="{Binding ClearChatHistoryCommand}"
+                                            Command="{Binding ChatAssistant.ClearChatHistoryCommand}"
                                             Padding="12,4"
                                             Margin="8,0,0,0"/>
                                 </StackPanel>
                                 <Border Grid.Row="5" BorderBrush="#FFD9D9D9" BorderThickness="1" Padding="8" Margin="0,8,0,8">
                                     <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-                                        <ItemsControl ItemsSource="{Binding ChatMessages}">
+                                        <ItemsControl ItemsSource="{Binding ChatAssistant.ChatMessages}">
                                             <ItemsControl.ItemTemplate>
                                                 <DataTemplate DataType="{x:Type models:ChatMessage}">
                                                     <Border Margin="0,4,0,4" Padding="8">
@@ -444,7 +444,7 @@
                                     </ScrollViewer>
                                 </Border>
                                 <TextBox Grid.Row="6"
-                                         Text="{Binding ChatInput, UpdateSourceTrigger=PropertyChanged}"
+                                         Text="{Binding ChatAssistant.ChatInput, UpdateSourceTrigger=PropertyChanged}"
                                          AcceptsReturn="True"
                                          Height="80"
                                          TextWrapping="Wrap"
@@ -452,13 +452,13 @@
                                          Margin="0,0,0,8"/>
                                 <StackPanel Grid.Row="7" Orientation="Horizontal" HorizontalAlignment="Right">
                                     <Button Content="Send"
-                                            Command="{Binding SendChatCommand}"
+                                            Command="{Binding ChatAssistant.SendChatCommand}"
                                             Padding="16,6"/>
                                     <Button Content="Cancel response"
-                                            Command="{Binding CancelChatCommand}"
+                                            Command="{Binding ChatAssistant.CancelChatCommand}"
                                             Padding="12,6"
                                             Margin="8,0,0,0"
-                                            Visibility="{Binding IsChatBusy, Converter={StaticResource BoolToVisibility}}"/>
+                                            Visibility="{Binding ChatAssistant.IsChatBusy, Converter={StaticResource BoolToVisibility}}"/>
                                 </StackPanel>
                             </Grid>
                         </TabItem>
@@ -861,27 +861,27 @@
                                                     <Style TargetType="TextBlock">
                                                         <Setter Property="Visibility" Value="Collapsed"/>
                                                         <Style.Triggers>
-                                                            <DataTrigger Binding="{Binding HasAiRecommendations}" Value="False">
+                                                            <DataTrigger Binding="{Binding ChatAssistant.HasAiRecommendations}" Value="False">
                                                                 <Setter Property="Visibility" Value="Visible"/>
                                                             </DataTrigger>
                                                         </Style.Triggers>
                                                     </Style>
                                                 </TextBlock.Style>
                                             </TextBlock>
-                                            <TextBlock Text="{Binding LatestRunAiAnnotationTimestamp, StringFormat=Generated at: {0:O}}"
+                                            <TextBlock Text="{Binding ChatAssistant.LatestRunAiAnnotationTimestamp, StringFormat=Generated at: {0:O}}"
                                                        Margin="0,0,0,8">
                                                 <TextBlock.Style>
                                                     <Style TargetType="TextBlock">
                                                         <Setter Property="Visibility" Value="Visible"/>
                                                         <Style.Triggers>
-                                                            <DataTrigger Binding="{Binding LatestRunAiAnnotationTimestamp}" Value="{x:Null}">
+                                                            <DataTrigger Binding="{Binding ChatAssistant.LatestRunAiAnnotationTimestamp}" Value="{x:Null}">
                                                                 <Setter Property="Visibility" Value="Collapsed"/>
                                                             </DataTrigger>
                                                         </Style.Triggers>
                                                     </Style>
                                                 </TextBlock.Style>
                                             </TextBlock>
-                                            <TextBox Text="{Binding LatestRunAiRecommendationSummary, Mode=OneWay}"
+                                            <TextBox Text="{Binding ChatAssistant.LatestRunAiRecommendationSummary, Mode=OneWay}"
                                                      IsReadOnly="True"
                                                      TextWrapping="Wrap"
                                                      AcceptsReturn="True"
@@ -892,19 +892,19 @@
                                                     <Style TargetType="TextBox">
                                                         <Setter Property="Visibility" Value="Collapsed"/>
                                                         <Style.Triggers>
-                                                            <DataTrigger Binding="{Binding HasAiRecommendations}" Value="True">
+                                                            <DataTrigger Binding="{Binding ChatAssistant.HasAiRecommendations}" Value="True">
                                                                 <Setter Property="Visibility" Value="Visible"/>
                                                             </DataTrigger>
                                                         </Style.Triggers>
                                                     </Style>
                                                 </TextBox.Style>
                                             </TextBox>
-                                            <ItemsControl ItemsSource="{Binding LatestRunAiRecommendations}">
+                                            <ItemsControl ItemsSource="{Binding ChatAssistant.LatestRunAiRecommendations}">
                                                 <ItemsControl.Style>
                                                     <Style TargetType="ItemsControl">
                                                         <Setter Property="Visibility" Value="Collapsed"/>
                                                         <Style.Triggers>
-                                                            <DataTrigger Binding="{Binding HasAiRecommendations}" Value="True">
+                                                            <DataTrigger Binding="{Binding ChatAssistant.HasAiRecommendations}" Value="True">
                                                                 <Setter Property="Visibility" Value="Visible"/>
                                                             </DataTrigger>
                                                         </Style.Triggers>
@@ -974,7 +974,7 @@
                                                                         <ItemsControl.ItemTemplate>
                                                                             <DataTemplate>
                                                                                 <Button Content="{Binding}"
-                                                                                        Command="{Binding DataContext.UseAiRecommendationCommand, RelativeSource={RelativeSource AncestorType=TabItem}}"
+                                                                                        Command="{Binding DataContext.ChatAssistant.UseAiRecommendationCommand, RelativeSource={RelativeSource AncestorType=TabItem}}"
                                                                                         CommandParameter="{Binding}"
                                                                                         Margin="0,4,0,0"
                                                                                         HorizontalAlignment="Left"/>
@@ -1006,16 +1006,16 @@
                     <Button Content="Open Logs" Command="{Binding OpenLogCommand}" Padding="12,4" />
                 </StatusBarItem>
                 <StatusBarItem>
-                    <TextBlock Text="{Binding TotalPromptTokens, StringFormat=Prompt: {0:N0}}" />
+                    <TextBlock Text="{Binding ChatAssistant.TotalPromptTokens, StringFormat=Prompt: {0:N0}}" />
                 </StatusBarItem>
                 <StatusBarItem>
-                    <TextBlock Text="{Binding TotalCompletionTokens, StringFormat=Completion: {0:N0}}" />
+                    <TextBlock Text="{Binding ChatAssistant.TotalCompletionTokens, StringFormat=Completion: {0:N0}}" />
                 </StatusBarItem>
                 <StatusBarItem>
-                    <TextBlock Text="{Binding TotalTokens, StringFormat=Total: {0:N0}}" />
+                    <TextBlock Text="{Binding ChatAssistant.ChatTotalTokenTotal, StringFormat=Total: {0:N0}}" />
                 </StatusBarItem>
                 <StatusBarItem>
-                    <TextBlock Text="{Binding TotalCostUsd, StringFormat=Cost: ${0:F2}}" />
+                    <TextBlock Text="{Binding ChatAssistant.TotalCostUsd, StringFormat=Cost: ${0:F2}}" />
                 </StatusBarItem>
                 <StatusBarItem>
                     <TextBlock Text="{Binding IsRunning, StringFormat=Running: {0}}" />

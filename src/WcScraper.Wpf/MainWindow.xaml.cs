@@ -20,32 +20,32 @@ namespace WcScraper.Wpf
         {
             if (e.OldValue is MainViewModel oldViewModel)
             {
-                oldViewModel.PropertyChanged -= OnMainViewModelPropertyChanged;
+                oldViewModel.ChatAssistant.PropertyChanged -= OnChatAssistantPropertyChanged;
             }
 
             if (e.NewValue is MainViewModel newViewModel)
             {
-                newViewModel.PropertyChanged += OnMainViewModelPropertyChanged;
+                newViewModel.ChatAssistant.PropertyChanged += OnChatAssistantPropertyChanged;
                 if (ChatApiKeyBox is not null)
                 {
                     _suppressPasswordUpdate = true;
-                    ChatApiKeyBox.Password = newViewModel.ChatApiKey ?? string.Empty;
+                    ChatApiKeyBox.Password = newViewModel.ChatAssistant.ChatApiKey ?? string.Empty;
                     _suppressPasswordUpdate = false;
                 }
             }
         }
 
-        private void OnMainViewModelPropertyChanged(object? sender, PropertyChangedEventArgs e)
+        private void OnChatAssistantPropertyChanged(object? sender, PropertyChangedEventArgs e)
         {
-            if (!string.Equals(e.PropertyName, nameof(MainViewModel.ChatApiKey), StringComparison.Ordinal))
+            if (!string.Equals(e.PropertyName, nameof(ChatAssistantViewModel.ChatApiKey), StringComparison.Ordinal))
             {
                 return;
             }
 
-            if (sender is MainViewModel viewModel && ChatApiKeyBox is not null)
+            if (sender is ChatAssistantViewModel chatAssistant && ChatApiKeyBox is not null)
             {
                 _suppressPasswordUpdate = true;
-                ChatApiKeyBox.Password = viewModel.ChatApiKey ?? string.Empty;
+                ChatApiKeyBox.Password = chatAssistant.ChatApiKey ?? string.Empty;
                 _suppressPasswordUpdate = false;
             }
         }
@@ -59,7 +59,7 @@ namespace WcScraper.Wpf
 
             if (DataContext is MainViewModel viewModel && sender is PasswordBox passwordBox)
             {
-                viewModel.ChatApiKey = passwordBox.Password;
+                viewModel.ChatAssistant.ChatApiKey = passwordBox.Password;
             }
         }
     }
