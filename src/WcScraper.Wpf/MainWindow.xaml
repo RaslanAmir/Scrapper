@@ -241,14 +241,14 @@
         <GroupBox Grid.Row="5" Grid.ColumnSpan="3" Header="Provisioning (WooCommerce target)" Margin="0,12,0,8">
             <StackPanel Margin="8">
                 <TextBlock Text="Target base URL:" Margin="0,0,0,4"/>
-                <TextBox Text="{Binding TargetStoreUrl, UpdateSourceTrigger=PropertyChanged}" MinWidth="320"/>
+                <TextBox Text="{Binding Provisioning.TargetStoreUrl, UpdateSourceTrigger=PropertyChanged}" MinWidth="320"/>
                 <TextBlock Text="Consumer key:" Margin="0,8,0,4"/>
-                <TextBox Text="{Binding TargetConsumerKey, UpdateSourceTrigger=PropertyChanged}"/>
+                <TextBox Text="{Binding Provisioning.TargetConsumerKey, UpdateSourceTrigger=PropertyChanged}"/>
                 <TextBlock Text="Consumer secret:" Margin="0,8,0,4"/>
-                <TextBox Text="{Binding TargetConsumerSecret, UpdateSourceTrigger=PropertyChanged}"/>
+                <TextBox Text="{Binding Provisioning.TargetConsumerSecret, UpdateSourceTrigger=PropertyChanged}"/>
                 <TextBlock Text="Run an export, then configure the target WooCommerce REST credentials and click Replicate store." TextWrapping="Wrap" Margin="0,12,0,8"/>
                 <CheckBox Content="Apply captured store configuration before provisioning"
-                          IsChecked="{Binding ImportStoreConfiguration}"
+                          IsChecked="{Binding Provisioning.ImportStoreConfiguration}"
                           Margin="0,0,0,4"/>
                 <TextBlock Text="Requires an export with store configuration enabled and WordPress credentials."
                            TextWrapping="Wrap"

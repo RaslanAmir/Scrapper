@@ -572,7 +572,7 @@ public sealed class OnboardingWizardViewModel : INotifyPropertyChanged, IDisposa
             exports.PublicDesignSnapshot ?? _mainViewModel.ExportPublicDesignSnapshot,
             exports.PublicDesignScreenshots ?? _mainViewModel.ExportPublicDesignScreenshots,
             exports.StoreConfiguration ?? _mainViewModel.ExportStoreConfiguration,
-            exports.ImportStoreConfiguration ?? _mainViewModel.ImportStoreConfiguration,
+            exports.ImportStoreConfiguration ?? _mainViewModel.Provisioning.ImportStoreConfiguration,
             retry.Enable ?? _mainViewModel.EnableHttpRetries,
             retry.Attempts ?? _mainViewModel.HttpRetryAttempts,
             retry.BaseDelaySeconds ?? _mainViewModel.HttpRetryBaseDelaySeconds,
