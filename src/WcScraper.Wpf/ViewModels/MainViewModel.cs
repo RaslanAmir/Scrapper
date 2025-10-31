@@ -45,7 +45,6 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private readonly WordPressDirectoryClient _wpDirectoryClient;
     private readonly IScraperInstrumentation _uiInstrumentation;
     private readonly ChatAssistantService _chatAssistantService;
-    private readonly ChatTranscriptStore _chatTranscriptStore;
     private readonly IArtifactIndexingService _artifactIndexingService;
     private readonly ILoggerFactory _loggerFactory;
     private readonly ILogger<MainViewModel> _logger;
@@ -55,21 +54,11 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private readonly Dictionary<string, (Func<bool> Getter, Action<bool> Setter)> _assistantToggleBindings;
     public ExportPlanningViewModel ExportPlanning { get; }
     private static readonly TimeSpan DirectoryLookupDelay = TimeSpan.FromMilliseconds(400);
-    private const string ApplyAssistantDirectivesCommand = "/apply-directives";
-    private const string DiscardAssistantDirectivesCommand = "/discard-directives";
     private const int RunSnapshotHistoryLimit = 6;
     private const string RunSnapshotHistoryFolderName = ".run-history";
     private const string RunDeltaNarrativeFileName = "manual-migration-report.delta.md";
     private const string RunDeltaDataFileName = "manual-migration-report.delta.json";
     private const string ExportVerificationFileName = "export-verification.ai.md";
-    private static readonly HashSet<string> s_riskyAssistantOptions = new(StringComparer.OrdinalIgnoreCase)
-    {
-        nameof(ExportPublicExtensionFootprints),
-        nameof(ExportPublicDesignSnapshot),
-        nameof(ExportPublicDesignScreenshots),
-        nameof(ExportStoreConfiguration),
-        nameof(ImportStoreConfiguration),
-    };
     private bool _isRunning;
     private string _storeUrl = "";
     private string _outputFolder = Path.GetFullPath("output");
@@ -117,25 +106,6 @@ public sealed class MainViewModel : INotifyPropertyChanged
         WriteIndented = true,
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
     };
-    private string _chatApiEndpoint = string.Empty;
-    private string _chatModel = string.Empty;
-    private string _chatSystemPrompt = "You are a helpful assistant for WC Local Scraper exports.";
-    private string _chatApiKey = string.Empty;
-    private bool _hasChatApiKey;
-    private bool _isChatBusy;
-    private string _chatInput = string.Empty;
-    private string _chatStatusMessage = "Enter API endpoint, model, and API key to enable the assistant.";
-    private int _chatPromptTokenTotal;
-    private int _chatCompletionTokenTotal;
-    private int _chatTotalTokenTotal;
-    private long _totalPromptTokens;
-    private long _totalCompletionTokens;
-    private decimal _totalCostUsd;
-    private int? _chatMaxPromptTokens;
-    private int? _chatMaxTotalTokens;
-    private decimal? _chatMaxCostUsd;
-    private decimal? _chatPromptTokenUsdPerThousand;
-    private decimal? _chatCompletionTokenUsdPerThousand;
     private readonly TimeSpan _logSummaryDebounce = TimeSpan.FromSeconds(6);
     private readonly object _logSummarySync = new();
     private System.Threading.Timer? _logSummaryTimer;
@@ -152,23 +122,13 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private string? _latestManualReportPath;
     private string? _latestManualBundlePath;
     private string? _latestRunDeltaPath;
-    private bool _isAssistantPanelExpanded;
     private string _latestRunAiRecommendationSummary = string.Empty;
     private AiArtifactAnnotation? _latestRunAiAnnotation;
-    private AssistantDirectiveBatch? _pendingAssistantDirectives;
     private CancellationTokenSource? _runCts;
-    private CancellationTokenSource? _chatCts;
     private readonly ObservableCollection<AutomationScriptDisplay> _latestAutomationScripts = new();
     private readonly ObservableCollection<string> _latestAutomationScriptWarnings = new();
     private string _latestAutomationScriptSummary = string.Empty;
     private string _latestAutomationScriptError = string.Empty;
-    private readonly IReadOnlyList<ChatModeOption> _chatModeOptions = new[]
-    {
-        new ChatModeOption(ChatInteractionMode.GeneralAssistant, "General assistant"),
-        new ChatModeOption(ChatInteractionMode.DatasetQuestion, "Ask about exported data"),
-    };
-    private ChatInteractionMode _selectedChatMode = ChatInteractionMode.GeneralAssistant;
-    private int _chatTranscriptLoadState;
 
     public MainViewModel(IDialogService dialogs, ILoggerFactory loggerFactory)
         : this(
@@ -239,7 +199,6 @@ public sealed class MainViewModel : INotifyPropertyChanged
         _settingsDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "WcScraper");
         _preferencesPath = Path.Combine(_settingsDirectory, "preferences.json");
         _chatKeyPath = Path.Combine(_settingsDirectory, "chat.key");
-        _chatTranscriptStore = new ChatTranscriptStore(_settingsDirectory);
         var dispatcher = System.Windows.Application.Current?.Dispatcher ?? System.Windows.Threading.Dispatcher.CurrentDispatcher;
         _assistantToggleBindings = new Dictionary<string, (Func<bool>, Action<bool>)>(StringComparer.OrdinalIgnoreCase)
         {
@@ -298,23 +257,48 @@ public sealed class MainViewModel : INotifyPropertyChanged
         OpenLogCommand = new RelayCommand(OnOpenLog);
         ExplainLogsCommand = new RelayCommand(async () => await OnExplainLatestLogsAsync(), CanExplainLogs);
         LaunchWizardCommand = new RelayCommand(OnLaunchWizard, CanLaunchWizard);
-        SendChatCommand = new RelayCommand(async () => await OnSendChatAsync(), CanSendChat);
-        CancelChatCommand = new RelayCommand(OnCancelChat, CanCancelChat);
-        SaveChatTranscriptCommand = new RelayCommand(async () => await OnSaveChatTranscriptAsync(), CanSaveChatTranscript);
-        ClearChatHistoryCommand = new RelayCommand(async () => await OnClearChatHistoryAsync(), CanClearChatHistory);
-        UseAiRecommendationCommand = new RelayCommand<string?>(OnUseAiRecommendation);
         CopyAutomationScriptCommand = new RelayCommand<AutomationScriptDisplay>(OnCopyAutomationScript);
-        ChatMessages = new ObservableCollection<ChatMessage>();
-        ChatMessages.CollectionChanged += OnChatMessagesCollectionChanged;
         LatestRunAiRecommendations.CollectionChanged += (_, __) => OnPropertyChanged(nameof(HasAiRecommendations));
         _latestAutomationScripts.CollectionChanged += (_, __) => OnPropertyChanged(nameof(HasAutomationScripts));
         _latestAutomationScriptWarnings.CollectionChanged += (_, __) => OnPropertyChanged(nameof(HasAutomationScriptWarnings));
         Logs.CollectionChanged += OnLogsCollectionChanged;
         LoadPreferences();
-        LoadChatApiKey();
-        UpdateChatConfigurationStatus();
         _artifactIndexingService.IndexChanged += OnArtifactIndexChanged;
-        _ = EnsureChatTranscriptLoadedAsync();
+
+        var chatTranscriptStore = new ChatTranscriptStore(_settingsDirectory);
+        ChatAssistant = new ChatAssistantViewModel(
+            _chatAssistantService,
+            chatTranscriptStore,
+            _artifactIndexingService,
+            _dialogs,
+            Append,
+            _assistantToggleBindings,
+            CaptureChatAssistantHostSnapshot,
+            ResolveBaseOutputFolder,
+            () => OutputFolder,
+            () => Logs.ToList(),
+            () => RunCommand.CanExecute(null),
+            () => RunCommand.Execute(null),
+            () => IsRunning,
+            plan => ExportPlanning.EnqueuePlan(plan),
+            () => _latestStoreOutputFolder,
+            () => _latestManualBundlePath,
+            () => _latestManualReportPath,
+            () => _latestRunDeltaPath,
+            () => LatestRunAiBriefPath,
+            () => LatestRunSnapshotJson,
+            ExecuteOnUiThread,
+            () => EnableHttpRetries,
+            value => EnableHttpRetries = value,
+            () => HttpRetryAttempts,
+            value => HttpRetryAttempts = value,
+            () => HttpRetryBaseDelaySeconds,
+            value => HttpRetryBaseDelaySeconds = value,
+            () => HttpRetryMaxDelaySeconds,
+            value => HttpRetryMaxDelaySeconds = value,
+            _chatKeyPath);
+        ChatAssistant.PropertyChanged += OnChatAssistantPropertyChanged;
+        _ = ChatAssistant.EnsureChatTranscriptLoadedAsync();
 
     }
 
@@ -1113,1861 +1097,126 @@ public sealed class MainViewModel : INotifyPropertyChanged
     }
     public bool CanReplicate => _lastProvisioningContext is { Products.Count: > 0 };
 
-    public ObservableCollection<ChatMessage> ChatMessages { get; }
+    public ChatAssistantViewModel ChatAssistant { get; }
 
-    public bool HasChatMessages => ChatMessages.Count > 0;
+    public ObservableCollection<ChatMessage> ChatMessages => ChatAssistant.ChatMessages;
 
-    public int ChatPromptTokenTotal
-    {
-        get => _chatPromptTokenTotal;
-        private set
-        {
-            if (_chatPromptTokenTotal == value)
-            {
-                return;
-            }
+    public bool HasChatMessages => ChatAssistant.HasChatMessages;
 
-            _chatPromptTokenTotal = value;
-            OnPropertyChanged();
-        }
-    }
+    public int ChatPromptTokenTotal => ChatAssistant.ChatPromptTokenTotal;
 
-    public int ChatCompletionTokenTotal
-    {
-        get => _chatCompletionTokenTotal;
-        private set
-        {
-            if (_chatCompletionTokenTotal == value)
-            {
-                return;
-            }
+    public int ChatCompletionTokenTotal => ChatAssistant.ChatCompletionTokenTotal;
 
-            _chatCompletionTokenTotal = value;
-            OnPropertyChanged();
-        }
-    }
+    public int ChatTotalTokenTotal => ChatAssistant.ChatTotalTokenTotal;
 
-    public int ChatTotalTokenTotal
-    {
-        get => _chatTotalTokenTotal;
-        private set
-        {
-            if (_chatTotalTokenTotal == value)
-            {
-                return;
-            }
+    public long TotalPromptTokens => ChatAssistant.TotalPromptTokens;
 
-            _chatTotalTokenTotal = value;
-            OnPropertyChanged();
-        }
-    }
+    public long TotalCompletionTokens => ChatAssistant.TotalCompletionTokens;
 
-    public long TotalPromptTokens
-    {
-        get => _totalPromptTokens;
-        private set
-        {
-            if (_totalPromptTokens == value)
-            {
-                return;
-            }
+    public long TotalTokens => ChatAssistant.TotalPromptTokens + ChatAssistant.TotalCompletionTokens;
 
-            _totalPromptTokens = value;
-            OnPropertyChanged();
-            OnPropertyChanged(nameof(TotalTokens));
-        }
-    }
+    public decimal TotalCostUsd => ChatAssistant.TotalCostUsd;
 
-    public long TotalCompletionTokens
-    {
-        get => _totalCompletionTokens;
-        private set
-        {
-            if (_totalCompletionTokens == value)
-            {
-                return;
-            }
+    public RelayCommand SendChatCommand => ChatAssistant.SendChatCommand;
 
-            _totalCompletionTokens = value;
-            OnPropertyChanged();
-            OnPropertyChanged(nameof(TotalTokens));
-        }
-    }
+    public RelayCommand CancelChatCommand => ChatAssistant.CancelChatCommand;
 
-    public long TotalTokens => TotalPromptTokens + TotalCompletionTokens;
+    public RelayCommand SaveChatTranscriptCommand => ChatAssistant.SaveChatTranscriptCommand;
 
-    public decimal TotalCostUsd
-    {
-        get => _totalCostUsd;
-        private set
-        {
-            if (_totalCostUsd == value)
-            {
-                return;
-            }
+    public RelayCommand ClearChatHistoryCommand => ChatAssistant.ClearChatHistoryCommand;
 
-            _totalCostUsd = value;
-            OnPropertyChanged();
-        }
-    }
-
-    public RelayCommand SendChatCommand { get; }
-    public RelayCommand CancelChatCommand { get; }
-    public RelayCommand SaveChatTranscriptCommand { get; }
-    public RelayCommand ClearChatHistoryCommand { get; }
+    public RelayCommand<string?> UseAiRecommendationCommand => ChatAssistant.UseAiRecommendationCommand;
 
     public string ChatApiEndpoint
     {
-        get => _chatApiEndpoint;
-        set
-        {
-            var newValue = value?.Trim() ?? string.Empty;
-            if (_chatApiEndpoint == newValue)
-            {
-                return;
-            }
-
-            _chatApiEndpoint = newValue;
-            OnPropertyChanged();
-            OnPropertyChanged(nameof(HasChatConfiguration));
-            SavePreferences();
-            SendChatCommand.RaiseCanExecuteChanged();
-            LaunchWizardCommand?.RaiseCanExecuteChanged();
-            UpdateChatConfigurationStatus();
-        }
+        get => ChatAssistant.ChatApiEndpoint;
+        set => ChatAssistant.ChatApiEndpoint = value;
     }
 
     public string ChatModel
     {
-        get => _chatModel;
-        set
-        {
-            var newValue = value?.Trim() ?? string.Empty;
-            if (_chatModel == newValue)
-            {
-                return;
-            }
-
-            _chatModel = newValue;
-            OnPropertyChanged();
-            OnPropertyChanged(nameof(HasChatConfiguration));
-            SavePreferences();
-            SendChatCommand.RaiseCanExecuteChanged();
-            LaunchWizardCommand?.RaiseCanExecuteChanged();
-            UpdateChatConfigurationStatus();
-        }
+        get => ChatAssistant.ChatModel;
+        set => ChatAssistant.ChatModel = value;
     }
 
     public string ChatSystemPrompt
     {
-        get => _chatSystemPrompt;
-        set
-        {
-            var newValue = value ?? string.Empty;
-            if (_chatSystemPrompt == newValue)
-            {
-                return;
-            }
-
-            _chatSystemPrompt = newValue;
-            OnPropertyChanged();
-            SavePreferences();
-        }
+        get => ChatAssistant.ChatSystemPrompt;
+        set => ChatAssistant.ChatSystemPrompt = value;
     }
 
     public string ChatApiKey
     {
-        get => _chatApiKey;
-        set
-        {
-            var newValue = value?.Trim() ?? string.Empty;
-            if (_chatApiKey == newValue)
-            {
-                return;
-            }
-
-            _chatApiKey = newValue;
-            OnPropertyChanged();
-            if (!TryPersistChatApiKey(newValue) && !string.IsNullOrWhiteSpace(newValue))
-            {
-                ChatStatusMessage = "Unable to persist API key securely. The key will be kept for this session only.";
-            }
-
-            HasChatApiKey = !string.IsNullOrWhiteSpace(newValue);
-        }
+        get => ChatAssistant.ChatApiKey;
+        set => ChatAssistant.ChatApiKey = value;
     }
 
-    public bool HasChatApiKey
-    {
-        get => _hasChatApiKey;
-        private set
-        {
-            if (_hasChatApiKey == value)
-            {
-                return;
-            }
+    public bool HasChatApiKey => ChatAssistant.HasChatApiKey;
 
-            _hasChatApiKey = value;
-            OnPropertyChanged();
-            OnPropertyChanged(nameof(HasChatConfiguration));
-            SendChatCommand.RaiseCanExecuteChanged();
-            LaunchWizardCommand?.RaiseCanExecuteChanged();
-            UpdateChatConfigurationStatus();
-        }
-    }
+    public bool HasChatConfiguration => ChatAssistant.HasChatConfiguration;
 
-    public bool HasChatConfiguration => HasChatApiKey
-        && !string.IsNullOrWhiteSpace(ChatApiEndpoint)
-        && !string.IsNullOrWhiteSpace(ChatModel);
-
-    public IReadOnlyList<ChatModeOption> ChatModeOptions => _chatModeOptions;
+    public IReadOnlyList<ChatModeOption> ChatModeOptions => ChatAssistant.ChatModeOptions;
 
     public ChatInteractionMode SelectedChatMode
     {
-        get => _selectedChatMode;
-        set
-        {
-            if (_selectedChatMode == value)
-            {
-                return;
-            }
-
-            _selectedChatMode = value;
-            OnPropertyChanged();
-            ResetChatUsageTotals();
-            UpdateChatConfigurationStatus();
-        }
+        get => ChatAssistant.SelectedChatMode;
+        set => ChatAssistant.SelectedChatMode = value;
     }
 
-    public bool HasIndexedDatasets => _artifactIndexingService.HasAnyIndexedArtifacts;
+    public bool IsChatBusy => ChatAssistant.IsChatBusy;
 
-    public bool IsChatBusy
+    public bool IsAssistantPanelExpanded
     {
-        get => _isChatBusy;
-        private set
-        {
-            if (_isChatBusy == value)
-            {
-                return;
-            }
-
-            _isChatBusy = value;
-            OnPropertyChanged();
-            SendChatCommand.RaiseCanExecuteChanged();
-            CancelChatCommand?.RaiseCanExecuteChanged();
-        }
+        get => ChatAssistant.IsAssistantPanelExpanded;
+        set => ChatAssistant.IsAssistantPanelExpanded = value;
     }
 
     public string ChatInput
     {
-        get => _chatInput;
-        set
-        {
-            var newValue = value ?? string.Empty;
-            if (_chatInput == newValue)
-            {
-                return;
-            }
-
-            _chatInput = newValue;
-            OnPropertyChanged();
-            SendChatCommand.RaiseCanExecuteChanged();
-        }
+        get => ChatAssistant.ChatInput;
+        set => ChatAssistant.ChatInput = value;
     }
 
-    public string ChatStatusMessage
-    {
-        get => _chatStatusMessage;
-        private set
-        {
-            if (_chatStatusMessage == value)
-            {
-                return;
-            }
-
-            _chatStatusMessage = value;
-            OnPropertyChanged();
-        }
-    }
+    public string ChatStatusMessage => ChatAssistant.ChatStatusMessage;
 
     public int? ChatMaxPromptTokens
     {
-        get => _chatMaxPromptTokens;
-        set
-        {
-            if (_chatMaxPromptTokens == value)
-            {
-                return;
-            }
-
-            _chatMaxPromptTokens = value;
-            OnPropertyChanged();
-            SavePreferences();
-            UpdateChatConfigurationStatus();
-        }
+        get => ChatAssistant.ChatMaxPromptTokens;
+        set => ChatAssistant.ChatMaxPromptTokens = value;
     }
 
     public int? ChatMaxTotalTokens
     {
-        get => _chatMaxTotalTokens;
-        set
-        {
-            if (_chatMaxTotalTokens == value)
-            {
-                return;
-            }
-
-            _chatMaxTotalTokens = value;
-            OnPropertyChanged();
-            SavePreferences();
-            UpdateChatConfigurationStatus();
-        }
+        get => ChatAssistant.ChatMaxTotalTokens;
+        set => ChatAssistant.ChatMaxTotalTokens = value;
     }
 
     public decimal? ChatMaxCostUsd
     {
-        get => _chatMaxCostUsd;
-        set
-        {
-            if (_chatMaxCostUsd == value)
-            {
-                return;
-            }
-
-            _chatMaxCostUsd = value;
-            OnPropertyChanged();
-            SavePreferences();
-            UpdateChatConfigurationStatus();
-        }
+        get => ChatAssistant.ChatMaxCostUsd;
+        set => ChatAssistant.ChatMaxCostUsd = value;
     }
 
     public decimal? ChatPromptTokenUsdPerThousand
     {
-        get => _chatPromptTokenUsdPerThousand;
-        set
-        {
-            if (_chatPromptTokenUsdPerThousand == value)
-            {
-                return;
-            }
-
-            _chatPromptTokenUsdPerThousand = value;
-            OnPropertyChanged();
-            SavePreferences();
-        }
+        get => ChatAssistant.ChatPromptTokenUsdPerThousand;
+        set => ChatAssistant.ChatPromptTokenUsdPerThousand = value;
     }
 
     public decimal? ChatCompletionTokenUsdPerThousand
     {
-        get => _chatCompletionTokenUsdPerThousand;
-        set
-        {
-            if (_chatCompletionTokenUsdPerThousand == value)
-            {
-                return;
-            }
-
-            _chatCompletionTokenUsdPerThousand = value;
-            OnPropertyChanged();
-            SavePreferences();
-        }
-    }
-
-    // Selectable terms for filters
-    public ObservableCollection<SelectableTerm> CategoryChoices { get; } = new();
-    public ObservableCollection<SelectableTerm> TagChoices { get; } = new();
-
-    public ObservableCollection<string> Logs { get; } = new();
-    public ObservableCollection<LogTriageIssue> LogSummaryIssues { get; } = new();
-
-    public LogTriageResult? LatestLogSummary
-    {
-        get => _latestLogSummary;
-        private set
-        {
-            if (Equals(_latestLogSummary, value))
-            {
-                return;
-            }
-
-            _latestLogSummary = value;
-            OnPropertyChanged();
-            OnPropertyChanged(nameof(LatestLogSummaryStatus));
-        }
-    }
-
-    public string LatestLogSummaryOverview
-    {
-        get => _latestLogSummaryOverview;
-        private set
-        {
-            if (_latestLogSummaryOverview == value)
-            {
-                return;
-            }
-
-            _latestLogSummaryOverview = value;
-            OnPropertyChanged();
-        }
-    }
-
-    public string ManualRunGoals
-    {
-        get => _manualRunGoals;
-        set
-        {
-            var newValue = value ?? string.Empty;
-            if (_manualRunGoals == newValue)
-            {
-                return;
-            }
-
-            _manualRunGoals = newValue;
-            OnPropertyChanged();
-        }
-    }
-
-    public string LatestRunSnapshotJson
-    {
-        get => _latestRunSnapshotJson;
-        private set
-        {
-            if (_latestRunSnapshotJson == value)
-            {
-                return;
-            }
-
-            _latestRunSnapshotJson = value;
-            OnPropertyChanged();
-        }
-    }
-
-    public string LatestRunAiNarrative
-    {
-        get => _latestRunAiNarrative;
-        private set
-        {
-            if (_latestRunAiNarrative == value)
-            {
-                return;
-            }
-
-            _latestRunAiNarrative = value;
-            OnPropertyChanged();
-        }
-    }
-
-    public string? LatestRunAiBriefPath
-    {
-        get => _latestRunAiBriefPath;
-        private set
-        {
-            if (_latestRunAiBriefPath == value)
-            {
-                return;
-            }
-
-            _latestRunAiBriefPath = value;
-            OnPropertyChanged();
-        }
-    }
-
-    public string LatestRunAiRecommendationSummary
-    {
-        get => _latestRunAiRecommendationSummary;
-        private set
-        {
-            if (_latestRunAiRecommendationSummary == value)
-            {
-                return;
-            }
-
-            _latestRunAiRecommendationSummary = value;
-            OnPropertyChanged();
-            OnPropertyChanged(nameof(HasAiRecommendations));
-        }
-    }
-
-    public ObservableCollection<AiRecommendation> LatestRunAiRecommendations { get; } = new();
-
-    public bool HasAiRecommendations => LatestRunAiRecommendations.Count > 0 || !string.IsNullOrWhiteSpace(LatestRunAiRecommendationSummary);
-
-    public AiArtifactAnnotation? LatestRunAiAnnotation
-    {
-        get => _latestRunAiAnnotation;
-        private set
-        {
-            if (Equals(_latestRunAiAnnotation, value))
-            {
-                return;
-            }
-
-            _latestRunAiAnnotation = value;
-            OnPropertyChanged();
-            OnPropertyChanged(nameof(LatestRunAiAnnotationTimestamp));
-        }
-    }
-
-    public DateTimeOffset? LatestRunAiAnnotationTimestamp => LatestRunAiAnnotation?.GeneratedAt;
-
-    public ObservableCollection<AutomationScriptDisplay> LatestAutomationScripts => _latestAutomationScripts;
-
-    public ObservableCollection<string> LatestAutomationScriptWarnings => _latestAutomationScriptWarnings;
-
-    public string LatestAutomationScriptSummary
-    {
-        get => _latestAutomationScriptSummary;
-        private set
-        {
-            if (_latestAutomationScriptSummary == value)
-            {
-                return;
-            }
-
-            _latestAutomationScriptSummary = value;
-            OnPropertyChanged();
-            OnPropertyChanged(nameof(HasAutomationScriptSummary));
-        }
-    }
-
-    public string LatestAutomationScriptError
-    {
-        get => _latestAutomationScriptError;
-        private set
-        {
-            if (_latestAutomationScriptError == value)
-            {
-                return;
-            }
-
-            _latestAutomationScriptError = value;
-            OnPropertyChanged();
-            OnPropertyChanged(nameof(HasAutomationScriptError));
-        }
-    }
-
-    public bool HasAutomationScripts => LatestAutomationScripts.Count > 0;
-
-    public bool HasAutomationScriptWarnings => LatestAutomationScriptWarnings.Count > 0;
-
-    public bool HasAutomationScriptError => !string.IsNullOrWhiteSpace(LatestAutomationScriptError);
-
-    public bool HasAutomationScriptSummary => !string.IsNullOrWhiteSpace(LatestAutomationScriptSummary);
-
-    public bool IsAssistantPanelExpanded
-    {
-        get => _isAssistantPanelExpanded;
-        set
-        {
-            if (_isAssistantPanelExpanded == value)
-            {
-                return;
-            }
-
-            _isAssistantPanelExpanded = value;
-            OnPropertyChanged();
-            if (value)
-            {
-                _ = EnsureChatTranscriptLoadedAsync();
-            }
-        }
-    }
-
-    public string? LatestLogSummaryStatus => BuildLogSummaryStatus(LatestLogSummary);
-
-    public bool IsLogSummaryBusy
-    {
-        get => _isLogSummaryBusy;
-        private set
-        {
-            if (_isLogSummaryBusy == value)
-            {
-                return;
-            }
-
-            _isLogSummaryBusy = value;
-            OnPropertyChanged();
-        }
-    }
-
-    public RelayCommand BrowseCommand { get; }
-    public RelayCommand RunCommand { get; }
-    public RelayCommand CancelRunCommand { get; }
-    public RelayCommand SelectAllCategoriesCommand { get; }
-    public RelayCommand ClearCategoriesCommand { get; }
-    public RelayCommand SelectAllTagsCommand { get; }
-    public RelayCommand ClearTagsCommand { get; }
-    public RelayCommand ExportCollectionsCommand { get; }
-    public RelayCommand ReplicateCommand { get; }
-    public RelayCommand OpenLogCommand { get; }
-    public RelayCommand ExplainLogsCommand { get; }
-    public RelayCommand LaunchWizardCommand { get; }
-    public ICommand UseAiRecommendationCommand { get; }
-    public ICommand CopyAutomationScriptCommand { get; }
-
-    private void OnBrowse()
-    {
-        var chosen = _dialogs.BrowseForFolder(OutputFolder);
-        if (!string.IsNullOrWhiteSpace(chosen))
-            OutputFolder = chosen;
-    }
-
-    private bool CanLaunchWizard() => HasChatConfiguration;
-
-    private void OnLaunchWizard()
-    {
-        try
-        {
-            var result = _dialogs.ShowOnboardingWizard(this, _chatAssistantService);
-            if (result is null)
-            {
-                return;
-            }
-
-            ApplyWizardSettings(result);
-        }
-        catch (Exception ex)
-        {
-            Append($"AI Setup Wizard failed: {ex.Message}");
-        }
-    }
-
-    public void ApplyWizardSettings(OnboardingWizardSettings settings)
-    {
-        ArgumentNullException.ThrowIfNull(settings);
-
-        var applied = settings.EnsureValid();
-
-        ExportCsv = applied.ExportCsv;
-        ExportShopify = applied.ExportShopify;
-        ExportWoo = applied.ExportWoo;
-        ExportReviews = applied.ExportReviews;
-        ExportXlsx = applied.ExportXlsx;
-        ExportJsonl = applied.ExportJsonl;
-        ExportPluginsCsv = applied.ExportPluginsCsv;
-        ExportPluginsJsonl = applied.ExportPluginsJsonl;
-        ExportThemesCsv = applied.ExportThemesCsv;
-        ExportThemesJsonl = applied.ExportThemesJsonl;
-        ExportPublicExtensionFootprints = applied.ExportPublicExtensionFootprints;
-        ExportPublicDesignSnapshot = applied.ExportPublicDesignSnapshot;
-        ExportPublicDesignScreenshots = applied.ExportPublicDesignScreenshots;
-        ExportStoreConfiguration = applied.ExportStoreConfiguration;
-        ImportStoreConfiguration = applied.ImportStoreConfiguration;
-
-        EnableHttpRetries = applied.EnableHttpRetries;
-        HttpRetryAttempts = applied.HttpRetryAttempts;
-        HttpRetryBaseDelaySeconds = applied.HttpRetryBaseDelaySeconds;
-        HttpRetryMaxDelaySeconds = applied.HttpRetryMaxDelaySeconds;
-
-        if (!string.IsNullOrWhiteSpace(applied.WordPressUsernamePlaceholder))
-        {
-            WordPressUsername = applied.WordPressUsernamePlaceholder;
-        }
-
-        if (!string.IsNullOrWhiteSpace(applied.WordPressApplicationPasswordPlaceholder))
-        {
-            WordPressApplicationPassword = applied.WordPressApplicationPasswordPlaceholder;
-        }
-
-        if (!string.IsNullOrWhiteSpace(applied.ShopifyStoreUrlPlaceholder))
-        {
-            ShopifyStoreUrl = applied.ShopifyStoreUrlPlaceholder;
-        }
-
-        if (!string.IsNullOrWhiteSpace(applied.ShopifyAdminAccessTokenPlaceholder))
-        {
-            ShopifyAdminAccessToken = applied.ShopifyAdminAccessTokenPlaceholder;
-        }
-
-        if (!string.IsNullOrWhiteSpace(applied.ShopifyStorefrontAccessTokenPlaceholder))
-        {
-            ShopifyStorefrontAccessToken = applied.ShopifyStorefrontAccessTokenPlaceholder;
-        }
-
-        if (!string.IsNullOrWhiteSpace(applied.ShopifyApiKeyPlaceholder))
-        {
-            ShopifyApiKey = applied.ShopifyApiKeyPlaceholder;
-        }
-
-        if (!string.IsNullOrWhiteSpace(applied.ShopifyApiSecretPlaceholder))
-        {
-            ShopifyApiSecret = applied.ShopifyApiSecretPlaceholder;
-        }
-
-        var summary = string.IsNullOrWhiteSpace(applied.Summary)
-            ? BuildWizardSummary(applied)
-            : applied.Summary!.Trim();
-
-        Append($"AI Setup Wizard applied configuration:\n{summary}");
-    }
-
-    private static string BuildWizardSummary(OnboardingWizardSettings settings)
-    {
-        var builder = new StringBuilder();
-        builder.AppendLine("Exports:");
-        builder.AppendLine($"- Generic CSV: {settings.ExportCsv}");
-        builder.AppendLine($"- Shopify CSV: {settings.ExportShopify}");
-        builder.AppendLine($"- WooCommerce CSV: {settings.ExportWoo}");
-        builder.AppendLine($"- Reviews CSV: {settings.ExportReviews}");
-        builder.AppendLine($"- XLSX: {settings.ExportXlsx}");
-        builder.AppendLine($"- JSONL: {settings.ExportJsonl}");
-        builder.AppendLine($"- Plugins CSV: {settings.ExportPluginsCsv}");
-        builder.AppendLine($"- Plugins JSONL: {settings.ExportPluginsJsonl}");
-        builder.AppendLine($"- Themes CSV: {settings.ExportThemesCsv}");
-        builder.AppendLine($"- Themes JSONL: {settings.ExportThemesJsonl}");
-        builder.AppendLine($"- Public extension footprints: {settings.ExportPublicExtensionFootprints}");
-        builder.AppendLine($"- Public design snapshot: {settings.ExportPublicDesignSnapshot}");
-        builder.AppendLine($"- Public design screenshots: {settings.ExportPublicDesignScreenshots}");
-        builder.AppendLine($"- Store configuration export: {settings.ExportStoreConfiguration}");
-        builder.AppendLine($"- Store configuration import: {settings.ImportStoreConfiguration}");
-        builder.AppendLine("Retry strategy:");
-        builder.AppendLine($"- Enabled: {settings.EnableHttpRetries}");
-        builder.AppendLine($"- Attempts: {settings.HttpRetryAttempts}");
-        builder.AppendLine($"- Base delay (s): {settings.HttpRetryBaseDelaySeconds:0.###}");
-        builder.AppendLine($"- Max delay (s): {settings.HttpRetryMaxDelaySeconds:0.###}");
-        return builder.ToString();
-    }
-
-    private void OnOpenLog()
-    {
-        _dialogs.ShowLogWindow(this);
-    }
-
-    private bool CanSendChat()
-        => !IsChatBusy
-            && HasChatConfiguration
-            && !string.IsNullOrWhiteSpace(ChatInput);
-
-    private bool CanCancelChat()
-        => IsChatBusy;
-
-    private bool CanSaveChatTranscript()
-        => HasChatMessages;
-
-    private bool CanClearChatHistory()
-        => HasChatMessages;
-
-    private void OnCancelChat()
-    {
-        var cts = _chatCts;
-        if (cts is null || !IsChatBusy)
-        {
-            return;
-        }
-
-        ChatStatusMessage = "Cancelling assistant response…";
-
-        try
-        {
-            cts.Cancel();
-        }
-        catch (ObjectDisposedException)
-        {
-        }
-    }
-
-    private async Task OnSaveChatTranscriptAsync()
-    {
-        if (!HasChatMessages)
-        {
-            return;
-        }
-
-        try
-        {
-            var defaultFileName = Path.GetFileName(_chatTranscriptStore.CurrentMarkdownPath);
-            var filter = "Markdown (*.md)|*.md|JSON Lines (*.jsonl)|*.jsonl|All files (*.*)|*.*";
-            var target = _dialogs.SaveFile(filter, defaultFileName, _chatTranscriptStore.TranscriptDirectory);
-            if (string.IsNullOrWhiteSpace(target))
-            {
-                return;
-            }
-
-            var format = string.Equals(Path.GetExtension(target), ".jsonl", StringComparison.OrdinalIgnoreCase)
-                ? ChatTranscriptFormat.Jsonl
-                : ChatTranscriptFormat.Markdown;
-
-            await _chatTranscriptStore.SaveTranscriptAsync(target, format).ConfigureAwait(false);
-            Append($"Saved chat transcript to {target}");
-        }
-        catch (Exception ex)
-        {
-            Append($"Unable to save chat transcript: {ex.Message}");
-        }
-    }
-
-    private Task OnClearChatHistoryAsync()
-    {
-        try
-        {
-            ChatMessages.Clear();
-            ResetChatUsageTotals();
-            _chatTranscriptStore.StartNewSession();
-            ChatStatusMessage = AppendBudgetReminder("Chat history cleared. Start a new conversation.");
-        }
-        catch (Exception ex)
-        {
-            Append($"Unable to reset chat transcript: {ex.Message}");
-        }
-
-        return Task.CompletedTask;
+        get => ChatAssistant.ChatCompletionTokenUsdPerThousand;
+        set => ChatAssistant.ChatCompletionTokenUsdPerThousand = value;
     }
 
     internal void OnChatUsageReported(ChatUsageSnapshot usage)
+        => ChatAssistant.OnChatUsageReported(usage);
+
+    public bool CanSendChat() => ChatAssistant.CanSendChat();
+
+    private ChatAssistantViewModel.HostSnapshot CaptureChatAssistantHostSnapshot()
     {
-        if (usage is null)
-        {
-            return;
-        }
-
-        ExecuteOnUiThread(() =>
-        {
-            var incrementalCost = CalculateUsageCost(usage);
-
-            ChatPromptTokenTotal = AddWithoutOverflow(ChatPromptTokenTotal, usage.PromptTokens);
-            ChatCompletionTokenTotal = AddWithoutOverflow(ChatCompletionTokenTotal, usage.CompletionTokens);
-            ChatTotalTokenTotal = AddWithoutOverflow(ChatTotalTokenTotal, usage.TotalTokens);
-
-            TotalPromptTokens = AddWithoutOverflow(TotalPromptTokens, usage.PromptTokens);
-            TotalCompletionTokens = AddWithoutOverflow(TotalCompletionTokens, usage.CompletionTokens);
-            TotalCostUsd = TotalCostUsd + incrementalCost;
-        });
-    }
-
-    private void ResetChatUsageTotals()
-    {
-        ChatPromptTokenTotal = 0;
-        ChatCompletionTokenTotal = 0;
-        ChatTotalTokenTotal = 0;
-        TotalPromptTokens = 0;
-        TotalCompletionTokens = 0;
-        TotalCostUsd = 0m;
-    }
-
-    private void UpdateChatUsageTotals(ChatSessionSettings? session)
-    {
-        if (session is null)
-        {
-            return;
-        }
-
-        ExecuteOnUiThread(() =>
-        {
-            TotalPromptTokens = session.ConsumedPromptTokens;
-            TotalCompletionTokens = session.ConsumedCompletionTokens;
-            TotalCostUsd = session.ConsumedCostUsd;
-
-            ChatPromptTokenTotal = ClampToInt(session.ConsumedPromptTokens);
-            ChatCompletionTokenTotal = ClampToInt(session.ConsumedCompletionTokens);
-            ChatTotalTokenTotal = ClampToInt(session.ConsumedTotalTokens);
-        });
-    }
-
-    private decimal CalculateUsageCost(ChatUsageSnapshot usage)
-    {
-        decimal cost = 0m;
-
-        if (usage.PromptTokens > 0 && ChatPromptTokenUsdPerThousand is { } promptRate && promptRate > 0m)
-        {
-            cost += (usage.PromptTokens / 1000m) * promptRate;
-        }
-
-        if (usage.CompletionTokens > 0 && ChatCompletionTokenUsdPerThousand is { } completionRate && completionRate > 0m)
-        {
-            cost += (usage.CompletionTokens / 1000m) * completionRate;
-        }
-
-        return cost;
-    }
-
-    private static int AddWithoutOverflow(int current, int delta)
-    {
-        if (delta <= 0)
-        {
-            return current;
-        }
-
-        var sum = (long)current + delta;
-        return sum > int.MaxValue ? int.MaxValue : (int)sum;
-    }
-
-    private static long AddWithoutOverflow(long current, int delta)
-    {
-        if (delta <= 0)
-        {
-            return current;
-        }
-
-        var sum = current + delta;
-        return sum < current ? long.MaxValue : sum;
-    }
-
-    private static int ClampToInt(long value)
-    {
-        if (value > int.MaxValue)
-        {
-            return int.MaxValue;
-        }
-
-        if (value < int.MinValue)
-        {
-            return int.MinValue;
-        }
-
-        return (int)value;
-    }
-
-    private bool CanExplainLogs()
-        => !IsLogSummaryBusy
-            && HasChatConfiguration
-            && Logs.Count > 0;
-
-    private void OnUseAiRecommendation(string? prompt)
-    {
-        var trimmed = prompt?.Trim();
-        if (string.IsNullOrWhiteSpace(trimmed))
-        {
-            return;
-        }
-
-        ExecuteOnUiThread(() =>
-        {
-            ChatInput = trimmed;
-            IsAssistantPanelExpanded = true;
-        });
-    }
-
-    private void OnCopyAutomationScript(AutomationScriptDisplay? script)
-    {
-        if (script is null || string.IsNullOrWhiteSpace(script.Content))
-        {
-            return;
-        }
-
-        try
-        {
-            System.Windows.Clipboard.SetText(script.Content);
-        }
-        catch (Exception ex)
-        {
-            Append($"Unable to copy script to clipboard: {ex.Message}");
-        }
-    }
-
-    private async Task OnSendChatAsync()
-    {
-        var trimmed = ChatInput?.Trim();
-        if (string.IsNullOrWhiteSpace(trimmed))
-        {
-            ChatStatusMessage = "Enter a prompt before sending.";
-            return;
-        }
-
-        if (TryHandleAssistantDirectiveCommand(trimmed))
-        {
-            return;
-        }
-
-        if (!HasChatConfiguration)
-        {
-            UpdateChatConfigurationStatus();
-            return;
-        }
-
-        var userMessage = new ChatMessage(ChatMessageRole.User, trimmed);
-        ChatMessages.Add(userMessage);
-        ChatInput = string.Empty;
-        await TryAppendTranscriptAsync(userMessage);
-
-        var history = ChatMessages.ToList();
-        var assistantMessage = new ChatMessage(ChatMessageRole.Assistant, string.Empty);
-        ChatMessages.Add(assistantMessage);
-
-        var chatCts = new CancellationTokenSource();
-        _chatCts = chatCts;
-        var cancellationToken = chatCts.Token;
-
-        IsChatBusy = true;
-        ChatStatusMessage = "Requesting assistant response…";
-
-        var wasCancelled = false;
-
-        ChatSessionSettings? sessionState = null;
-
-        try
-        {
-            var context = BuildChatContext();
-            var session = new ChatSessionSettings(
-                ChatApiEndpoint,
-                ChatApiKey,
-                ChatModel,
-                ChatSystemPrompt,
-                MaxPromptTokens: ChatMaxPromptTokens,
-                MaxTotalTokens: ChatMaxTotalTokens,
-                MaxCostUsd: ChatMaxCostUsd,
-                PromptTokenCostPerThousandUsd: ChatPromptTokenUsdPerThousand,
-                CompletionTokenCostPerThousandUsd: ChatCompletionTokenUsdPerThousand,
-                DiagnosticLogger: Append,
-                UsageReported: OnChatUsageReported);
-            sessionState = session;
-
-            if (SelectedChatMode == ChatInteractionMode.DatasetQuestion)
-            {
-                await foreach (var token in _chatAssistantService.StreamDatasetAnswerAsync(session, history, trimmed, cancellationToken))
-                {
-                    assistantMessage.Append(token);
-                }
-            }
-            else
-            {
-                var contextSummary = _chatAssistantService.BuildContextualPrompt(context);
-
-                var toolbox = new ChatAssistantToolbox(
-                    () => LatestRunSnapshotJson,
-                    limit =>
-                    {
-                        try
-                        {
-                            return CollectRecentExportFiles(limit);
-                        }
-                        catch (Exception ex)
-                        {
-                            Append($"Assistant export file lookup failed: {ex.Message}");
-                            throw;
-                        }
-                    },
-                    limit =>
-                    {
-                        try
-                        {
-                            return CollectRecentLogs(limit);
-                        }
-                        catch (Exception ex)
-                        {
-                            Append($"Assistant log retrieval failed: {ex.Message}");
-                            throw;
-                        }
-                    });
-
-                await foreach (var token in _chatAssistantService.StreamChatCompletionAsync(session, history, contextSummary, toolbox, cancellationToken))
-                {
-                    assistantMessage.Append(token);
-                }
-            }
-
-            if (cancellationToken.IsCancellationRequested)
-            {
-                wasCancelled = true;
-            }
-
-            if (string.IsNullOrWhiteSpace(assistantMessage.Content))
-            {
-                assistantMessage.Content = cancellationToken.IsCancellationRequested
-                    ? "(Response cancelled.)"
-                    : "(No response received.)";
-            }
-
-            if (!cancellationToken.IsCancellationRequested)
-            {
-                ChatStatusMessage = SelectedChatMode == ChatInteractionMode.DatasetQuestion
-                    ? AppendBudgetReminder("Dataset Q&A ready for another question.")
-                    : AppendBudgetReminder("Assistant ready for another prompt.");
-            }
-
-            if (SelectedChatMode != ChatInteractionMode.DatasetQuestion && !cancellationToken.IsCancellationRequested)
-            {
-                try
-                {
-                    var directives = await _chatAssistantService.ParseAssistantDirectivesAsync(session, context, trimmed, cancellationToken);
-                    if (directives is not null)
-                    {
-                        ProcessAssistantDirectives(directives, confirmed: false);
-                    }
-                }
-                catch (OperationCanceledException)
-                {
-                    wasCancelled = true;
-                    throw;
-                }
-                catch (Exception directiveEx)
-                {
-                    Append($"Assistant directive processing failed: {directiveEx.Message}");
-                }
-            }
-        }
-        catch (OperationCanceledException)
-        {
-            wasCancelled = true;
-            ChatStatusMessage = "Assistant response cancelled.";
-            if (string.IsNullOrWhiteSpace(assistantMessage.Content))
-            {
-                assistantMessage.Content = "(Response cancelled.)";
-            }
-        }
-        catch (Exception ex)
-        {
-            var guidance = ChatAssistantService.CreateErrorGuidance(ex);
-            var guidanceMessage = guidance.ToMessage();
-            assistantMessage.Content = guidanceMessage;
-            ChatStatusMessage = guidanceMessage;
-            Append($"Assistant error: {ex}");
-        }
-        finally
-        {
-            wasCancelled |= cancellationToken.IsCancellationRequested;
-            if (ReferenceEquals(_chatCts, chatCts))
-            {
-                _chatCts = null;
-            }
-            chatCts.Dispose();
-            IsChatBusy = false;
-            if (wasCancelled)
-            {
-                ChatStatusMessage = "Assistant response cancelled.";
-            }
-
-            UpdateChatUsageTotals(sessionState);
-        }
-
-        await TryAppendTranscriptAsync(assistantMessage);
-    }
-
-    private async Task TryAppendTranscriptAsync(ChatMessage message)
-    {
-        try
-        {
-            await _chatTranscriptStore.AppendAsync(message).ConfigureAwait(false);
-        }
-        catch (Exception ex)
-        {
-            Append($"Unable to write chat transcript: {ex.Message}");
-        }
-    }
-
-    private Task EnsureChatTranscriptLoadedAsync()
-    {
-        if (Interlocked.CompareExchange(ref _chatTranscriptLoadState, 1, 0) != 0)
-        {
-            return Task.CompletedTask;
-        }
-
-        return Task.Run(async () =>
-        {
-            try
-            {
-                var session = await _chatTranscriptStore.LoadMostRecentTranscriptAsync().ConfigureAwait(false);
-                if (session is null || session.Messages.Count == 0)
-                {
-                    return;
-                }
-
-                ExecuteOnUiThread(() =>
-                {
-                    if (ChatMessages.Count > 0)
-                    {
-                        return;
-                    }
-
-                    ChatMessages.Clear();
-                    ResetChatUsageTotals();
-                    foreach (var message in session.Messages)
-                    {
-                        ChatMessages.Add(message);
-                    }
-
-                    var resumedAt = session.CreatedAtUtc.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture);
-                    ChatStatusMessage = AppendBudgetReminder($"Resumed chat transcript from {resumedAt} UTC.");
-                });
-            }
-            catch (Exception ex)
-            {
-                Append($"Unable to load chat transcript: {ex.Message}");
-            }
-        });
-    }
-
-    private bool TryHandleAssistantDirectiveCommand(string? input)
-    {
-        if (string.IsNullOrWhiteSpace(input))
-        {
-            return false;
-        }
-
-        if (string.Equals(input, ApplyAssistantDirectivesCommand, StringComparison.OrdinalIgnoreCase))
-        {
-            ChatInput = string.Empty;
-            if (_pendingAssistantDirectives is null)
-            {
-                Append("No pending assistant directives to apply.");
-                ChatStatusMessage = AppendBudgetReminder("Assistant ready for another prompt.");
-                return true;
-            }
-
-            var pending = _pendingAssistantDirectives;
-            _pendingAssistantDirectives = null;
-            ProcessAssistantDirectives(pending, confirmed: true);
-            return true;
-        }
-
-        if (string.Equals(input, DiscardAssistantDirectivesCommand, StringComparison.OrdinalIgnoreCase))
-        {
-            ChatInput = string.Empty;
-            if (_pendingAssistantDirectives is null)
-            {
-                Append("No pending assistant directives to discard.");
-            }
-            else
-            {
-                _pendingAssistantDirectives = null;
-                Append("Pending assistant directives discarded.");
-            }
-
-            ChatStatusMessage = AppendBudgetReminder("Assistant ready for another prompt.");
-            return true;
-        }
-
-        return false;
-    }
-
-    private void ProcessAssistantDirectives(AssistantDirectiveBatch directives, bool confirmed)
-    {
-        if (directives is null)
-        {
-            return;
-        }
-
-        Append($"Assistant directive summary: {directives.Summary}");
-
-        if (!string.IsNullOrWhiteSpace(directives.RiskNote))
-        {
-            Append($"Risk note: {directives.RiskNote}");
-        }
-
-        foreach (var reminder in directives.CredentialReminders)
-        {
-            Append($"Assistant credential reminder ({reminder.Credential}): {reminder.Message}");
-        }
-
-        var requiresConfirmation = !confirmed && ShouldDeferAssistantDirective(directives);
-        if (requiresConfirmation)
-        {
-            _pendingAssistantDirectives = directives;
-            Append("Assistant directives require confirmation before applying.");
-            foreach (var toggle in directives.Toggles)
-            {
-                Append($"  Preview toggle {toggle.Name} -> {(toggle.Value ? "enabled" : "disabled")} ({FormatTogglePreviewMetadata(toggle)})");
-                if (!string.IsNullOrWhiteSpace(toggle.Justification))
-                {
-                    Append($"    Reason: {toggle.Justification}");
-                }
-            }
-
-            if (directives.Retry is not null)
-            {
-                Append($"  Preview retry: {DescribeRetryDirective(directives.Retry)}");
-                if (!string.IsNullOrWhiteSpace(directives.Retry.Justification))
-                {
-                    Append($"    Reason: {directives.Retry.Justification}");
-                }
-            }
-
-            foreach (var action in directives.Actions)
-            {
-                Append($"  Pending action {action.Name} ({FormatActionPreviewMetadata(action)})");
-                if (!string.IsNullOrWhiteSpace(action.Justification))
-                {
-                    Append($"    Reason: {action.Justification}");
-                }
-            }
-
-            Append($"Type {ApplyAssistantDirectivesCommand} to apply or {DiscardAssistantDirectivesCommand} to cancel.");
-            ChatStatusMessage = "Assistant directives pending confirmation.";
-            return;
-        }
-
-        _pendingAssistantDirectives = null;
-
-        foreach (var toggle in directives.Toggles)
-        {
-            ApplyAssistantToggle(toggle);
-        }
-
-        if (directives.Retry is not null)
-        {
-            ApplyAssistantRetryDirective(directives.Retry);
-        }
-
-        foreach (var action in directives.Actions)
-        {
-            ApplyAssistantAction(action);
-        }
-
-        if (directives.Toggles.Count == 0 && directives.Retry is null && directives.Actions.Count == 0 && directives.CredentialReminders.Count > 0)
-        {
-            Append("No configuration changes were applied.");
-        }
-
-        ChatStatusMessage = AppendBudgetReminder(confirmed ? "Assistant directives applied." : "Assistant ready for another prompt.");
-    }
-
-    private static bool ShouldDeferAssistantDirective(AssistantDirectiveBatch directives)
-    {
-        if (directives.RequiresConfirmation)
-        {
-            return true;
-        }
-
-        if (!string.IsNullOrWhiteSpace(directives.RiskNote))
-        {
-            return true;
-        }
-
-        if (directives.Toggles.Any(IsRiskyToggle))
-        {
-            return true;
-        }
-
-        if (directives.Retry is not null && IsRiskyRetry(directives.Retry))
-        {
-            return true;
-        }
-
-        if (directives.Actions.Any(IsRiskyAction))
-        {
-            return true;
-        }
-
-        return false;
-    }
-
-    private static bool IsRiskyToggle(AssistantToggleDirective toggle)
-    {
-        if (toggle.RequiresConfirmation)
-        {
-            return true;
-        }
-
-        if (!string.IsNullOrWhiteSpace(toggle.RiskLevel) && string.Equals(toggle.RiskLevel, "high", StringComparison.OrdinalIgnoreCase))
-        {
-            return true;
-        }
-
-        return toggle.Value && s_riskyAssistantOptions.Contains(toggle.Name);
-    }
-
-    private static bool IsRiskyRetry(AssistantRetryDirective directive)
-    {
-        if (directive.Attempts is int attempts && attempts > 6)
-        {
-            return true;
-        }
-
-        if (directive.BaseDelaySeconds is double baseDelay && baseDelay > 30)
-        {
-            return true;
-        }
-
-        if (directive.MaxDelaySeconds is double maxDelay && maxDelay > 300)
-        {
-            return true;
-        }
-
-        return false;
-    }
-
-    private static bool IsRiskyAction(AssistantActionDirective action)
-    {
-        if (action.RequiresConfirmation)
-        {
-            return true;
-        }
-
-        return string.Equals(action.Name, "start_run", StringComparison.OrdinalIgnoreCase);
-    }
-
-    private static string FormatTogglePreviewMetadata(AssistantToggleDirective toggle)
-    {
-        var parts = new List<string>();
-        if (!string.IsNullOrWhiteSpace(toggle.RiskLevel))
-        {
-            parts.Add($"risk {toggle.RiskLevel}");
-        }
-
-        if (toggle.Confidence is double confidence)
-        {
-            parts.Add($"confidence {confidence:0.##}");
-        }
-
-        if (toggle.RequiresConfirmation)
-        {
-            parts.Add("confirmation requested");
-        }
-
-        if (parts.Count == 0)
-        {
-            return "risk unspecified";
-        }
-
-        return string.Join(", ", parts);
-    }
-
-    private static string FormatActionPreviewMetadata(AssistantActionDirective action)
-    {
-        var parts = new List<string>();
-        if (action.RequiresConfirmation)
-        {
-            parts.Add("confirmation requested");
-        }
-
-        if (action.Plan is RunPlan plan)
-        {
-            string descriptor;
-            if (plan.ExecutionMode == RunPlanExecutionMode.Scheduled && plan.ScheduledForUtc is { } scheduled)
-            {
-                descriptor = $"scheduled for {scheduled:u}";
-            }
-            else
-            {
-                descriptor = "awaiting approval";
-            }
-
-            if (plan.Settings.Count > 0)
-            {
-                descriptor += $", {plan.Settings.Count} override(s)";
-            }
-
-            parts.Add($"run plan ({descriptor})");
-        }
-
-        if (parts.Count == 0)
-        {
-            return "no additional metadata";
-        }
-
-        return string.Join(", ", parts);
-    }
-
-    private static string DescribeRetryDirective(AssistantRetryDirective directive)
-    {
-        var parts = new List<string>();
-        if (directive.Enable is bool enable)
-        {
-            parts.Add($"enable={enable.ToString().ToLowerInvariant()}");
-        }
-
-        if (directive.Attempts is int attempts)
-        {
-            parts.Add($"attempts={attempts}");
-        }
-
-        if (directive.BaseDelaySeconds is double baseDelay)
-        {
-            parts.Add($"base_delay={FormatSeconds(baseDelay)}");
-        }
-
-        if (directive.MaxDelaySeconds is double maxDelay)
-        {
-            parts.Add($"max_delay={FormatSeconds(maxDelay)}");
-        }
-
-        return parts.Count == 0 ? "no retry changes" : string.Join(", ", parts);
-    }
-
-    private void ApplyAssistantToggle(AssistantToggleDirective toggle)
-    {
-        if (!_assistantToggleBindings.TryGetValue(toggle.Name, out var binding))
-        {
-            Append($"Assistant directive skipped unknown toggle \"{toggle.Name}\".");
-            return;
-        }
-
-        var desired = toggle.Value;
-        var current = binding.Getter();
-        var label = desired ? "enabled" : "disabled";
-
-        if (current == desired)
-        {
-            Append($"Assistant directive left {toggle.Name} unchanged (already {label}).");
-            return;
-        }
-
-        binding.Setter(desired);
-
-        var messageBuilder = new StringBuilder($"Assistant {label} {toggle.Name}.");
-        if (toggle.Confidence is double confidence)
-        {
-            messageBuilder.Append($" (confidence {confidence:0.##})");
-        }
-
-        if (!string.IsNullOrWhiteSpace(toggle.RiskLevel))
-        {
-            messageBuilder.Append($" [risk {toggle.RiskLevel}]");
-        }
-
-        Append(messageBuilder.ToString());
-
-        if (!string.IsNullOrWhiteSpace(toggle.Justification))
-        {
-            Append($"Reason: {toggle.Justification}");
-        }
-    }
-
-    private void ApplyAssistantRetryDirective(AssistantRetryDirective directive)
-    {
-        var updates = new List<string>();
-        var baseDelaySeconds = directive.BaseDelaySeconds;
-
-        if (directive.Enable is bool enable)
-        {
-            if (EnableHttpRetries != enable)
-            {
-                EnableHttpRetries = enable;
-                updates.Add($"enable={enable.ToString().ToLowerInvariant()}");
-            }
-            else
-            {
-                Append($"Assistant directive left HTTP retries {(enable ? "enabled" : "disabled")} (already set).");
-            }
-        }
-
-        if (directive.Attempts is int attempts)
-        {
-            if (attempts < 0 || attempts > 10)
-            {
-                Append($"Assistant directive skipped invalid retry attempt count ({attempts}). Expected 0-10.");
-            }
-            else if (HttpRetryAttempts != attempts)
-            {
-                HttpRetryAttempts = attempts;
-                updates.Add($"attempts={attempts}");
-            }
-            else
-            {
-                Append($"Assistant directive left HTTP retry attempts at {attempts} (already set).");
-            }
-        }
-
-        if (baseDelaySeconds is double baseDelay)
-        {
-            if (!IsDelayWithinRange(baseDelay))
-            {
-                Append($"Assistant directive skipped invalid retry base delay ({FormatSeconds(baseDelay)}). Expected between 0 and 600 seconds.");
-            }
-            else if (Math.Abs(HttpRetryBaseDelaySeconds - baseDelay) > 0.0001)
-            {
-                HttpRetryBaseDelaySeconds = baseDelay;
-                updates.Add($"base_delay={FormatSeconds(baseDelay)}");
-            }
-            else
-            {
-                Append($"Assistant directive left HTTP retry base delay at {FormatSeconds(baseDelay)} (already set).");
-            }
-        }
-
-        if (directive.MaxDelaySeconds is double maxDelay)
-        {
-            if (!IsDelayWithinRange(maxDelay))
-            {
-                Append($"Assistant directive skipped invalid retry max delay ({FormatSeconds(maxDelay)}). Expected between 0 and 600 seconds.");
-            }
-            else if (baseDelaySeconds is double baseDelayForComparison && maxDelay < baseDelayForComparison)
-            {
-                Append($"Assistant directive skipped retry max delay ({FormatSeconds(maxDelay)}) because it is less than the base delay ({FormatSeconds(baseDelayForComparison)}).");
-            }
-            else if (Math.Abs(HttpRetryMaxDelaySeconds - maxDelay) > 0.0001)
-            {
-                HttpRetryMaxDelaySeconds = maxDelay;
-                updates.Add($"max_delay={FormatSeconds(maxDelay)}");
-            }
-            else
-            {
-                Append($"Assistant directive left HTTP retry max delay at {FormatSeconds(maxDelay)} (already set).");
-            }
-        }
-
-        if (updates.Count > 0)
-        {
-            Append("Assistant updated HTTP retry settings: " + string.Join(", ", updates));
-        }
-
-        if (!string.IsNullOrWhiteSpace(directive.Justification))
-        {
-            Append("Retry directive justification: " + directive.Justification);
-        }
-    }
-
-    private void ApplyAssistantAction(AssistantActionDirective action)
-    {
-        if (string.IsNullOrWhiteSpace(action.Name))
-        {
-            Append("Assistant action skipped: action name was not provided.");
-            return;
-        }
-
-        var normalizedName = action.Name.Trim();
-        Append($"Assistant action requested: {normalizedName}.");
-        if (!string.IsNullOrWhiteSpace(action.Justification))
-        {
-            Append($"Reason: {action.Justification}");
-        }
-
-        var loweredName = normalizedName.ToLowerInvariant();
-
-        switch (loweredName)
-        {
-            case "start_run":
-                if (IsRunning)
-                {
-                    Append("Assistant action start_run skipped: a run is already in progress.");
-                    return;
-                }
-
-                if (!RunCommand.CanExecute(null))
-                {
-                    Append("Assistant action start_run skipped: run command is unavailable.");
-                    return;
-                }
-
-                if (!ConfirmAssistantAction("The assistant wants to start a new migration run. Start the run now?", action.Justification))
-                {
-                    Append("Assistant action start_run canceled by operator.");
-                    return;
-                }
-
-                Append("Assistant action start_run executed: run command invoked.");
-                RunCommand.Execute(null);
-                return;
-
-            case "open_output_folder":
-                if (action.RequiresConfirmation && !ConfirmAssistantAction("Open the configured output folder?", action.Justification))
-                {
-                    Append("Assistant action open_output_folder canceled by operator.");
-                    return;
-                }
-
-                TryOpenAssistantPath(normalizedName, ResolveBaseOutputFolder());
-                return;
-
-            case "open_run_folder":
-                if (action.RequiresConfirmation && !ConfirmAssistantAction("Open the most recent run folder?", action.Justification))
-                {
-                    Append("Assistant action open_run_folder canceled by operator.");
-                    return;
-                }
-
-                TryOpenAssistantPath(normalizedName, _latestStoreOutputFolder);
-                return;
-
-            case "open_manual_bundle":
-                if (action.RequiresConfirmation && !ConfirmAssistantAction("Open the latest manual bundle archive?", action.Justification))
-                {
-                    Append("Assistant action open_manual_bundle canceled by operator.");
-                    return;
-                }
-
-                TryOpenAssistantPath(normalizedName, _latestManualBundlePath);
-                return;
-
-            case "open_manual_report":
-                if (action.RequiresConfirmation && !ConfirmAssistantAction("Open the latest manual migration report?", action.Justification))
-                {
-                    Append("Assistant action open_manual_report canceled by operator.");
-                    return;
-                }
-
-                TryOpenAssistantPath(normalizedName, _latestManualReportPath);
-                return;
-
-            case "open_run_delta":
-                if (action.RequiresConfirmation && !ConfirmAssistantAction("Open the latest run delta summary?", action.Justification))
-                {
-                    Append("Assistant action open_run_delta canceled by operator.");
-                    return;
-                }
-
-                TryOpenAssistantPath(normalizedName, _latestRunDeltaPath);
-                return;
-
-            case "open_ai_brief":
-                if (action.RequiresConfirmation && !ConfirmAssistantAction("Open the latest AI migration brief?", action.Justification))
-                {
-                    Append("Assistant action open_ai_brief canceled by operator.");
-                    return;
-                }
-
-                TryOpenAssistantPath(normalizedName, LatestRunAiBriefPath);
-                return;
-            case "schedule_run":
-                if (action.Plan is not RunPlan plan)
-                {
-                    Append("Assistant action schedule_run skipped: plan details were missing.");
-                    return;
-                }
-
-                if (action.RequiresConfirmation && !ConfirmAssistantAction(
-                        ExportPlanning.BuildRunPlanConfirmationPrompt(plan),
-                        action.Justification))
-                {
-                    Append("Assistant action schedule_run canceled by operator.");
-                    return;
-                }
-
-                ExportPlanning.EnqueuePlan(plan);
-                Append($"Assistant action schedule_run executed: plan \"{plan.Name}\" queued.");
-                return;
-        }
-
-        if (action.RequiresConfirmation && !ConfirmAssistantAction($"The assistant requested action \"{normalizedName}\". Continue?", action.Justification))
-        {
-            Append($"Assistant action {normalizedName} canceled by operator.");
-            return;
-        }
-
-        Append($"Assistant action {normalizedName} is not recognized. No changes applied.");
-    }
-
-
-    private void TryOpenAssistantPath(string actionName, string? path)
-    {
-        if (string.IsNullOrWhiteSpace(path))
-        {
-            Append($"Assistant action {actionName} skipped: no path available.");
-            return;
-        }
-
-        try
-        {
-            if (!File.Exists(path) && !Directory.Exists(path))
-            {
-                Append($"Assistant action {actionName} skipped: path not found ({path}).");
-                return;
-            }
-
-            var startInfo = new ProcessStartInfo
-            {
-                FileName = path,
-                UseShellExecute = true,
-            };
-            Process.Start(startInfo);
-            Append($"Assistant action {actionName} opened {path}.");
-        }
-        catch (Exception ex)
-        {
-            Append($"Assistant action {actionName} failed to open {path}: {ex.Message}");
-        }
-    }
-
-    private static bool ConfirmAssistantAction(string prompt, string? justification)
-    {
-        var builder = new StringBuilder();
-        builder.Append(prompt);
-        if (!string.IsNullOrWhiteSpace(justification))
-        {
-            builder.AppendLine();
-            builder.AppendLine();
-            builder.Append("Reason: ");
-            builder.Append(justification.Trim());
-        }
-
-        var text = builder.ToString();
-
-        if (System.Windows.Application.Current?.Dispatcher is System.Windows.Threading.Dispatcher dispatcher)
-        {
-            if (dispatcher.CheckAccess())
-            {
-                return System.Windows.MessageBox.Show(text, "Confirm assistant action", MessageBoxButton.YesNo, MessageBoxImage.Question) == MessageBoxResult.Yes;
-            }
-
-            return dispatcher.Invoke(() => System.Windows.MessageBox.Show(text, "Confirm assistant action", MessageBoxButton.YesNo, MessageBoxImage.Question) == MessageBoxResult.Yes);
-        }
-
-        return System.Windows.MessageBox.Show(text, "Confirm assistant action", MessageBoxButton.YesNo, MessageBoxImage.Question) == MessageBoxResult.Yes;
-    }
-
-    private static bool IsDelayWithinRange(double value)
-        => value >= 0 && value <= 600;
-
-    private static string FormatSeconds(double value)
-        => value.ToString("0.###", CultureInfo.InvariantCulture) + "s";
-
-    private void UpdateAiRecommendations(AiArtifactAnnotation? annotation)
-    {
-        ExecuteOnUiThread(() =>
-        {
-            LatestRunAiAnnotation = annotation;
-            const string privacyNote = "Sensitive identifiers from indexed exports are masked before assistant analysis.";
-            var normalizedSummary = annotation?.MarkdownSummary?.Trim();
-            LatestRunAiRecommendationSummary = string.IsNullOrWhiteSpace(normalizedSummary)
-                ? privacyNote
-                : string.Concat(privacyNote, Environment.NewLine, Environment.NewLine, normalizedSummary);
-            LatestRunAiRecommendations.Clear();
-
-            if (annotation?.Recommendations is { Count: > 0 })
-            {
-                foreach (var recommendation in annotation.Recommendations)
-                {
-                    LatestRunAiRecommendations.Add(recommendation);
-                }
-            }
-
-            OnPropertyChanged(nameof(HasAiRecommendations));
-        });
-    }
-
-    private async Task OnExplainLatestLogsAsync()
-    {
-        var snapshot = CaptureRecentLogs();
-        if (snapshot.Count == 0)
-        {
-            return;
-        }
-
-        await SummarizeLogsAsync(snapshot, CancellationToken.None).ConfigureAwait(false);
-    }
-
-    private void OnExportCollections()
-    {
-        var baseFolder = ResolveBaseOutputFolder();
-        Directory.CreateDirectory(baseFolder);
-
-        var targetUrl = SelectedPlatform == PlatformMode.WooCommerce ? StoreUrl : ShopifyStoreUrl;
-        var storeId = BuildStoreIdentifier(targetUrl);
-        var storeFolder = Path.Combine(baseFolder, storeId);
-        Directory.CreateDirectory(storeFolder);
-        var timestamp = DateTime.UtcNow.ToString("yyyyMMdd_HHmmss");
-
-        var categories = CategoryChoices
-            .Select(BuildCollectionExportRow)
-            .ToList();
-
-        var collectionsPath = Path.Combine(storeFolder, $"{storeId}_{timestamp}_collections.xlsx");
-        XlsxExporter.Write(collectionsPath, categories);
-        Append($"Wrote {collectionsPath}");
-
-        if (TagChoices.Count > 0)
-        {
-            var tagDicts = TagChoices
-                .Select(choice => choice.Term)
-                .Select(term => new Dictionary<string, object?>
-                {
-                    ["id"] = term.Id,
-                    ["name"] = term.Name,
-                    ["slug"] = term.Slug
-                })
-                .ToList();
-
-            var tagsPath = Path.Combine(storeFolder, $"{storeId}_{timestamp}_tags.xlsx");
-            XlsxExporter.Write(tagsPath, tagDicts);
-            Append($"Wrote {tagsPath}");
-        }
-    }
-
-    private ChatSessionContext BuildChatContext()
-    {
-        var datasets = _artifactIndexingService.GetIndexedDatasets();
-        var datasetNames = datasets.Select(d => d.Name).ToList();
-
-        return new ChatSessionContext(
+        return new ChatAssistantViewModel.HostSnapshot(
             SelectedPlatform,
             ExportCsv,
             ExportShopify,
@@ -2990,611 +1239,48 @@ public sealed class MainViewModel : INotifyPropertyChanged
             EnableHttpRetries,
             HttpRetryAttempts,
             AdditionalPublicExtensionPages,
-            AdditionalDesignSnapshotPages,
-            datasets.Count,
-            datasetNames);
+            AdditionalDesignSnapshotPages);
     }
 
-    private IReadOnlyList<ChatAssistantToolbox.ExportFileSummary> CollectRecentExportFiles(int limit)
+    private void OnChatAssistantPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
-        if (limit <= 0)
-        {
-            return Array.Empty<ChatAssistantToolbox.ExportFileSummary>();
-        }
-
-        try
-        {
-            if (!Directory.Exists(OutputFolder))
-            {
-                return Array.Empty<ChatAssistantToolbox.ExportFileSummary>();
-            }
-
-            var files = Directory
-                .EnumerateFiles(OutputFolder, "*", SearchOption.AllDirectories)
-                .Select(path =>
-                {
-                    try
-                    {
-                        return new FileInfo(path);
-                    }
-                    catch (Exception)
-                    {
-                        return null;
-                    }
-                })
-                .Where(info => info is { Exists: true } candidate && IsLikelyExportFile(candidate))
-                .Select(info => info!)
-                .OrderByDescending(info => info.LastWriteTimeUtc)
-                .Take(limit)
-                .Select(info => new ChatAssistantToolbox.ExportFileSummary(
-                    info.Name,
-                    info.FullName,
-                    info.Length,
-                    info.LastWriteTimeUtc))
-                .ToList();
-
-            return files;
-        }
-        catch (Exception ex)
-        {
-            throw new InvalidOperationException($"{ex.Message}", ex);
-        }
-    }
-
-    private IReadOnlyList<string> CollectRecentLogs(int limit)
-    {
-        if (limit <= 0 || Logs.Count == 0)
-        {
-            return Array.Empty<string>();
-        }
-
-        var start = Math.Max(0, Logs.Count - limit);
-        return Logs.Skip(start).Take(limit).ToArray();
-    }
-
-    private static bool IsLikelyExportFile(FileInfo info)
-    {
-        var extension = info.Extension;
-        if (string.IsNullOrEmpty(extension))
-        {
-            return false;
-        }
-
-        return extension.Equals(".csv", StringComparison.OrdinalIgnoreCase)
-            || extension.Equals(".json", StringComparison.OrdinalIgnoreCase)
-            || extension.Equals(".jsonl", StringComparison.OrdinalIgnoreCase)
-            || extension.Equals(".xlsx", StringComparison.OrdinalIgnoreCase)
-            || extension.Equals(".zip", StringComparison.OrdinalIgnoreCase);
-    }
-
-    private bool HasShopifyCredentials()
-        => !string.IsNullOrWhiteSpace(ShopifyAdminAccessToken)
-            || !string.IsNullOrWhiteSpace(ShopifyStorefrontAccessToken)
-            || !string.IsNullOrWhiteSpace(ShopifyApiKey)
-            || !string.IsNullOrWhiteSpace(ShopifyApiSecret);
-
-    private bool HasTargetCredentials()
-        => !string.IsNullOrWhiteSpace(TargetConsumerKey)
-            && !string.IsNullOrWhiteSpace(TargetConsumerSecret);
-
-    private string AppendBudgetReminder(string message)
-    {
-        var reminder = BuildChatBudgetReminder();
-        return reminder is null ? message : $"{message} {reminder}";
-    }
-
-    private string? BuildChatBudgetReminder()
-    {
-        if (ChatMaxPromptTokens is null && ChatMaxTotalTokens is null && ChatMaxCostUsd is null)
-        {
-            return null;
-        }
-
-        var segments = new List<string>();
-        if (ChatMaxPromptTokens is { } promptTokens)
-        {
-            segments.Add($"prompt ≤ {promptTokens:N0} tokens");
-        }
-
-        if (ChatMaxTotalTokens is { } totalTokens)
-        {
-            segments.Add($"total ≤ {totalTokens:N0} tokens");
-        }
-
-        if (ChatMaxCostUsd is { } costLimit)
-        {
-            segments.Add($"cost ≤ ${costLimit:F2}");
-        }
-
-        if (segments.Count == 0)
-        {
-            return "Session budgets are active to prevent accidental overages.";
-        }
-
-        return $"Session budgets active ({string.Join(", ", segments)}). Requests stop automatically to prevent accidental overages.";
-    }
-
-    private void UpdateChatConfigurationStatus()
-    {
-        if (IsChatBusy)
+        if (e?.PropertyName is null)
         {
             return;
         }
 
-        if (!HasChatConfiguration)
+        OnPropertyChanged(e.PropertyName);
+
+        if (e.PropertyName == nameof(ChatAssistant.TotalPromptTokens)
+            || e.PropertyName == nameof(ChatAssistant.TotalCompletionTokens))
         {
-            ChatStatusMessage = "Enter API endpoint, model, and API key to enable the assistant.";
-            return;
+            OnPropertyChanged(nameof(TotalTokens));
         }
 
-        if (SelectedChatMode == ChatInteractionMode.DatasetQuestion)
+        if (e.PropertyName == nameof(ChatAssistant.ChatApiEndpoint)
+            || e.PropertyName == nameof(ChatAssistant.ChatModel)
+            || e.PropertyName == nameof(ChatAssistant.ChatSystemPrompt)
+            || e.PropertyName == nameof(ChatAssistant.ChatMaxPromptTokens)
+            || e.PropertyName == nameof(ChatAssistant.ChatMaxTotalTokens)
+            || e.PropertyName == nameof(ChatAssistant.ChatMaxCostUsd)
+            || e.PropertyName == nameof(ChatAssistant.ChatPromptTokenUsdPerThousand)
+            || e.PropertyName == nameof(ChatAssistant.ChatCompletionTokenUsdPerThousand))
         {
-            var baseMessage = _artifactIndexingService.HasAnyIndexedArtifacts
-                ? "Dataset Q&A ready. Ask about the exported CSV or JSONL files."
-                : "Run a scrape with CSV or JSONL exports to enable dataset Q&A.";
-            ChatStatusMessage = _artifactIndexingService.HasAnyIndexedArtifacts
-                ? AppendBudgetReminder(baseMessage)
-                : baseMessage;
-            return;
+            SavePreferences();
         }
 
-        ChatStatusMessage = AppendBudgetReminder("Assistant ready for your next prompt.");
-    }
-
-    private void LoadPreferences()
-    {
-        try
+        if (e.PropertyName == nameof(ChatAssistant.ChatApiEndpoint)
+            || e.PropertyName == nameof(ChatAssistant.ChatModel)
+            || e.PropertyName == nameof(ChatAssistant.HasChatApiKey))
         {
-            if (!File.Exists(_preferencesPath))
-            {
-                return;
-            }
-
-            var json = File.ReadAllText(_preferencesPath);
-            var snapshot = JsonSerializer.Deserialize<UserPreferences>(json);
-            if (snapshot is null)
-            {
-                return;
-            }
-
-            _expCsv = snapshot.ExportCsv;
-            _expShopify = snapshot.ExportShopify;
-            _expWoo = snapshot.ExportWoo;
-            _expReviews = snapshot.ExportReviews;
-            _expXlsx = snapshot.ExportXlsx;
-            _expJsonl = snapshot.ExportJsonl;
-            _expPluginsCsv = snapshot.ExportPluginsCsv;
-            _expPluginsJsonl = snapshot.ExportPluginsJsonl;
-            _expThemesCsv = snapshot.ExportThemesCsv;
-            _expThemesJsonl = snapshot.ExportThemesJsonl;
-            _expPublicExtensionFootprints = snapshot.ExportPublicExtensionFootprints;
-            _additionalPublicExtensionPages = snapshot.AdditionalPublicExtensionPages ?? string.Empty;
-            _publicExtensionMaxPages = snapshot.PublicExtensionMaxPages ?? _publicExtensionMaxPages;
-            _publicExtensionMaxBytes = snapshot.PublicExtensionMaxBytes ?? _publicExtensionMaxBytes;
-            _additionalDesignSnapshotPages = snapshot.AdditionalDesignSnapshotPages ?? string.Empty;
-            _designScreenshotBreakpointsText = snapshot.DesignScreenshotBreakpointsText ?? string.Empty;
-            _expPublicDesignSnapshot = snapshot.ExportPublicDesignSnapshot;
-            _expPublicDesignScreenshots = snapshot.ExportPublicDesignScreenshots;
-            _expStoreConfiguration = snapshot.ExportStoreConfiguration;
-            _importStoreConfiguration = snapshot.ImportStoreConfiguration;
-            _chatApiEndpoint = snapshot.ChatApiEndpoint ?? string.Empty;
-            _chatModel = snapshot.ChatModel ?? string.Empty;
-            if (!string.IsNullOrWhiteSpace(snapshot.ChatSystemPrompt))
-            {
-                _chatSystemPrompt = snapshot.ChatSystemPrompt!;
-            }
-            _chatMaxPromptTokens = snapshot.ChatDefaultMaxPromptTokens ?? snapshot.LegacyChatMaxPromptTokens;
-            _chatMaxTotalTokens = snapshot.ChatDefaultMaxTotalTokens ?? snapshot.LegacyChatMaxTotalTokens;
-            _chatMaxCostUsd = snapshot.ChatDefaultMaxCostUsd ?? snapshot.LegacyChatMaxCostUsd;
-            _chatPromptTokenUsdPerThousand = snapshot.ChatPromptTokenUsdPerThousand;
-            _chatCompletionTokenUsdPerThousand = snapshot.ChatCompletionTokenUsdPerThousand;
-            _enableHttpRetries = snapshot.EnableHttpRetries;
-            if (snapshot.HttpRetryAttempts >= 0)
-            {
-                _httpRetryAttempts = snapshot.HttpRetryAttempts;
-            }
-            if (snapshot.HttpRetryBaseDelaySeconds > 0)
-            {
-                _httpRetryBaseDelaySeconds = snapshot.HttpRetryBaseDelaySeconds;
-            }
-            if (snapshot.HttpRetryMaxDelaySeconds > 0)
-            {
-                _httpRetryMaxDelaySeconds = snapshot.HttpRetryMaxDelaySeconds;
-            }
-        }
-        catch
-        {
-            // Ignore preference load failures and continue with defaults.
+            LaunchWizardCommand?.RaiseCanExecuteChanged();
         }
     }
 
-    private void OnLogsCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
-    {
-        ExplainLogsCommand?.RaiseCanExecuteChanged();
-
-        if (e.Action != NotifyCollectionChangedAction.Add || e.NewItems is null || e.NewItems.Count == 0)
-        {
-            return;
-        }
-
-        lock (_logSummarySync)
-        {
-            _pendingLogSummaryCount += e.NewItems.Count;
-        }
-
-        ScheduleLogSummaryDebounced();
-    }
-
-    private void OnChatMessagesCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
-    {
-        SaveChatTranscriptCommand.RaiseCanExecuteChanged();
-        ClearChatHistoryCommand.RaiseCanExecuteChanged();
-        OnPropertyChanged(nameof(HasChatMessages));
-    }
-
-    private void OnArtifactIndexChanged(object? sender, EventArgs e)
-    {
-        ExecuteOnUiThread(() =>
-        {
-            OnPropertyChanged(nameof(HasIndexedDatasets));
-            UpdateChatConfigurationStatus();
-        });
-    }
-
-    private void ScheduleLogSummaryDebounced()
-    {
-        lock (_logSummarySync)
-        {
-            _logSummaryTimer ??= new System.Threading.Timer(OnLogSummaryTimerElapsed, null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
-            _logSummaryTimer.Change(_logSummaryDebounce, Timeout.InfiniteTimeSpan);
-        }
-    }
-
-    private void OnLogSummaryTimerElapsed(object? state)
-    {
-        int pending;
-        lock (_logSummarySync)
-        {
-            pending = _pendingLogSummaryCount;
-            _pendingLogSummaryCount = 0;
-        }
-
-        if (pending == 0)
-        {
-            return;
-        }
-
-        if (!HasChatConfiguration)
-        {
-            return;
-        }
-
-        if (IsLogSummaryBusy)
-        {
-            lock (_logSummarySync)
-            {
-                _pendingLogSummaryCount += pending;
-            }
-
-            ScheduleLogSummaryDebounced();
-            return;
-        }
-
-        var snapshot = CaptureRecentLogs();
-        if (snapshot.Count == 0)
-        {
-            return;
-        }
-
-        _ = SummarizeLogsAsync(snapshot, CancellationToken.None);
-    }
-
-    private IReadOnlyList<string> CaptureRecentLogs(int maxEntries = 80)
-    {
-        if (Logs.Count == 0)
-        {
-            return Array.Empty<string>();
-        }
-
-        var snapshot = new List<string>();
-        ExecuteOnUiThread(() =>
-        {
-            var count = Logs.Count;
-            var start = Math.Max(0, count - maxEntries);
-            for (var i = start; i < count; i++)
-            {
-                snapshot.Add(Logs[i]);
-            }
-        });
-
-        return snapshot;
-    }
-
-    private async Task SummarizeLogsAsync(IReadOnlyList<string> logSnapshot, CancellationToken cancellationToken)
-    {
-        if (!HasChatConfiguration || logSnapshot.Count == 0)
-        {
-            return;
-        }
-
-        if (IsLogSummaryBusy)
-        {
-            return;
-        }
-
-        ExecuteOnUiThread(() => IsLogSummaryBusy = true);
-
-        ChatSessionSettings? session = null;
-
-        try
-        {
-            session = new ChatSessionSettings(
-                ChatApiEndpoint,
-                ChatApiKey,
-                ChatModel,
-                ChatSystemPrompt,
-                MaxPromptTokens: ChatMaxPromptTokens,
-                MaxTotalTokens: ChatMaxTotalTokens,
-                MaxCostUsd: ChatMaxCostUsd,
-                PromptTokenCostPerThousandUsd: ChatPromptTokenUsdPerThousand,
-                CompletionTokenCostPerThousandUsd: ChatCompletionTokenUsdPerThousand,
-                DiagnosticLogger: Append,
-                UsageReported: OnChatUsageReported);
-            var summary = await _chatAssistantService.SummarizeLogsAsync(session, logSnapshot, cancellationToken).ConfigureAwait(false);
-            if (summary is not null)
-            {
-                PublishLogSummary(summary);
-            }
-        }
-        catch (OperationCanceledException)
-        {
-        }
-        catch (Exception ex)
-        {
-            var message = $"AI log triage failed: {ex.Message}";
-            ExecuteOnUiThread(() =>
-            {
-                LogSummaryIssues.Clear();
-                LatestLogSummaryOverview = message;
-                LatestLogSummary = new LogTriageResult(DateTimeOffset.UtcNow, message, Array.Empty<LogTriageIssue>());
-            });
-        }
-        finally
-        {
-            ExecuteOnUiThread(() => IsLogSummaryBusy = false);
-
-            UpdateChatUsageTotals(session);
-
-            var shouldReschedule = false;
-            lock (_logSummarySync)
-            {
-                shouldReschedule = _pendingLogSummaryCount > 0;
-            }
-
-            if (shouldReschedule)
-            {
-                ScheduleLogSummaryDebounced();
-            }
-        }
-    }
-
-    private void PublishLogSummary(LogTriageResult summary)
-    {
-        ExecuteOnUiThread(() =>
-        {
-            LogSummaryIssues.Clear();
-            if (summary.Issues is { Count: > 0 })
-            {
-                foreach (var issue in summary.Issues)
-                {
-                    LogSummaryIssues.Add(issue);
-                }
-            }
-
-            LatestLogSummaryOverview = summary.Overview;
-            LatestLogSummary = summary;
-        });
-    }
-
-    private static string? BuildLogSummaryStatus(LogTriageResult? summary)
-    {
-        if (summary is null)
-        {
-            return null;
-        }
-
-        if (summary.Issues is { Count: > 0 })
-        {
-            var topIssue = summary.Issues
-                .OrderByDescending(issue => GetSeverityRank(issue.Severity))
-                .ThenBy(issue => issue.Category, StringComparer.OrdinalIgnoreCase)
-                .First();
-
-            var severity = NormalizeSeverityLabel(topIssue.Severity);
-            return $"{severity}: {topIssue.Category} – {topIssue.Description}";
-        }
-
-        return summary.Overview;
-    }
-
-    private static int GetSeverityRank(string? severity)
-        => severity?.Trim().ToLowerInvariant() switch
-        {
-            "critical" => 4,
-            "error" => 3,
-            "warning" => 2,
-            "info" => 1,
-            _ => 0,
-        };
-
-    private static string NormalizeSeverityLabel(string? severity)
-    {
-        if (string.IsNullOrWhiteSpace(severity))
-        {
-            return "Info";
-        }
-
-        var trimmed = severity.Trim();
-        if (trimmed.Length == 0)
-        {
-            return "Info";
-        }
-
-        return trimmed.Length == 1
-            ? char.ToUpperInvariant(trimmed[0]).ToString()
-            : char.ToUpperInvariant(trimmed[0]) + trimmed[1..].ToLowerInvariant();
-    }
-
-    private static void ExecuteOnUiThread(Action action)
-    {
-        if (action is null)
-        {
-            return;
-        }
-
-        var dispatcher = System.Windows.Application.Current?.Dispatcher;
-        if (dispatcher is null || dispatcher.CheckAccess())
-        {
-            action();
-        }
-        else
-        {
-            dispatcher.Invoke(action);
-        }
-    }
-
-    private async Task IndexArtifactIfSupportedAsync(string? filePath, CancellationToken cancellationToken)
-    {
-        if (string.IsNullOrWhiteSpace(filePath))
-        {
-            return;
-        }
-
-        try
-        {
-            await _artifactIndexingService.IndexArtifactAsync(filePath, cancellationToken).ConfigureAwait(false);
-        }
-        catch (Exception ex)
-        {
-            Append($"Embedding index update failed for {filePath}: {ex.Message}");
-        }
-    }
-
-
-    private void SavePreferences()
-    {
-        try
-        {
-            Directory.CreateDirectory(_settingsDirectory);
-            var snapshot = new UserPreferences
-            {
-                ExportCsv = ExportCsv,
-                ExportShopify = ExportShopify,
-                ExportWoo = ExportWoo,
-                ExportReviews = ExportReviews,
-                ExportXlsx = ExportXlsx,
-                ExportJsonl = ExportJsonl,
-                ExportPluginsCsv = ExportPluginsCsv,
-                ExportPluginsJsonl = ExportPluginsJsonl,
-                ExportThemesCsv = ExportThemesCsv,
-                ExportThemesJsonl = ExportThemesJsonl,
-                ExportPublicExtensionFootprints = ExportPublicExtensionFootprints,
-                AdditionalPublicExtensionPages = AdditionalPublicExtensionPages,
-                PublicExtensionMaxPages = PublicExtensionMaxPages,
-                PublicExtensionMaxBytes = PublicExtensionMaxBytes,
-                AdditionalDesignSnapshotPages = AdditionalDesignSnapshotPages,
-                DesignScreenshotBreakpointsText = DesignScreenshotBreakpointsText,
-                ExportPublicDesignSnapshot = ExportPublicDesignSnapshot,
-                ExportPublicDesignScreenshots = ExportPublicDesignScreenshots,
-                ExportStoreConfiguration = ExportStoreConfiguration,
-                ImportStoreConfiguration = ImportStoreConfiguration,
-                ChatApiEndpoint = ChatApiEndpoint,
-                ChatModel = ChatModel,
-                ChatSystemPrompt = ChatSystemPrompt,
-                ChatDefaultMaxPromptTokens = ChatMaxPromptTokens,
-                LegacyChatMaxPromptTokens = ChatMaxPromptTokens,
-                ChatDefaultMaxTotalTokens = ChatMaxTotalTokens,
-                LegacyChatMaxTotalTokens = ChatMaxTotalTokens,
-                ChatDefaultMaxCostUsd = ChatMaxCostUsd,
-                LegacyChatMaxCostUsd = ChatMaxCostUsd,
-                ChatPromptTokenUsdPerThousand = ChatPromptTokenUsdPerThousand,
-                ChatCompletionTokenUsdPerThousand = ChatCompletionTokenUsdPerThousand,
-                EnableHttpRetries = EnableHttpRetries,
-                HttpRetryAttempts = HttpRetryAttempts,
-                HttpRetryBaseDelaySeconds = HttpRetryBaseDelaySeconds,
-                HttpRetryMaxDelaySeconds = HttpRetryMaxDelaySeconds,
-            };
-
-            var json = JsonSerializer.Serialize(snapshot, _preferencesWriteOptions);
-            File.WriteAllText(_preferencesPath, json);
-        }
-        catch
-        {
-            // Ignore persistence issues to avoid disrupting the UI workflow.
-        }
-    }
-
-    private void LoadChatApiKey()
-    {
-        try
-        {
-            if (!File.Exists(_chatKeyPath))
-            {
-                _chatApiKey = string.Empty;
-                OnPropertyChanged(nameof(ChatApiKey));
-                HasChatApiKey = false;
-                return;
-            }
-
-            var encrypted = File.ReadAllBytes(_chatKeyPath);
-            if (encrypted.Length == 0)
-            {
-                _chatApiKey = string.Empty;
-                OnPropertyChanged(nameof(ChatApiKey));
-                HasChatApiKey = false;
-                return;
-            }
-
-            var decrypted = ProtectedData.Unprotect(encrypted, null, DataProtectionScope.CurrentUser);
-            var key = Encoding.UTF8.GetString(decrypted);
-            _chatApiKey = key;
-            OnPropertyChanged(nameof(ChatApiKey));
-            HasChatApiKey = !string.IsNullOrWhiteSpace(key);
-        }
-        catch
-        {
-            _chatApiKey = string.Empty;
-            OnPropertyChanged(nameof(ChatApiKey));
-            HasChatApiKey = false;
-        }
-    }
-
-    private bool TryPersistChatApiKey(string value)
-    {
-        try
-        {
-            Directory.CreateDirectory(_settingsDirectory);
-
-            if (string.IsNullOrWhiteSpace(value))
-            {
-                if (File.Exists(_chatKeyPath))
-                {
-                    File.Delete(_chatKeyPath);
-                }
-
-                return true;
-            }
-
-            var bytes = Encoding.UTF8.GetBytes(value);
-            var encrypted = ProtectedData.Protect(bytes, null, DataProtectionScope.CurrentUser);
-            File.WriteAllBytes(_chatKeyPath, encrypted);
-            return true;
-        }
-        catch
-        {
-            return false;
-        }
-    }
+    private bool CanExplainLogs()
+        => !IsLogSummaryBusy
+            && HasChatConfiguration
+            && Logs.Count > 0;
 
     private static Dictionary<string, object?> BuildCollectionExportRow(SelectableTerm choice)
     {
@@ -3803,7 +1489,6 @@ public sealed class MainViewModel : INotifyPropertyChanged
             var progressLogger = RequireProgressLogger(operationLogger);
 
             _artifactIndexingService.ResetForRun(storeId, timestamp);
-            UpdateChatConfigurationStatus();
 
             // Refresh filters for this store
             await LoadFiltersForStoreAsync(targetUrl, operationLogger, cancellationToken);
@@ -5173,7 +2858,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 retrySettings.MaxDelay,
                 artifactPayload,
                 RunPlans: planSnapshots,
-                ChatTranscriptPath: _chatTranscriptStore.CurrentJsonlPath);
+                ChatTranscriptPath: ChatAssistant.CurrentTranscriptPath);
 
             var runSnapshotJson = ManualMigrationRunSummaryFactory.CreateSnapshotJson(reportContext);
             ExecuteOnUiThread(() =>
@@ -6555,8 +4240,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
         {
             ExecuteOnUiThread(() =>
             {
-                IsAssistantPanelExpanded = true;
-                ChatStatusMessage = "No run summary is available yet. Complete a run to ask follow-up questions.";
+                ChatAssistant.IsAssistantPanelExpanded = true;
+                ChatAssistant.SetStatusMessage("No run summary is available yet. Complete a run to ask follow-up questions.");
             });
             return;
         }
@@ -6565,60 +4250,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     }
 
     private void PrepareAssistantForRunFollowUp(string snapshotJson, string? narrative, string? goals, string? aiBriefPath)
-    {
-        ExecuteOnUiThread(() =>
-        {
-            IsAssistantPanelExpanded = true;
-            ChatMessages.Clear();
-            ResetChatUsageTotals();
-            _chatTranscriptStore.StartNewSession();
-
-            var contextBuilder = new StringBuilder();
-            if (!string.IsNullOrWhiteSpace(goals))
-            {
-                contextBuilder.AppendLine("Operator goals:");
-                contextBuilder.AppendLine(goals!.Trim());
-            }
-
-            if (!string.IsNullOrWhiteSpace(snapshotJson))
-            {
-                if (contextBuilder.Length > 0)
-                {
-                    contextBuilder.AppendLine();
-                }
-
-                contextBuilder.AppendLine("Run snapshot (JSON):");
-                contextBuilder.AppendLine(snapshotJson);
-            }
-
-            var contextText = contextBuilder.ToString().Trim();
-            if (contextText.Length > 0)
-            {
-                var systemMessage = new ChatMessage(ChatMessageRole.System, contextText);
-                ChatMessages.Add(systemMessage);
-                _ = TryAppendTranscriptAsync(systemMessage);
-            }
-
-            if (!string.IsNullOrWhiteSpace(narrative))
-            {
-                var messageBuilder = new StringBuilder(narrative.Trim());
-                if (!string.IsNullOrWhiteSpace(aiBriefPath))
-                {
-                    messageBuilder.AppendLine();
-                    messageBuilder.AppendLine();
-                    messageBuilder.Append("AI brief saved at: ");
-                    messageBuilder.Append(aiBriefPath);
-                }
-
-                var assistantSummary = new ChatMessage(ChatMessageRole.Assistant, messageBuilder.ToString());
-                ChatMessages.Add(assistantSummary);
-                _ = TryAppendTranscriptAsync(assistantSummary);
-            }
-
-            ChatInput = string.Empty;
-            ChatStatusMessage = AppendBudgetReminder("Assistant loaded with the latest run summary. Ask a follow-up question.");
-        });
-    }
+        => ChatAssistant.PrepareForRunFollowUp(snapshotJson, narrative, goals, aiBriefPath);
 
     private static void CopyDirectory(
         string sourceDirectory,
