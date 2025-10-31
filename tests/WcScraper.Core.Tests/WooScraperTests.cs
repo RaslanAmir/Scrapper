@@ -418,6 +418,79 @@ public sealed class WooScraperTests
             msg.Contains("timed out", StringComparison.OrdinalIgnoreCase));
     }
 
+    [Fact]
+    public async Task FetchWordPressPagesAsync_CancellationStopsAdditionalRequests()
+    {
+        const string firstPagePayload = """
+        [
+          {
+            "id": 1,
+            "slug": "page-1",
+            "link": "https://example.com/page-1",
+            "content": { "rendered": "<p>Page 1</p>" }
+          }
+        ]
+        """;
+
+        var firstPageRequestStarted = new TaskCompletionSource<object?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var allowFirstResponse = new TaskCompletionSource<object?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var firstPageResponseReturning = new TaskCompletionSource<object?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var unexpectedRequest = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        using var handler = new StubHttpMessageHandler(async (request, cancellationToken) =>
+        {
+            if (request.RequestUri is { } uri &&
+                uri.AbsolutePath.StartsWith("/wp-json/wp/v2/pages", StringComparison.Ordinal))
+            {
+                if (uri.Query.Contains("page=1", StringComparison.Ordinal))
+                {
+                    firstPageRequestStarted.TrySetResult(null);
+                    await allowFirstResponse.Task.ConfigureAwait(false);
+                    var response = new HttpResponseMessage(HttpStatusCode.OK)
+                    {
+                        Content = new StringContent(firstPagePayload, Encoding.UTF8, "application/json")
+                    };
+                    firstPageResponseReturning.TrySetResult(null);
+                    return response;
+                }
+
+                unexpectedRequest.TrySetResult(uri.ToString());
+                return new HttpResponseMessage(HttpStatusCode.InternalServerError)
+                {
+                    Content = new StringContent("unexpected request", Encoding.UTF8, "text/plain")
+                };
+            }
+
+            return new HttpResponseMessage(HttpStatusCode.NotFound);
+        });
+
+        using var client = new HttpClient(handler);
+        var scraper = new WooScraper(client, allowLegacyTls: false, loggerFactory: NullLoggerFactory.Instance);
+
+        using var cts = new CancellationTokenSource();
+        var progressMessages = new List<string>();
+        var progress = new Progress<string>(msg => progressMessages.Add(msg));
+
+        var fetchTask = scraper.FetchWordPressPagesAsync(
+            "https://example.com",
+            log: progress,
+            perPage: 1,
+            cancellationToken: cts.Token);
+
+        await firstPageRequestStarted.Task.ConfigureAwait(false);
+        allowFirstResponse.TrySetResult(null);
+        await firstPageResponseReturning.Task.ConfigureAwait(false);
+
+        cts.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => await fetchTask.ConfigureAwait(false));
+
+        Assert.Equal(1, handler.RequestCount);
+        Assert.Contains(progressMessages, msg => msg.Contains("page=1", StringComparison.Ordinal));
+        Assert.DoesNotContain(progressMessages, msg => msg.Contains("page=2", StringComparison.Ordinal));
+        Assert.False(unexpectedRequest.Task.IsCompleted);
+    }
+
     private sealed class DelayedResponseHandler : HttpMessageHandler
     {
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
