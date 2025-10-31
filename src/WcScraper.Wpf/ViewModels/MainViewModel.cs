@@ -138,6 +138,25 @@ public sealed class MainViewModel : INotifyPropertyChanged
     {
     }
 
+    public MainViewModel(
+        IDialogService dialogs,
+        ILoggerFactory loggerFactory,
+        IArtifactIndexingService artifactIndexingService,
+        ChatAssistantService chatAssistantService,
+        ChatAssistantViewModel chatAssistant)
+        : this(
+            dialogs,
+            CreateDefaultWooScraper(loggerFactory),
+            CreateDefaultShopifyScraper(loggerFactory),
+            new HttpClient(),
+            new HeadlessBrowserScreenshotService(),
+            artifactIndexingService,
+            chatAssistantService,
+            chatAssistant,
+            loggerFactory)
+    {
+    }
+
     public MainViewModel()
         : this(new WcScraper.Wpf.Services.DialogService(), NullLoggerFactory.Instance)
     {

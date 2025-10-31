@@ -20,9 +20,22 @@ namespace WcScraper.Wpf
                 builder.AddConsole();
             });
 
+            var dialogs = new DialogService();
+            var artifactIndexingService = new ArtifactIndexingService();
+            var chatAssistantService = new ChatAssistantService(artifactIndexingService);
+            var chatAssistant = MainViewModel.CreateDefaultChatAssistant(
+                dialogs,
+                artifactIndexingService,
+                chatAssistantService);
+
             var mainWindow = new MainWindow
             {
-                DataContext = new MainViewModel(new DialogService(), _loggerFactory)
+                DataContext = new MainViewModel(
+                    dialogs,
+                    _loggerFactory,
+                    artifactIndexingService,
+                    chatAssistantService,
+                    chatAssistant)
             };
 
             MainWindow = mainWindow;
