@@ -4733,7 +4733,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
             if (ExportCsv)
             {
                 var path = Path.Combine(storeOutputFolder, $"{storeId}_{timestamp}_products.csv");
-                CsvExporter.Write(path, genericDicts, DetermineFlushCadence(genericRows.Count));
+                var csvOptions = new CsvWriteOptions { FlushEvery = DetermineFlushCadence(genericRows.Count) };
+                CsvExporter.Write(path, genericDicts, csvOptions);
                 Append($"Wrote {path}");
                 await IndexArtifactIfSupportedAsync(path, cancellationToken);
             }
@@ -4759,7 +4760,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 if (plugins.Count > 0)
                 {
                     var path = Path.Combine(storeOutputFolder, $"{storeId}_{timestamp}_plugins.csv");
-                    CsvExporter.WritePlugins(path, plugins, DetermineFlushCadence(plugins.Count));
+                    var pluginCsvOptions = new CsvWriteOptions { FlushEvery = DetermineFlushCadence(plugins.Count) };
+                    CsvExporter.WritePlugins(path, plugins, pluginCsvOptions);
                     Append($"Wrote {path}");
                     await IndexArtifactIfSupportedAsync(path, cancellationToken);
                 }
@@ -4789,7 +4791,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 if (themes.Count > 0)
                 {
                     var path = Path.Combine(storeOutputFolder, $"{storeId}_{timestamp}_themes.csv");
-                    CsvExporter.WriteThemes(path, themes, DetermineFlushCadence(themes.Count));
+                    var themeCsvOptions = new CsvWriteOptions { FlushEvery = DetermineFlushCadence(themes.Count) };
+                    CsvExporter.WriteThemes(path, themes, themeCsvOptions);
                     Append($"Wrote {path}");
                     await IndexArtifactIfSupportedAsync(path, cancellationToken);
                 }

@@ -4,116 +4,240 @@ using System.Text.Json;
 
 namespace WcScraper.Core.Exporters;
 
+public sealed class CsvWriteOptions
+{
+    public static CsvWriteOptions Default { get; } = new();
+
+    public int? FlushEvery { get; init; }
+
+    public int RowBufferSize { get; init; } = 128;
+
+    public int StreamWriterBufferSize { get; init; } = 4096;
+
+    internal CsvWriteOptions Normalize()
+    {
+        var flush = FlushEvery.HasValue && FlushEvery.Value > 0 ? FlushEvery : null;
+        var rowBuffer = RowBufferSize > 0 ? RowBufferSize : Default.RowBufferSize;
+        var writerBuffer = StreamWriterBufferSize > 0 ? StreamWriterBufferSize : Default.StreamWriterBufferSize;
+
+        return new CsvWriteOptions
+        {
+            FlushEvery = flush,
+            RowBufferSize = rowBuffer,
+            StreamWriterBufferSize = writerBuffer
+        };
+    }
+}
+
 public static class CsvExporter
 {
     /// <summary>
-    /// Writes the provided rows to a CSV file by buffering them in a temporary backing store, capturing
-    /// the union of column headers in insertion order in a single pass, rewinding the buffer to emit the
-    /// header row followed by each buffered record, and optionally flushing the output writer after every
-    /// <paramref name="flushEvery"/> rows. The output is written with a BOM-aware UTF-8 encoding.
+    /// Writes the provided rows to a CSV file while capturing the union of column headers in insertion order
+    /// during a single pass. The rows are buffered in-memory until the header set stabilizes, after which the
+    /// header and buffered rows are streamed to the writer using the provided <see cref="CsvWriteOptions"/>.
+    /// The output is written with a BOM-aware UTF-8 encoding.
     /// </summary>
-    public static void Write(string path, IEnumerable<IDictionary<string, object?>> rows, int? flushEvery = null)
+    public static void Write(string path, IEnumerable<IDictionary<string, object?>> rows, CsvWriteOptions? options = null)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        var effectiveOptions = (options ?? CsvWriteOptions.Default).Normalize();
         using var fs = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.None);
-        using var sw = new StreamWriter(fs, new UTF8Encoding(encoderShouldEmitUTF8Identifier: true));
-        Write(sw, rows, flushEvery);
+        using var sw = new StreamWriter(fs, new UTF8Encoding(encoderShouldEmitUTF8Identifier: true), effectiveOptions.StreamWriterBufferSize);
+        Write(sw, rows, effectiveOptions);
     }
 
-    public static void Write(StreamWriter writer, IEnumerable<IDictionary<string, object?>> rows, int? flushEvery = null)
+    public static void Write(StreamWriter writer, IEnumerable<IDictionary<string, object?>> rows, CsvWriteOptions? options = null)
     {
         if (writer is null)
         {
             throw new ArgumentNullException(nameof(writer));
         }
 
-        string? tempPath = null;
-        var flushBatch = flushEvery.HasValue && flushEvery.Value > 0 ? flushEvery.Value : (int?)null;
+        var effectiveOptions = (options ?? CsvWriteOptions.Default).Normalize();
+        var headers = new List<string>();
+        var headerSet = new HashSet<string>(StringComparer.Ordinal);
+        var pendingRows = new List<Dictionary<string, string>>(effectiveOptions.RowBufferSize);
+        var emittedRows = new List<string[]>();
+        var flushBatch = effectiveOptions.FlushEvery;
+        var flushCounter = 0;
+        var headerWritten = false;
+        var anyRows = false;
 
-        try
+        void WriteHeaderIfNeeded()
         {
-            tempPath = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
-            using var tempStream = new FileStream(tempPath, FileMode.Create, FileAccess.ReadWrite, FileShare.None, 4096, FileOptions.SequentialScan);
-            using var tempWriter = new BinaryWriter(tempStream, Encoding.UTF8, leaveOpen: true);
-
-            var headers = new List<string>();
-            var headerSet = new HashSet<string>(StringComparer.Ordinal);
-            var rowCount = 0;
-
-            foreach (var row in rows)
+            if (headerWritten)
             {
-                if (row is null)
-                {
-                    continue;
-                }
-
-                var formattedRow = new Dictionary<string, string>(StringComparer.Ordinal);
-                foreach (var kvp in row)
-                {
-                    if (headerSet.Add(kvp.Key))
-                    {
-                        headers.Add(kvp.Key);
-                    }
-
-                    formattedRow[kvp.Key] = Format(kvp.Value);
-                }
-
-                var buffer = JsonSerializer.SerializeToUtf8Bytes(formattedRow);
-                tempWriter.Write(buffer.Length);
-                tempWriter.Write(buffer);
-                rowCount++;
+                return;
             }
 
-            tempWriter.Flush();
-            tempStream.Position = 0;
-
-            if (rowCount == 0)
+            if (headers.Count == 0 && !anyRows)
             {
-                writer.WriteLine("");
                 return;
             }
 
             writer.WriteLine(string.Join(",", headers.Select(Quote)));
+            headerWritten = true;
+        }
 
-            using var tempReader = new BinaryReader(tempStream, Encoding.UTF8, leaveOpen: true);
-            var flushCounter = 0;
+        void WriteRowValues(string[] values)
+        {
+            var line = string.Join(",", values.Select(Quote));
+            writer.WriteLine(line);
 
-            while (tempStream.Position < tempStream.Length)
+            if (flushBatch.HasValue)
             {
-                var length = tempReader.ReadInt32();
-                var buffer = tempReader.ReadBytes(length);
-                var formattedRow = JsonSerializer.Deserialize<Dictionary<string, string>>(buffer) ?? new Dictionary<string, string>(StringComparer.Ordinal);
-
-                var line = string.Join(",", headers.Select(header => Quote(formattedRow.TryGetValue(header, out var value) ? value ?? string.Empty : string.Empty)));
-
-                writer.WriteLine(line);
-
-                if (flushBatch.HasValue)
+                flushCounter++;
+                if (flushCounter >= flushBatch.Value)
                 {
-                    flushCounter++;
-                    if (flushCounter >= flushBatch.Value)
+                    writer.Flush();
+                    flushCounter = 0;
+                }
+            }
+        }
+
+        void FlushPendingRows()
+        {
+            if (pendingRows.Count == 0)
+            {
+                return;
+            }
+
+            foreach (var pending in pendingRows)
+            {
+                var values = new string[headers.Count];
+                for (var i = 0; i < headers.Count; i++)
+                {
+                    var header = headers[i];
+                    values[i] = pending.TryGetValue(header, out var value) ? value ?? string.Empty : string.Empty;
+                }
+
+                emittedRows.Add(values);
+                WriteRowValues(values);
+            }
+
+            pendingRows.Clear();
+        }
+
+        void RewriteOutput()
+        {
+            if (!writer.BaseStream.CanSeek)
+            {
+                throw new InvalidOperationException("Cannot expand CSV headers on a non-seekable stream.");
+            }
+
+            writer.Flush();
+            writer.BaseStream.Seek(0, SeekOrigin.Begin);
+            writer.BaseStream.SetLength(0);
+            headerWritten = false;
+            flushCounter = 0;
+
+            if (headers.Count == 0)
+            {
+                return;
+            }
+
+            WriteHeaderIfNeeded();
+
+            for (var i = 0; i < emittedRows.Count; i++)
+            {
+                var row = emittedRows[i];
+                if (row.Length != headers.Count)
+                {
+                    var previousLength = row.Length;
+                    Array.Resize(ref row, headers.Count);
+                    for (var j = previousLength; j < headers.Count; j++)
                     {
-                        writer.Flush();
-                        flushCounter = 0;
+                        row[j] = string.Empty;
                     }
+                    emittedRows[i] = row;
+                }
+
+                WriteRowValues(row);
+            }
+        }
+
+        void ExpandEmittedRowsForNewHeader()
+        {
+            for (var i = 0; i < emittedRows.Count; i++)
+            {
+                var row = emittedRows[i];
+                var originalLength = row.Length;
+                if (originalLength == headers.Count)
+                {
+                    continue;
+                }
+
+                Array.Resize(ref row, headers.Count);
+                for (var j = originalLength; j < headers.Count; j++)
+                {
+                    row[j] = string.Empty;
+                }
+
+                emittedRows[i] = row;
+            }
+        }
+
+        foreach (var row in rows)
+        {
+            if (row is null)
+            {
+                continue;
+            }
+
+            anyRows = true;
+            var formattedRow = new Dictionary<string, string>(StringComparer.Ordinal);
+            var headerExpanded = false;
+
+            foreach (var kvp in row)
+            {
+                if (headerSet.Add(kvp.Key))
+                {
+                    headers.Add(kvp.Key);
+                    headerExpanded = true;
+                }
+
+                formattedRow[kvp.Key] = Format(kvp.Value);
+            }
+
+            if (headerExpanded)
+            {
+                ExpandEmittedRowsForNewHeader();
+
+                if (headerWritten)
+                {
+                    RewriteOutput();
                 }
             }
 
-            if (flushBatch.HasValue && flushCounter > 0)
+            pendingRows.Add(formattedRow);
+
+            if (!headerWritten && pendingRows.Count >= effectiveOptions.RowBufferSize)
             {
-                writer.Flush();
+                WriteHeaderIfNeeded();
+            }
+
+            if (headerWritten && pendingRows.Count >= effectiveOptions.RowBufferSize)
+            {
+                FlushPendingRows();
             }
         }
-        finally
+
+        if (!anyRows)
         {
-            if (tempPath is not null && File.Exists(tempPath))
-            {
-                File.Delete(tempPath);
-            }
+            writer.WriteLine(string.Empty);
+            return;
+        }
+
+        WriteHeaderIfNeeded();
+        FlushPendingRows();
+
+        if (flushBatch.HasValue && flushCounter > 0)
+        {
+            writer.Flush();
         }
     }
 
-    public static void WritePlugins(string path, IEnumerable<InstalledPlugin> plugins, int? flushEvery = null)
+    public static void WritePlugins(string path, IEnumerable<InstalledPlugin> plugins, CsvWriteOptions? options = null)
     {
         Write(path, plugins
             .Select(p => new Dictionary<string, object?>
@@ -132,10 +256,10 @@ public static class CsvExporter
                 ["asset_manifest"] = p.AssetManifest is not null ? p.AssetManifest.ToJsonString() : null,
                 ["asset_paths"] = p.AssetPaths.Count > 0 ? string.Join(";", p.AssetPaths) : null
             }),
-            flushEvery);
+            options);
     }
 
-    public static void WriteThemes(string path, IEnumerable<InstalledTheme> themes, int? flushEvery = null)
+    public static void WriteThemes(string path, IEnumerable<InstalledTheme> themes, CsvWriteOptions? options = null)
     {
         Write(path, themes
             .Select(t => new Dictionary<string, object?>
@@ -155,12 +279,12 @@ public static class CsvExporter
                 ["asset_manifest"] = t.AssetManifest is not null ? t.AssetManifest.ToJsonString() : null,
                 ["asset_paths"] = t.AssetPaths.Count > 0 ? string.Join(";", t.AssetPaths) : null
             }),
-            flushEvery);
+            options);
     }
 
     private static string Format(object? v)
     {
-        if (v is null) return "";
+        if (v is null) return string.Empty;
         return v switch
         {
             DateTime dt => dt.ToString("s", CultureInfo.InvariantCulture),
@@ -168,7 +292,7 @@ public static class CsvExporter
             float f => f.ToString("0.######", CultureInfo.InvariantCulture),
             decimal m => m.ToString("0.######", CultureInfo.InvariantCulture),
             bool b => b ? "TRUE" : "FALSE",
-            _ => v.ToString() ?? ""
+            _ => v.ToString() ?? string.Empty
         };
     }
 
