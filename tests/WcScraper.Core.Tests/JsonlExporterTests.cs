@@ -86,6 +86,48 @@ public class JsonlExporterTests
         }
     }
 
+    [Fact]
+    public void Write_StreamedRows_FlushesAtThresholdAndPreservesLineCount()
+    {
+        var yielded = 0;
+
+        static IDictionary<string, object?> CreateRow(params (string Key, object? Value)[] pairs)
+        {
+            var dict = new Dictionary<string, object?>(StringComparer.Ordinal);
+            foreach (var (key, value) in pairs)
+            {
+                dict[key] = value;
+            }
+
+            return dict;
+        }
+
+        IEnumerable<IDictionary<string, object?>> StreamRows()
+        {
+            yielded++;
+            yield return CreateRow(("beta", "b1"), ("alpha", "a1"));
+
+            yielded++;
+            yield return CreateRow(("gamma", "g2"), ("beta", "b2"));
+
+            yielded++;
+            yield return CreateRow(("alpha", "a3"), ("delta", "d3"));
+        }
+
+        using var writer = new FlushTrackingTextWriter();
+
+        JsonlExporter.Write(writer, StreamRows(), bufferThreshold: 2);
+
+        Assert.Equal(2, writer.FlushCount);
+
+        var lines = writer.ToString()
+            .Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
+
+        Assert.Equal(3, lines.Length);
+        Assert.All(lines, line => Assert.False(string.IsNullOrWhiteSpace(line)));
+        Assert.Equal(3, yielded);
+    }
+
     private static IEnumerable<IDictionary<string, object?>> CreateRows(int count)
     {
         for (var i = 0; i < count; i++)

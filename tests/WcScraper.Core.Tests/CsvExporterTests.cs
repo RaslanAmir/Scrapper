@@ -112,6 +112,55 @@ public sealed class CsvExporterTests
     }
 
     [Fact]
+    public void Write_StreamedRowsWithLateColumns_ProducesDeterministicUnion()
+    {
+        var yielded = 0;
+
+        static IDictionary<string, object?> CreateRow(params (string Key, object? Value)[] pairs)
+        {
+            var dict = new Dictionary<string, object?>(StringComparer.Ordinal);
+            foreach (var (key, value) in pairs)
+            {
+                dict[key] = value;
+            }
+
+            return dict;
+        }
+
+        IEnumerable<IDictionary<string, object?>> StreamRows()
+        {
+            yielded++;
+            yield return CreateRow(("beta", "b1"), ("alpha", "a1"));
+
+            yielded++;
+            yield return CreateRow(("gamma", "g2"), ("beta", "b2"));
+
+            yielded++;
+            yield return CreateRow(("alpha", "a3"), ("delta", "d3"));
+        }
+
+        using var stream = new MemoryStream();
+        var encoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: true);
+        using var writer = new StreamWriter(stream, encoding, bufferSize: 1024, leaveOpen: true);
+
+        CsvExporter.Write(writer, StreamRows(), new CsvWriteOptions { RowBufferSize = 1 }, bufferThreshold: 1);
+
+        writer.Flush();
+        stream.Position = 0;
+
+        using var reader = new StreamReader(stream, encoding, detectEncodingFromByteOrderMarks: true, leaveOpen: true);
+        var lines = reader.ReadToEnd()
+            .Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
+
+        Assert.Equal(4, lines.Length);
+        Assert.Equal("beta,alpha,gamma,delta", lines[0]);
+        Assert.Equal(new[] { "b1", "a1", string.Empty, string.Empty }, lines[1].Split(','));
+        Assert.Equal(new[] { "b2", string.Empty, "g2", string.Empty }, lines[2].Split(','));
+        Assert.Equal(new[] { string.Empty, "a3", string.Empty, "d3" }, lines[3].Split(','));
+        Assert.Equal(3, yielded);
+    }
+
+    [Fact]
     public void WritePlugins_ExportsPluginMetadata()
     {
         var tempPath = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName() + ".csv");
