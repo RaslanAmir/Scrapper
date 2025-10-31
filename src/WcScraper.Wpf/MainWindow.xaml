@@ -253,8 +253,8 @@
                 <TextBlock Text="Requires an export with store configuration enabled and WordPress credentials."
                            TextWrapping="Wrap"
                            Margin="0,0,0,8"/>
-                <TextBlock Text="{Binding CanReplicate, StringFormat=Export ready: {0}}" Margin="0,0,0,4"/>
-                <Button Content="Replicate store" HorizontalAlignment="Right" Padding="16,6" Command="{Binding ReplicateCommand}" />
+                <TextBlock Text="{Binding Provisioning.CanReplicate, StringFormat=Export ready: {0}}" Margin="0,0,0,4"/>
+                <Button Content="Replicate store" HorizontalAlignment="Right" Padding="16,6" Command="{Binding Provisioning.ReplicateCommand}" />
             </StackPanel>
         </GroupBox>
 
