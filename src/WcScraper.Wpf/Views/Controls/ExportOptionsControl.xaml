@@ -1,0 +1,122 @@
+<UserControl x:Class="WcScraper.Wpf.Views.Controls.ExportOptionsControl"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             mc:Ignorable="d">
+    <StackPanel Margin="8">
+        <WrapPanel>
+            <CheckBox Content="Generic CSV" IsChecked="{Binding ExportCsv}" Margin="0,0,16,0"/>
+            <CheckBox Content="Shopify CSV (variants)" IsChecked="{Binding ExportShopify}" Margin="0,0,16,0"/>
+            <CheckBox Content="WooCommerce CSV" IsChecked="{Binding ExportWoo}" Margin="0,0,16,0"/>
+            <CheckBox Content="Reviews CSV (Store API)" IsChecked="{Binding ExportReviews}" Margin="0,0,16,0"/>
+            <CheckBox Content="XLSX" IsChecked="{Binding ExportXlsx}" Margin="0,0,16,0"/>
+            <CheckBox Content="JSONL" IsChecked="{Binding ExportJsonl}"/>
+        </WrapPanel>
+        <WrapPanel Margin="0,8,0,0"
+                   Visibility="{Binding IsWooCommerce, Converter={StaticResource BoolToVisibility}}">
+            <CheckBox Content="Plugins CSV"
+                      IsChecked="{Binding ExportPluginsCsv}"
+                      IsEnabled="{Binding CanExportExtensions}"
+                      Margin="0,0,16,0"
+                      Style="{StaticResource CredentialDependentCheckBoxStyle}"/>
+            <CheckBox Content="Plugins JSONL"
+                      IsChecked="{Binding ExportPluginsJsonl}"
+                      IsEnabled="{Binding CanExportExtensions}"
+                      Margin="0,0,16,0"
+                      Style="{StaticResource CredentialDependentCheckBoxStyle}"/>
+            <CheckBox Content="Themes CSV"
+                      IsChecked="{Binding ExportThemesCsv}"
+                      IsEnabled="{Binding CanExportExtensions}"
+                      Margin="0,0,16,0"
+                      Style="{StaticResource CredentialDependentCheckBoxStyle}"/>
+            <CheckBox Content="Themes JSONL"
+                      IsChecked="{Binding ExportThemesJsonl}"
+                      IsEnabled="{Binding CanExportExtensions}"
+                      Style="{StaticResource CredentialDependentCheckBoxStyle}"/>
+            <CheckBox Content="Public plugin/theme slugs only (manual install required)"
+                      IsChecked="{Binding ExportPublicExtensionFootprints}"
+                      IsEnabled="{Binding CanExportPublicExtensionFootprints}"
+                      Visibility="{Binding CanExportPublicExtensionFootprints, Converter={StaticResource BoolToVisibility}}"
+                      Margin="0,0,16,0"/>
+        </WrapPanel>
+        <StackPanel Margin="0,8,0,0"
+                    Visibility="{Binding ExportPublicExtensionFootprints, Converter={StaticResource BoolToVisibility}}">
+            <TextBlock Text="Additional pages to scan (one per line or comma-separated):"
+                       TextWrapping="Wrap"
+                       Margin="0,0,0,4"/>
+            <TextBox Text="{Binding AdditionalPublicExtensionPages, UpdateSourceTrigger=PropertyChanged}"
+                     AcceptsReturn="True"
+                     TextWrapping="Wrap"
+                     MinWidth="320"
+                     MinHeight="60"
+                     VerticalScrollBarVisibility="Auto"/>
+            <Grid Margin="0,8,0,0">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
+                <TextBlock Text="Max pages to crawl (0 or blank = unlimited):"
+                           Margin="0,0,8,4"
+                           VerticalAlignment="Center"/>
+                <TextBox Grid.Column="1"
+                         Text="{Binding PublicExtensionMaxPages, UpdateSourceTrigger=PropertyChanged}"
+                         MinWidth="120"/>
+                <TextBlock Grid.Row="1"
+                           Text="Max bytes to download (0 or blank = unlimited):"
+                           Margin="0,8,8,0"
+                           VerticalAlignment="Center"/>
+                <TextBox Grid.Row="1"
+                         Grid.Column="1"
+                         Text="{Binding PublicExtensionMaxBytes, UpdateSourceTrigger=PropertyChanged}"
+                         MinWidth="120"
+                         ToolTip="Enter total byte ceiling for the public asset crawl. Example: 3145728 (~3 MB)."/>
+            </Grid>
+        </StackPanel>
+        <CheckBox Content="Export public design snapshot (homepage HTML + inline CSS + fonts)"
+                  IsChecked="{Binding ExportPublicDesignSnapshot}"
+                  IsEnabled="{Binding CanExportPublicDesignSnapshot}"
+                  Visibility="{Binding IsWooCommerce, Converter={StaticResource BoolToVisibility}}"
+                  Margin="0,8,0,0"/>
+        <StackPanel Margin="0,4,0,0"
+                    Visibility="{Binding ExportPublicDesignSnapshot, Converter={StaticResource BoolToVisibility}}">
+            <TextBlock Text="Additional design pages to capture (one per line or comma-separated):"
+                       TextWrapping="Wrap"
+                       Margin="0,0,0,4"/>
+            <TextBox Text="{Binding AdditionalDesignSnapshotPages, UpdateSourceTrigger=PropertyChanged}"
+                     AcceptsReturn="True"
+                     TextWrapping="Wrap"
+                     MinWidth="320"
+                     MinHeight="60"
+                     VerticalScrollBarVisibility="Auto"/>
+        </StackPanel>
+        <CheckBox Content="Capture public design screenshots (PNG breakpoints)"
+                  IsChecked="{Binding ExportPublicDesignScreenshots}"
+                  IsEnabled="{Binding CanExportPublicDesignScreenshots}"
+                  Visibility="{Binding IsWooCommerce, Converter={StaticResource BoolToVisibility}}"
+                  Margin="0,8,0,0"/>
+        <StackPanel Margin="0,4,0,0"
+                    Visibility="{Binding ExportPublicDesignScreenshots, Converter={StaticResource BoolToVisibility}}">
+            <TextBlock Text="Design screenshot breakpoints (label:widthxheight; separate entries with semicolons):"
+                       TextWrapping="Wrap"
+                       Margin="0,0,0,4"/>
+            <TextBox Text="{Binding DesignScreenshotBreakpointsText, UpdateSourceTrigger=PropertyChanged}"
+                     MinWidth="320"
+                     ToolTip="Leave blank to use defaults: mobile:375x812; tablet:768x1024; desktop:1280x720"/>
+            <TextBlock Text="Leave blank to capture mobile, tablet, and desktop breakpoints by default."
+                       TextWrapping="Wrap"
+                       Margin="0,4,0,0"
+                       Foreground="Gray"/>
+        </StackPanel>
+        <CheckBox Content="Capture store configuration (settings, shipping, payments)"
+                  IsChecked="{Binding ExportStoreConfiguration}"
+                  IsEnabled="{Binding CanExportStoreConfiguration}"
+                  Style="{StaticResource CredentialDependentCheckBoxStyle}"
+                  Margin="0,8,0,0"
+                  Visibility="{Binding IsWooCommerce, Converter={StaticResource BoolToVisibility}}"/>
+    </StackPanel>
+</UserControl>
