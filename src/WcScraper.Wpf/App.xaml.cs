@@ -24,6 +24,7 @@ namespace WcScraper.Wpf
             var dialogs = new DialogService();
             var artifactIndexingService = new ArtifactIndexingService();
             var chatAssistantService = new ChatAssistantService(artifactIndexingService);
+            var chatWorkflowService = new ChatAssistantWorkflowService();
             var chatAssistant = MainViewModel.CreateDefaultChatAssistant(
                 dialogs,
                 artifactIndexingService,
@@ -31,7 +32,7 @@ namespace WcScraper.Wpf
 
             MainViewModel? mainViewModel = null;
             var dispatcher = Current?.Dispatcher ?? Dispatcher.CurrentDispatcher;
-            var assistantToggleBindings = MainViewModel.CreateChatAssistantToggleBindings(() => mainViewModel!);
+            var assistantToggleBindings = chatWorkflowService.CreateChatAssistantToggleBindings(() => mainViewModel!);
             var exportPlanning = new ExportPlanningViewModel(
                 dispatcher,
                 assistantToggleBindings,
@@ -53,6 +54,7 @@ namespace WcScraper.Wpf
                 artifactIndexingService,
                 chatAssistantService,
                 chatAssistant,
+                chatWorkflowService,
                 exportPlanning,
                 provisioning);
 
