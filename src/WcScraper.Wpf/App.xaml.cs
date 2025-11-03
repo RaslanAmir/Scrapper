@@ -46,7 +46,7 @@ namespace WcScraper.Wpf
                 () => mainViewModel!.PrepareRunCancellationToken(),
                 cancellationToken => mainViewModel!.OnRunAsync(cancellationToken),
                 message => mainViewModel!.Append(message));
-            var provisioning = new ProvisioningViewModel();
+            var provisioningService = new ProvisioningOrchestrationService(new ProvisioningViewModel());
 
             mainViewModel = new MainViewModel(
                 dialogs,
@@ -56,7 +56,7 @@ namespace WcScraper.Wpf
                 chatAssistant,
                 chatWorkflowService,
                 exportPlanning,
-                provisioning);
+                provisioningService);
 
             var mainWindow = new MainWindow
             {

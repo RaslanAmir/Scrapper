@@ -46,6 +46,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private readonly ChatAssistantService _chatAssistantService;
     private readonly ChatAssistantWorkflowService _chatWorkflowService;
     private readonly IArtifactIndexingService _artifactIndexingService;
+    private readonly IProvisioningOrchestrationService _provisioningService;
     private readonly ILoggerFactory _loggerFactory;
     private readonly ILogger<MainViewModel> _logger;
     private readonly string _settingsDirectory;
@@ -140,7 +141,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         ChatAssistantService chatAssistantService,
         ChatAssistantViewModel chatAssistant,
         ExportPlanningViewModel? exportPlanning = null,
-        ProvisioningViewModel? provisioning = null)
+        IProvisioningOrchestrationService? provisioningService = null)
         : this(
             dialogs,
             loggerFactory,
@@ -149,7 +150,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
             chatAssistant,
             new ChatAssistantWorkflowService(),
             exportPlanning,
-            provisioning)
+            provisioningService)
     {
     }
 
@@ -161,7 +162,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         ChatAssistantViewModel chatAssistant,
         ChatAssistantWorkflowService chatWorkflowService,
         ExportPlanningViewModel? exportPlanning = null,
-        ProvisioningViewModel? provisioning = null)
+        IProvisioningOrchestrationService? provisioningService = null)
         : this(
             dialogs,
             CreateDefaultWooScraper(loggerFactory),
@@ -174,7 +175,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
             chatWorkflowService,
             loggerFactory,
             exportPlanning,
-            provisioning)
+            provisioningService)
     {
     }
 
@@ -223,7 +224,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         ChatAssistantWorkflowService chatWorkflowService,
         ILoggerFactory loggerFactory,
         ExportPlanningViewModel? exportPlanning = null,
-        ProvisioningViewModel? provisioning = null,
+        IProvisioningOrchestrationService? provisioningService = null,
         ILogger<MainViewModel>? logger = null)
     {
         _loggerFactory = loggerFactory ?? NullLoggerFactory.Instance;
@@ -251,6 +252,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
         var dispatcher = System.Windows.Application.Current?.Dispatcher ?? System.Windows.Threading.Dispatcher.CurrentDispatcher;
         _assistantToggleBindings = _chatWorkflowService.CreateChatAssistantToggleBindings(() => this);
 
+        _provisioningService = provisioningService ?? new ProvisioningOrchestrationService();
+
         ExportPlanning = exportPlanning ?? new ExportPlanningViewModel(
             dispatcher,
             _assistantToggleBindings,
@@ -264,9 +267,9 @@ public sealed class MainViewModel : INotifyPropertyChanged
             PrepareRunCancellationToken,
             async cancellationToken => await OnRunAsync(cancellationToken).ConfigureAwait(false),
             Append);
-        Provisioning = provisioning ?? new ProvisioningViewModel();
-        Provisioning.ReplicateRequested += OnProvisioningRequested;
-        Provisioning.PropertyChanged += OnProvisioningPropertyChanged;
+        var provisioningViewModel = Provisioning;
+        provisioningViewModel.ReplicateRequested += OnProvisioningRequested;
+        provisioningViewModel.PropertyChanged += OnProvisioningPropertyChanged;
         BrowseCommand = new RelayCommand(OnBrowse);
         RunCommand = new RelayCommand(
             async () =>
@@ -1171,7 +1174,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         set => Provisioning.ImportStoreConfiguration = value;
     }
 
-    public ProvisioningViewModel Provisioning { get; }
+    public ProvisioningViewModel Provisioning => _provisioningService.ProvisioningViewModel;
     public ChatAssistantViewModel ChatAssistant { get; }
 
     internal void OnChatUsageReported(ChatUsageSnapshot usage)
@@ -1362,43 +1365,34 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
     private async void OnProvisioningRequested(object? sender, EventArgs e)
     {
-        if (!Provisioning.CanReplicate)
+        var request = new ProvisioningOrchestrationRequest(
+            string.IsNullOrWhiteSpace(WordPressUsername) ? null : WordPressUsername,
+            string.IsNullOrWhiteSpace(WordPressApplicationPassword) ? null : WordPressApplicationPassword,
+            CreateOperationLogger,
+            RequireProgressLogger,
+            Append,
+            PrepareRunCancellationToken,
+            OnProvisioningRunStarted,
+            OnProvisioningRunCompleted);
+
+        await _provisioningService.ExecuteProvisioningAsync(request);
+    }
+
+    private void OnProvisioningRunStarted()
+    {
+        IsRunning = true;
+    }
+
+    private void OnProvisioningRunCompleted()
+    {
+        var runCts = _runCts;
+        if (runCts is not null)
         {
-            Append("Run an export before provisioning.");
-            return;
+            _runCts = null;
+            runCts.Dispose();
         }
 
-        if (!Provisioning.HasTargetCredentials)
-        {
-            Append("Enter the target store URL, consumer key, and consumer secret before provisioning.");
-            return;
-        }
-
-        var cancellationToken = PrepareRunCancellationToken();
-
-        try
-        {
-            IsRunning = true;
-            await Provisioning.ExecuteProvisioningAsync(
-                string.IsNullOrWhiteSpace(WordPressUsername) ? null : WordPressUsername,
-                string.IsNullOrWhiteSpace(WordPressApplicationPassword) ? null : WordPressApplicationPassword,
-                CreateOperationLogger,
-                RequireProgressLogger,
-                Append,
-                cancellationToken);
-        }
-        finally
-        {
-            var runCts = _runCts;
-            if (runCts is not null)
-            {
-                _runCts = null;
-                runCts.Dispose();
-            }
-
-            IsRunning = false;
-            RaiseRunCommandStates();
-        }
+        IsRunning = false;
     }
 
     internal CancellationToken PrepareRunCancellationToken()
@@ -1452,7 +1446,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
             _latestManualReportPath = null;
             _latestRunDeltaPath = null;
 
-            Provisioning.ResetProvisioningContext();
+            _provisioningService.ResetProvisioningContext();
 
             IsRunning = true;
             ExecuteOnUiThread(() =>
@@ -3282,7 +3276,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 }
             }
 
-            Provisioning.SetProvisioningContext(prods, variations, configuration, pluginBundles, themeBundles, customers, coupons, orders, subscriptions, siteContent, categoryTerms);
+            _provisioningService.UpdateProvisioningContext(prods, variations, configuration, pluginBundles, themeBundles, customers, coupons, orders, subscriptions, siteContent, categoryTerms);
 
             Append("All done.");
             ExportPlanning.SetActiveRunPlanOutcome(new RunPlanExecutionOutcome(true, "Run completed successfully."));
