@@ -44,6 +44,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private readonly WordPressDirectoryClient _wpDirectoryClient;
     private readonly IScraperInstrumentation _uiInstrumentation;
     private readonly ChatAssistantService _chatAssistantService;
+    private readonly ChatAssistantWorkflowService _chatWorkflowService;
     private readonly IArtifactIndexingService _artifactIndexingService;
     private readonly ILoggerFactory _loggerFactory;
     private readonly ILogger<MainViewModel> _logger;
@@ -142,6 +143,27 @@ public sealed class MainViewModel : INotifyPropertyChanged
         ProvisioningViewModel? provisioning = null)
         : this(
             dialogs,
+            loggerFactory,
+            artifactIndexingService,
+            chatAssistantService,
+            chatAssistant,
+            new ChatAssistantWorkflowService(),
+            exportPlanning,
+            provisioning)
+    {
+    }
+
+    public MainViewModel(
+        IDialogService dialogs,
+        ILoggerFactory loggerFactory,
+        IArtifactIndexingService artifactIndexingService,
+        ChatAssistantService chatAssistantService,
+        ChatAssistantViewModel chatAssistant,
+        ChatAssistantWorkflowService chatWorkflowService,
+        ExportPlanningViewModel? exportPlanning = null,
+        ProvisioningViewModel? provisioning = null)
+        : this(
+            dialogs,
             CreateDefaultWooScraper(loggerFactory),
             CreateDefaultShopifyScraper(loggerFactory),
             new HttpClient(),
@@ -149,6 +171,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
             artifactIndexingService,
             chatAssistantService,
             chatAssistant,
+            chatWorkflowService,
             loggerFactory,
             exportPlanning,
             provisioning)
@@ -183,6 +206,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 artifactIndexingService,
                 out var chatAssistant),
             chatAssistant,
+            new ChatAssistantWorkflowService(),
             loggerFactory)
     {
     }
@@ -196,6 +220,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         IArtifactIndexingService artifactIndexingService,
         ChatAssistantService chatAssistantService,
         ChatAssistantViewModel chatAssistant,
+        ChatAssistantWorkflowService chatWorkflowService,
         ILoggerFactory loggerFactory,
         ExportPlanningViewModel? exportPlanning = null,
         ProvisioningViewModel? provisioning = null,
@@ -216,6 +241,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         _designScreenshotService = designScreenshotService ?? throw new ArgumentNullException(nameof(designScreenshotService));
         _artifactIndexingService = artifactIndexingService ?? throw new ArgumentNullException(nameof(artifactIndexingService));
         _chatAssistantService = chatAssistantService ?? throw new ArgumentNullException(nameof(chatAssistantService));
+        _chatWorkflowService = chatWorkflowService ?? throw new ArgumentNullException(nameof(chatWorkflowService));
         ChatAssistant = chatAssistant ?? throw new ArgumentNullException(nameof(chatAssistant));
 
         _artifactIndexingService.DiagnosticLogger = Append;
@@ -223,7 +249,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         _preferencesPath = Path.Combine(_settingsDirectory, "preferences.json");
         _chatKeyPath = Path.Combine(_settingsDirectory, "chat.key");
         var dispatcher = System.Windows.Application.Current?.Dispatcher ?? System.Windows.Threading.Dispatcher.CurrentDispatcher;
-        _assistantToggleBindings = CreateChatAssistantToggleBindings();
+        _assistantToggleBindings = _chatWorkflowService.CreateChatAssistantToggleBindings(() => this);
 
         ExportPlanning = exportPlanning ?? new ExportPlanningViewModel(
             dispatcher,
@@ -259,13 +285,46 @@ public sealed class MainViewModel : INotifyPropertyChanged
         ExplainLogsCommand = new RelayCommand(async () => await OnExplainLatestLogsAsync(), CanExplainLogs);
         LaunchWizardCommand = new RelayCommand(OnLaunchWizard, CanLaunchWizard);
         CopyAutomationScriptCommand = new RelayCommand<AutomationScriptDisplay>(OnCopyAutomationScript);
-        ConfigureChatAssistant(ChatAssistant, _assistantToggleBindings);
+        _chatWorkflowService.ConfigureChatAssistant(
+            ChatAssistant,
+            _assistantToggleBindings,
+            Append,
+            CaptureChatAssistantHostSnapshot,
+            ResolveBaseOutputFolder,
+            () => OutputFolder,
+            () => Logs.ToList(),
+            () => RunCommand?.CanExecute(null) ?? false,
+            () => RunCommand?.Execute(null),
+            () => IsRunning,
+            plan => ExportPlanning.EnqueuePlan(plan),
+            () => _latestStoreOutputFolder,
+            () => _latestManualBundlePath,
+            () => _latestManualReportPath,
+            () => _latestRunDeltaPath,
+            () => LatestRunAiBriefPath,
+            () => LatestRunSnapshotJson,
+            action => ExecuteOnUiThread(action),
+            () => EnableHttpRetries,
+            value => EnableHttpRetries = value,
+            () => HttpRetryAttempts,
+            value => HttpRetryAttempts = value,
+            () => HttpRetryBaseDelaySeconds,
+            value => HttpRetryBaseDelaySeconds = value,
+            () => HttpRetryMaxDelaySeconds,
+            value => HttpRetryMaxDelaySeconds = value);
         _latestAutomationScripts.CollectionChanged += (_, __) => OnPropertyChanged(nameof(HasAutomationScripts));
         _latestAutomationScriptWarnings.CollectionChanged += (_, __) => OnPropertyChanged(nameof(HasAutomationScriptWarnings));
         Logs.CollectionChanged += OnLogsCollectionChanged;
         LoadPreferences();
         _artifactIndexingService.IndexChanged += OnArtifactIndexChanged;
-        ChatAssistant.PropertyChanged += OnChatAssistantPropertyChanged;
+        ChatAssistant.PropertyChanged += (sender, args) =>
+        {
+            _chatWorkflowService.HandleChatAssistantPropertyChanged(
+                args,
+                SavePreferences,
+                () => LaunchWizardCommand?.RaiseCanExecuteChanged(),
+                () => ExplainLogsCommand?.RaiseCanExecuteChanged());
+        };
         _ = ChatAssistant.EnsureChatTranscriptLoadedAsync();
 
     }
@@ -1148,116 +1207,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
             AdditionalDesignSnapshotPages);
     }
 
-    private Dictionary<string, (Func<bool> Getter, Action<bool> Setter)> CreateChatAssistantToggleBindings()
-        => CreateChatAssistantToggleBindings(() => this);
-
-    internal static Dictionary<string, (Func<bool> Getter, Action<bool> Setter)> CreateChatAssistantToggleBindings(
-        Func<MainViewModel> hostProvider)
-    {
-        if (hostProvider is null)
-        {
-            throw new ArgumentNullException(nameof(hostProvider));
-        }
-
-        return new Dictionary<string, (Func<bool> Getter, Action<bool> Setter)>(StringComparer.OrdinalIgnoreCase)
-        {
-            [nameof(ExportCsv)] = (() => hostProvider().ExportCsv, value => hostProvider().ExportCsv = value),
-            [nameof(ExportShopify)] = (() => hostProvider().ExportShopify, value => hostProvider().ExportShopify = value),
-            [nameof(ExportWoo)] = (() => hostProvider().ExportWoo, value => hostProvider().ExportWoo = value),
-            [nameof(ExportReviews)] = (() => hostProvider().ExportReviews, value => hostProvider().ExportReviews = value),
-            [nameof(ExportXlsx)] = (() => hostProvider().ExportXlsx, value => hostProvider().ExportXlsx = value),
-            [nameof(ExportJsonl)] = (() => hostProvider().ExportJsonl, value => hostProvider().ExportJsonl = value),
-            [nameof(ExportPluginsCsv)] = (() => hostProvider().ExportPluginsCsv, value => hostProvider().ExportPluginsCsv = value),
-            [nameof(ExportPluginsJsonl)] = (() => hostProvider().ExportPluginsJsonl, value => hostProvider().ExportPluginsJsonl = value),
-            [nameof(ExportThemesCsv)] = (() => hostProvider().ExportThemesCsv, value => hostProvider().ExportThemesCsv = value),
-            [nameof(ExportThemesJsonl)] = (() => hostProvider().ExportThemesJsonl, value => hostProvider().ExportThemesJsonl = value),
-            [nameof(ExportPublicExtensionFootprints)] = (() => hostProvider().ExportPublicExtensionFootprints, value => hostProvider().ExportPublicExtensionFootprints = value),
-            [nameof(ExportPublicDesignSnapshot)] = (() => hostProvider().ExportPublicDesignSnapshot, value => hostProvider().ExportPublicDesignSnapshot = value),
-            [nameof(ExportPublicDesignScreenshots)] = (() => hostProvider().ExportPublicDesignScreenshots, value => hostProvider().ExportPublicDesignScreenshots = value),
-            [nameof(ExportStoreConfiguration)] = (() => hostProvider().ExportStoreConfiguration, value => hostProvider().ExportStoreConfiguration = value),
-            [nameof(ProvisioningViewModel.ImportStoreConfiguration)] = (() => hostProvider().Provisioning.ImportStoreConfiguration, value => hostProvider().Provisioning.ImportStoreConfiguration = value),
-            [nameof(EnableHttpRetries)] = (() => hostProvider().EnableHttpRetries, value => hostProvider().EnableHttpRetries = value),
-        };
-    }
-
     private bool HasTargetCredentials()
         => Provisioning.HasTargetCredentials;
-
-    private void ConfigureChatAssistant(
-        ChatAssistantViewModel chatAssistant,
-        IReadOnlyDictionary<string, (Func<bool> Getter, Action<bool> Setter)> assistantToggleBindings)
-    {
-        if (chatAssistant is null)
-        {
-            throw new ArgumentNullException(nameof(chatAssistant));
-        }
-
-        if (assistantToggleBindings is null)
-        {
-            throw new ArgumentNullException(nameof(assistantToggleBindings));
-        }
-
-        var hostConfiguration = new ChatAssistantViewModel.HostConfiguration(
-            Append,
-            assistantToggleBindings,
-            CaptureChatAssistantHostSnapshot,
-            ResolveBaseOutputFolder,
-            () => OutputFolder,
-            () => Logs.ToList(),
-            () => RunCommand?.CanExecute(null) ?? false,
-            () => RunCommand?.Execute(null),
-            () => IsRunning,
-            plan => ExportPlanning.EnqueuePlan(plan),
-            () => _latestStoreOutputFolder,
-            () => _latestManualBundlePath,
-            () => _latestManualReportPath,
-            () => _latestRunDeltaPath,
-            () => LatestRunAiBriefPath,
-            () => LatestRunSnapshotJson,
-            action => ExecuteOnUiThread(action),
-            () => EnableHttpRetries,
-            value => EnableHttpRetries = value,
-            () => HttpRetryAttempts,
-            value => HttpRetryAttempts = value,
-            () => HttpRetryBaseDelaySeconds,
-            value => HttpRetryBaseDelaySeconds = value,
-            () => HttpRetryMaxDelaySeconds,
-            value => HttpRetryMaxDelaySeconds = value);
-
-        chatAssistant.ConfigureHost(hostConfiguration);
-    }
-
-    private void OnChatAssistantPropertyChanged(object? sender, PropertyChangedEventArgs e)
-    {
-        if (e?.PropertyName is null)
-        {
-            return;
-        }
-
-        if (e.PropertyName == nameof(ChatAssistant.ChatApiEndpoint)
-            || e.PropertyName == nameof(ChatAssistant.ChatModel)
-            || e.PropertyName == nameof(ChatAssistant.ChatSystemPrompt)
-            || e.PropertyName == nameof(ChatAssistant.ChatMaxPromptTokens)
-            || e.PropertyName == nameof(ChatAssistant.ChatMaxTotalTokens)
-            || e.PropertyName == nameof(ChatAssistant.ChatMaxCostUsd)
-            || e.PropertyName == nameof(ChatAssistant.ChatPromptTokenUsdPerThousand)
-            || e.PropertyName == nameof(ChatAssistant.ChatCompletionTokenUsdPerThousand))
-        {
-            SavePreferences();
-        }
-
-        if (e.PropertyName == nameof(ChatAssistant.ChatApiEndpoint)
-            || e.PropertyName == nameof(ChatAssistant.ChatModel)
-            || e.PropertyName == nameof(ChatAssistant.HasChatApiKey))
-        {
-            LaunchWizardCommand?.RaiseCanExecuteChanged();
-        }
-
-        if (e.PropertyName == nameof(ChatAssistant.HasChatConfiguration))
-        {
-            ExplainLogsCommand?.RaiseCanExecuteChanged();
-        }
-    }
 
     private void OnProvisioningPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
