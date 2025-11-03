@@ -9,10 +9,11 @@ using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 using WcScraper.Core;
 using WcScraper.Wpf;
+using WcScraper.Wpf.Services;
 
 namespace WcScraper.Wpf.ViewModels;
 
-public sealed class ProvisioningViewModel : INotifyPropertyChanged
+public sealed class ProvisioningViewModel : INotifyPropertyChanged, IProvisioningWorkflow
 {
     private readonly WooProvisioningService _wooProvisioningService;
     private ProvisioningContext? _lastProvisioningContext;
@@ -296,6 +297,8 @@ public sealed class ProvisioningViewModel : INotifyPropertyChanged
     {
         IsBusy = isBusy;
     }
+
+    void IProvisioningWorkflow.SetHostBusy(bool isBusy) => SetHostBusy(isBusy);
 
     internal static bool HasConfigurationData(StoreConfiguration configuration)
     {
