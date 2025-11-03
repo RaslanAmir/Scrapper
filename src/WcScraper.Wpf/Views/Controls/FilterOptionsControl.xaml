@@ -1,0 +1,52 @@
+<UserControl x:Class="WcScraper.Wpf.Views.Controls.FilterOptionsControl"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             mc:Ignorable="d">
+    <StackPanel Margin="8">
+        <Button Content="Export collections/categories"
+                Command="{Binding ExportCollectionsCommand}"
+                HorizontalAlignment="Right"
+                Margin="0,0,0,8"
+                Padding="12,4" />
+        <Grid>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="*"/>
+            </Grid.ColumnDefinitions>
+            <StackPanel Grid.Column="0">
+                <TextBlock Text="Categories" FontWeight="Bold" />
+                <StackPanel Orientation="Horizontal" Margin="0,4,0,4">
+                    <Button Content="Select all" Command="{Binding SelectAllCategoriesCommand}" Margin="0,0,8,0" />
+                    <Button Content="Clear" Command="{Binding ClearCategoriesCommand}" />
+                </StackPanel>
+                <ScrollViewer Height="140" VerticalScrollBarVisibility="Auto">
+                    <ItemsControl ItemsSource="{Binding CategoryChoices}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <CheckBox Content="{Binding Name}" IsChecked="{Binding IsSelected, Mode=TwoWay}" Margin="0,2"/>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </ScrollViewer>
+            </StackPanel>
+            <StackPanel Grid.Column="1">
+                <TextBlock Text="Tags" FontWeight="Bold" />
+                <StackPanel Orientation="Horizontal" Margin="0,4,0,4">
+                    <Button Content="Select all" Command="{Binding SelectAllTagsCommand}" Margin="0,0,8,0" />
+                    <Button Content="Clear" Command="{Binding ClearTagsCommand}" />
+                </StackPanel>
+                <ScrollViewer Height="140" VerticalScrollBarVisibility="Auto">
+                    <ItemsControl ItemsSource="{Binding TagChoices}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <CheckBox Content="{Binding Name}" IsChecked="{Binding IsSelected, Mode=TwoWay}" Margin="0,2"/>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </ScrollViewer>
+            </StackPanel>
+        </Grid>
+    </StackPanel>
+</UserControl>

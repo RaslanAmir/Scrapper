@@ -54,6 +54,10 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private readonly string _chatKeyPath;
     private readonly Dictionary<string, (Func<bool> Getter, Action<bool> Setter)> _assistantToggleBindings;
     public ExportPlanningViewModel ExportPlanning { get; }
+    public WooCommerceSettingsViewModel WooCommerce { get; }
+    public ShopifySettingsViewModel Shopify { get; }
+    public ExportOptionsViewModel ExportOptions { get; }
+    public FilterOptionsViewModel Filters { get; }
     private static readonly TimeSpan DirectoryLookupDelay = TimeSpan.FromMilliseconds(400);
     private const int RunSnapshotHistoryLimit = 6;
     private const string RunSnapshotHistoryFolderName = ".run-history";
@@ -244,6 +248,10 @@ public sealed class MainViewModel : INotifyPropertyChanged
         _chatAssistantService = chatAssistantService ?? throw new ArgumentNullException(nameof(chatAssistantService));
         _chatWorkflowService = chatWorkflowService ?? throw new ArgumentNullException(nameof(chatWorkflowService));
         ChatAssistant = chatAssistant ?? throw new ArgumentNullException(nameof(chatAssistant));
+        WooCommerce = new WooCommerceSettingsViewModel(this);
+        Shopify = new ShopifySettingsViewModel(this);
+        ExportOptions = new ExportOptionsViewModel(this);
+        Filters = new FilterOptionsViewModel(this);
 
         _artifactIndexingService.DiagnosticLogger = Append;
         _settingsDirectory = GetDefaultSettingsDirectory();
